@@ -211,8 +211,13 @@ class Materializer:
             "'''自包含离线核验：仅依赖本包内 experiment.json + results.json。",
             "确定性重算 claim（描述性阈值，不做显著性检验），不依赖宿主 Popper 状态。'''",
             "from __future__ import annotations",
-            "import json, pathlib",
+            "import json, pathlib, sys",
             "root = pathlib.Path(__file__).resolve().parent",
+            # stdout 是机器解析的契约（含中文 reason/scope），必须与宿主 locale 无关：
+            # 重定向到管道时 Python 按 locale 编码（中文 Windows 为 cp936），会让按 UTF-8
+            # 读取的一方解码失败。这里显式钉住 UTF-8，与 popper/vendors.py 调用 worker 的口径一致。
+            "if hasattr(sys.stdout, 'reconfigure'):",
+            "    sys.stdout.reconfigure(encoding='utf-8', errors='replace')",
             "spec = json.loads((root / 'experiment.json').read_text(encoding='utf-8'))",
             "results = json.loads((root / 'results.json').read_text(encoding='utf-8'))",
             "runs = results.get('runs') or results.get('results') or []",

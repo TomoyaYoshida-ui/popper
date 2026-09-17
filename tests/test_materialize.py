@@ -1,3 +1,4 @@
+import os
 import shutil
 import tempfile
 import unittest
@@ -214,8 +215,14 @@ class MaterializeTests(unittest.TestCase):
             archive.extractall(self.root / "extracted")
         # 在全新解压目录中运行自包含核验（无宿主 .popper 状态）。
         extracted = self.root / "extracted"
+        # 核验脚本被发给任意用户，字节编码不能随宿主 locale 变。这里刻意剥掉
+        # PYTHONIOENCODING / PYTHONUTF8（等价于中文 Windows 上直接 python verify_claims.py，
+        # 子进程按 cp936 输出），并把父进程解码钉在 UTF-8——两侧任何一边「靠 locale」都会被抓。
+        child_env = {k: v for k, v in os.environ.items()
+                     if k.upper() not in {"PYTHONIOENCODING", "PYTHONUTF8"}}
         run = subprocess.run([sys.executable, "verify_claims.py"], cwd=extracted,
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, encoding="utf-8",
+                             env=child_env)
         self.assertEqual(0, run.returncode, run.stderr)
         out = _json.loads(run.stdout)
         self.assertIn("delta", out)

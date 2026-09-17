@@ -21,6 +21,7 @@ Popper 将工作区外层开源项目作为运行时能力供应方，自身负�
 ## 约束
 
 - 所有运行目录必须位于 `integrations/runs`。
+- `vendors.json` 的 `source_root` 形如 `../../X-main`，指向**与 `research-agent-v2/` 同级**的外层目录。只克隆本仓库而不把上游仓库放在同级时，`vendor inspect` 会如实报「开源组件目录缺失或越界」——这是设计内的 fail-closed，不表示集成失效。注册表本身的契约（指纹不匹配、许可证/SKILL/入口未锁定、路径越界等）由 `tests/test_vendors_registry.py` 用仓库内合成 fixture 在任何机器上验证，真实上游语料上的用例则按可用性门控 skip。
 - 每次调用前校验供应方文件指纹；源码变化需要人工复核并更新登记。
 - 当前来源是没有 `.git` 的压缩包解压目录，因此登记文件 SHA-256，不声称存在 commit pin。
 - 组件子进程只继承最小环境变量，但这不是操作系统沙箱。
