@@ -29,6 +29,8 @@ node_modules/
 dist/
 build/
 .pytest_cache/
+# CI 用 tee 留下的 pytest 输出（供失败摘要步骤读取），不入库
+pytest-output.txt
 .mypy_cache/
 .ruff_cache/
 

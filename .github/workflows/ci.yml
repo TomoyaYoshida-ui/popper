@@ -26,7 +26,18 @@ jobs:
           python -m pip install -e .
       - name: 全量测试
         # 含 tests/test_doc_consistency.py：文档口径与实现的漂移门禁
-        run: python -m pytest -q
+        # 输出落盘后再原样 cat，并用 $status 显式退出——不用管道，消除「退出码被管道洗白」这类风险。
+        shell: bash
+        run: |
+          python -m pytest -q -rfE --tb=short > pytest-output.txt 2>&1
+          status=$?
+          cat pytest-output.txt
+          exit $status
+      - name: 失败清单写进 job summary
+        # Actions 日志页需登录才能看，run 页面的 job summary 对公开仓库免登录可读：
+        # 红的时候让 CI 自己把 FAILED/ERROR 清单递出来，而不是剩个 exit code 1 给人猜。
+        if: failure()
+        run: python .github/scripts/ci_failure_summary.py pytest-output.txt
 
   test-optional-extras:
     name: pytest / windows / 可选 extras
@@ -44,7 +55,15 @@ jobs:
           python -m pip install pytest
           python -m pip install -e ".[ml,research,orchestration,confirmation]"
       - name: 全量测试（覆盖需要可选依赖的分支）
-        run: python -m pytest -q
+        shell: bash
+        run: |
+          python -m pytest -q -rfE --tb=short > pytest-output.txt 2>&1
+          status=$?
+          cat pytest-output.txt
+          exit $status
+      - name: 失败清单写进 job summary
+        if: failure()
+        run: python .github/scripts/ci_failure_summary.py pytest-output.txt
 
   linux:
     name: pytest / ubuntu / bubblewrap 沙箱后端
@@ -102,4 +121,14 @@ jobs:
           python -c "from popper import sandbox; from popper.sandbox import linux_bwrap; ok = linux_bwrap.available(); print('linux_bwrap available:', ok); print('probe detail:', linux_bwrap.probe_detail() or '-'); print('selected backend:', sandbox.selected_backend_name()); print('hint:', linux_bwrap.APPARMOR_HINT); raise SystemExit(0 if ok else 1)"
       - name: 全量测试（POPPER_REQUIRE_SANDBOX=1：沙箱用例不许静默 skip）
         # 含 tests/test_doc_consistency.py：文档口径与实现的漂移门禁
-        run: python -m pytest -q
+        shell: bash
+        run: |
+          python -m pytest -q -rfE --tb=short > pytest-output.txt 2>&1
+          status=$?
+          cat pytest-output.txt
+          exit $status
+      - name: 失败清单写进 job summary
+        # 本 job 在测试步骤之前还有 apt/ bubblewrap / 沙箱探活三道门槛，哪一步红都会
+        # 在这里写明「没拿到 pytest 输出」，避免被误读成「测试挂了」。
+        if: failure()
+        run: python .github/scripts/ci_failure_summary.py pytest-output.txt
