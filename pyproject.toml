@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "popper-research"
+version = "0.1.0"
+description = "Local-first evidence-backed experiment runner"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+ml = ["scikit-learn>=1.7,<1.8"]
+research = ["requests>=2.31,<3", "pypdf>=5,<7"]
+orchestration = ["langgraph>=0.2", "langgraph-checkpoint-sqlite>=2"]
+confirmation = ["cryptography>=48,<49"]
+
+[project.scripts]
+popper = "popper.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["popper*"]

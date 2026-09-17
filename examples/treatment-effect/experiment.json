@@ -1,0 +1,16 @@
+{
+  "name": "处理效应估计 · 协变量调整演示",
+  "objective": "在区块整块非随机切分的队列上，比较均值差与 OLS 协变量调整对区块平均处理效应的估计误差；分析单元是区块，不声称计量方法或科研创新",
+  "entrypoint": "model.py",
+  "code_files": ["model.py"],
+  "train": "train.json",
+  "dev": "dev.json",
+  "test": "test.json",
+  "baseline": {"estimator": "dif"},
+  "candidates": [{"estimator": "adj"}],
+  "metric": {"name": "ate_error", "direction": "min"},
+  "budget": 1,
+  "timeout_seconds": 60,
+  "min_improvement": 0.5,
+  "significance_ratio": 0.95
+}

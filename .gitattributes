@@ -1,0 +1,5 @@
+# 行尾一律不做转换（不是 text=auto）：本仓库把产物文件的哈希写进复现证据链
+# （如 reproductions/street-1993-wdbc/predictions.csv、evaluation/runs/*/*.json）。
+# 若让 git 按平台规范化换行，同一份产物在 Windows / Linux 检出后哈希就会不同，
+# 核验器会报「产物被改动」。
+* -text

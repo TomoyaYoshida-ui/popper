@@ -1,0 +1,102 @@
+{
+  "schema_version": "1.1",
+  "components": {
+    "researchstudio_idea": {
+      "kind": "executable",
+      "name": "ResearchStudio Idea Spark",
+      "source_root": "../../ResearchStudio-main",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "entrypoint": "ResearchStudio-Idea/skills/idea_spark/scripts/run.py",
+      "skill_file": "ResearchStudio-Idea/skills/idea_spark/SKILL.md",
+      "capabilities": ["idea_navigation", "canonical_candidate_ingestion"],
+      "sha256": {
+        "LICENSE": "db60a6df93f1786929a223558ca0c202ef61095600785cf7503fbcd4bac1bd02",
+        "ResearchStudio-Idea/skills/idea_spark/scripts/run.py": "8d66a2ce94e8991895d1f5d6a40c01182a2080116f7a261c00764d9449f46e0b",
+        "ResearchStudio-Idea/skills/idea_spark/SKILL.md": "c2be0c048f1feab7cd99767de4131b008048dc8b1c94b164f7f0aae9af194627"
+      }
+    },
+    "arbor": {
+      "kind": "executable",
+      "name": "Arbor Hypothesis Tree Refinement",
+      "source_root": "../../scientific-agent-skills-main",
+      "license": "MIT",
+      "license_file": "LICENSE.md",
+      "entrypoint": "skills/arbor/scripts/tree.py",
+      "skill_file": "skills/arbor/SKILL.md",
+      "capabilities": ["hypothesis_tree", "evidence_backpropagation", "pruning", "heldout_merge_gate"],
+      "sha256": {
+        "LICENSE.md": "09b02a3c9df3053c55531d503357a9c7cde275970e6c3ceaa1ddf5f0e90b40c1",
+        "skills/arbor/scripts/tree.py": "d73857839b1a2bc31d9470dacf670954fef86f2ee70c9eddbf60a3588ebd68e7",
+        "skills/arbor/SKILL.md": "1825f2a08f4767e37ec4a27e71332f8048ea48f6dbd2f3c2a82a5a872b3897d8"
+      }
+    },
+    "researchstudio_paper_search": {
+      "kind": "executable",
+      "name": "ResearchStudio Paper Search",
+      "source_root": "../../ResearchStudio-main",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "entrypoint": "ResearchStudio-Idea/skills/paper_search/scripts/search_papers.py",
+      "skill_file": "ResearchStudio-Idea/skills/paper_search/SKILL.md",
+      "capabilities": ["multi_source_paper_search", "deduplication", "relevance_ranking"],
+      "sha256": {
+        "LICENSE": "db60a6df93f1786929a223558ca0c202ef61095600785cf7503fbcd4bac1bd02",
+        "ResearchStudio-Idea/skills/paper_search/SKILL.md": "1944c6c10c5be79d588ac84ac1a35e6d3af343fab67b93b2b16f0460e75801f9",
+        "ResearchStudio-Idea/skills/paper_search/scripts/search_papers.py": "2d32c4f8f3e74a55ac2ffde17cee5a00649d62ed6eca0add4fdcd29f6e45de43",
+        "ResearchStudio-Idea/skills/paper_search/scripts/postprocess.py": "cc91b05c55f06832483a655a0cdcf0980da6b3c1102342c4020e379927b0f036",
+        "ResearchStudio-Idea/skills/paper_search/scripts/source_worker.py": "073588655b61f80bcce27d6e7ac4a61f057f2beca2ad7736c2f3555eeeff3493",
+        "ResearchStudio-Idea/skills/paper_search/scripts/_http_runtime.py": "bfbbf76a8bb4c7bb0b0f1eb68d2c7a1c8b307449aa2a645435e7c67a96907604",
+        "ResearchStudio-Idea/skills/paper_search/scripts/_env.py": "d050425ca84a2bc32f9ceb05b035d708f68b7cc1c1ea1ac330b43051336632dc",
+        "ResearchStudio-Idea/skills/paper_search/scripts/search_papers_by_arxiv.py": "d7b8ace270f3893c4e5f1b6a844390f0902107aca517043ee59ae96d479eaf11",
+        "ResearchStudio-Idea/skills/paper_search/scripts/search_papers_by_crossref.py": "f6bd334a7aa95ba3597b66b8a39a3c92210272877f8c5dc5ab554b180cab2768",
+        "ResearchStudio-Idea/skills/paper_search/scripts/search_papers_by_dblp.py": "678789a0dd1afad500bb114dd4c54eae6d06612ec6a87e90e6798c79e2e58009",
+        "ResearchStudio-Idea/skills/paper_search/scripts/search_papers_by_open_alex.py": "df12ed36f22eb67233840b154278b94578a3ea5781056c597794778915848eb3",
+        "ResearchStudio-Idea/skills/paper_search/scripts/search_papers_by_openreview.py": "3ed426d514814a847554ea324c374c94c8a2856550ebf2ae3afcdf00cfc326b4",
+        "ResearchStudio-Idea/skills/paper_search/scripts/search_papers_by_semantic_scholar.py": "87c3c6ec0799b6a6a26da5fa3c07d09c3e275544580bf7e07175e170ef093d5b"
+      }
+    },
+    "researchstudio_scoop_check": {
+      "kind": "protocol",
+      "name": "ResearchStudio Scoop Check",
+      "source_root": "../../ResearchStudio-main",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "skill_file": "ResearchStudio-Idea/skills/scoop_check/SKILL.md",
+      "capabilities": ["novelty_decomposition", "overlap_triage", "fulltext_comparison", "delta_statement"],
+      "sha256": {
+        "LICENSE": "db60a6df93f1786929a223558ca0c202ef61095600785cf7503fbcd4bac1bd02",
+        "ResearchStudio-Idea/skills/scoop_check/SKILL.md": "a6bc30399f1815028b7e5c454218df468a7443bf9a8eca63b84d66f6b8d1d80f",
+        "ResearchStudio-Idea/skills/scoop_check/scripts/fetch_paper.sh": "1fdac2807fb40d2ac722a7e50339303d13afb4ee60650ca769b688f0d5d078a4"
+      }
+    },
+    "ai_research_autoresearch": {
+      "kind": "protocol",
+      "name": "AI Research Skills Autoresearch",
+      "source_root": "../../AI-Research-SKILLs-main",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "skill_file": "0-autoresearch-skill/SKILL.md",
+      "capabilities": ["two_loop_research", "research_log", "findings_synthesis"],
+      "sha256": {
+        "LICENSE": "80b5899a9ab121a2d4aae63724f0c11defba7f23da487086932bb9abfb0f2a00",
+        "0-autoresearch-skill/SKILL.md": "b7ca0d7a6e905da85a8b494d3fe398ac78eaa278854f67b50a34f2b37a9a2b78",
+        "0-autoresearch-skill/templates/research-log.md": "975a85c5d90897718d3542560b1fe40516a0dde2521b5136e567769cc2dfdef5",
+        "0-autoresearch-skill/templates/findings.md": "f81f7f63ec2f962796a2e28dbd1bf256dcef683000e1dab513296f0e8d9f79f2"
+      }
+    },
+    "ai_research_ml_training": {
+      "kind": "protocol",
+      "name": "AI Research Skills ML Training Recipes",
+      "source_root": "../../AI-Research-SKILLs-main",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "skill_file": "10-optimization/ml-training-recipes/SKILL.md",
+      "capabilities": ["training_recipe_guidance", "experiment_design", "debugging_guidance"],
+      "sha256": {
+        "LICENSE": "80b5899a9ab121a2d4aae63724f0c11defba7f23da487086932bb9abfb0f2a00",
+        "10-optimization/ml-training-recipes/SKILL.md": "1cb661b0d3bac57ffed65075707a9079ac23123a5a597700e85c05e03e166a57"
+      }
+    }
+  }
+}

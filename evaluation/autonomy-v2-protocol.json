@@ -1,0 +1,54 @@
+{
+  "schema_version": "2.0",
+  "status": "implemented_with_declared_limits",
+  "primary_metrics": [
+    "evidence_valid_loops / planned_trajectories",
+    "conclusion_matched_loops / planned_trajectories"
+  ],
+  "integrity_hard_gates": [
+    "event_snapshot_state_version_replay",
+    "family_budget_cannot_reset_or_overdraw",
+    "global_and_slice_observations_recomputed_from_hashed_predictions",
+    "unregistered_hypothesis_scorer_and_slice_rejected",
+    "gold_boundary_same_candidate_verified_on_dev_and_holdout_before_issuance",
+    "negative_or_near_zero_stop_requires_exhausted_candidates_or_budget",
+    "zero_evidence_stop_forbidden_while_registered_candidate_and_budget_remain",
+    "supported_global_effect_requires_independent_confirmation",
+    "scope_boundary_requires_signed_holdout_global_and_complete_slice_evidence_refs",
+    "holdout_not_consumed_before_confirmation"
+  ],
+  "diagnostic_slice_contract": {
+    "registration_time": "before candidate execution",
+    "neutral_ids": "s0..s99",
+    "supported_rules": ["id_prefix", "not_id_prefix", "abs_x_le", "abs_x_gt"],
+    "labels_exposed_to_candidate": false,
+    "minimum_complete_slices_for_boundary": 2,
+    "boundary_gate": "abs(global_effect) < threshold and max(slice_effects) >= threshold and min(slice_effects) < threshold",
+    "development_action": "request_scope_boundary_confirmation",
+    "final_action": "conclude_scope_boundary",
+    "required_evidence": "signed holdout global and every registered slice baseline/candidate observation"
+  },
+  "controlled_evidence_conditions": [
+    "positive_effect",
+    "negative_effect",
+    "near_zero_effect",
+    "scope_boundary_or_counterexample"
+  ],
+  "comparators": [
+    "fixed_registered_search",
+    "same_model_same_tools_fixed_plan",
+    "adaptive_research_controller"
+  ],
+  "implementation_modes": [
+    "immutable_code_revision_with_execution_coverage",
+    "registered_implementation_executed_in_sandbox"
+  ],
+  "declared_limits": {
+    "development_evaluator": "separate_process_same_os_account",
+    "external_confirmation_isolation": "engineering_same_account",
+    "slice_boundary_holdout_confirmation": true,
+    "prospective_novel_research_complete": false,
+    "general_capability_claimed": false
+  },
+  "claim_policy": "Controlled tasks establish evidence handling and stopping behavior only. Boundary results require signed holdout replication, but both the confirmation service and runner remain engineering components under the same OS account."
+}

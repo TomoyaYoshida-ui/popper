@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "title": "Nuclear feature extraction for breast tumor diagnosis",
+  "authors": ["W. Nick Street", "William H. Wolberg", "Olvi L. Mangasarian"],
+  "year": 1993,
+  "venue": "Proceedings of SPIE, Volume 1905, pages 861-870",
+  "doi": "10.1117/12.148698",
+  "landing_page": "https://iro.uiowa.edu/esploro/outputs/conferenceProceeding/Nuclear-feature-extraction-for-breast-tumor/9984380474002771",
+  "claim": {
+    "id": "PAPER-C001",
+    "text": "Ten-fold cross-validation accuracy of 97% was achieved using one separating plane on mean texture, worst area, and worst smoothness.",
+    "metric": {"name": "accuracy", "direction": "max", "unit": "fraction"},
+    "reported_value": 0.97,
+    "evidence": {
+      "location": "Abstract",
+      "source_url": "https://iro.uiowa.edu/esploro/outputs/conferenceProceeding/Nuclear-feature-extraction-for-breast-tumor/9984380474002771",
+      "support": "direct"
+    }
+  }
+}

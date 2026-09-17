@@ -1,0 +1,1444 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>research-agent — Quest on, hands off</title>
+<style>
+  :root{
+    --bg:#161616;            /* ClawsGO 暖黑 */
+    --bg-side:#0e0e0e;
+    --panel:#1c1c1c;
+    --card:#1f1f1f;
+    --card-2:#242424;
+    --pill:#222222;
+    --pill-active:#383838;
+    --border:#2a2a2a;
+    --border-soft:#232323;
+    --fg:#f2f2f2;
+    --fg-2:#b8b8b8;
+    --muted:#8a8a8a;
+    --faint:#5c5c5c;
+    --accent:#ff7a1a;        /* ClawsGO 橙 */
+    --accent-2:#ff9f4d;
+    --ok:#34c759;
+    --blue:#4d9dff;
+    --red:#ff5f57;
+    --warn:#ff9f0a;
+    --star: 255,255,255;
+    --radius:14px;
+    --font:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,Consolas,monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{font-family:var(--font);background:var(--bg);color:var(--fg);font-size:13.5px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow:hidden}
+  ::selection{background:rgba(255,122,26,.35)}
+  ::-webkit-scrollbar{width:6px}
+  ::-webkit-scrollbar-thumb{background:#333;border-radius:99px}
+  ::-webkit-scrollbar-track{background:transparent}
+  svg.i{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+  .mono{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  button{font-family:var(--font)}
+
+  /* ═══════════ 星空斑点背景 ═══════════ */
+  #stars{position:fixed;inset:0;z-index:0;pointer-events:none}
+  .winbar{position:relative;z-index:2}
+  .app{position:relative;z-index:1}
+
+  /* ═══════════ 窗口顶栏（Qoder 骨架 · 深色）═══════════ */
+  .winbar{height:40px;display:flex;align-items:center;padding:0 10px;background:var(--bg-side);border-bottom:1px solid var(--border-soft)}
+  .wbtn{width:28px;height:26px;border-radius:7px;border:none;background:transparent;color:var(--muted);display:grid;place-items:center;cursor:pointer}
+  .wbtn:hover{background:var(--pill);color:var(--fg)}
+  .winbar .lft{display:flex;align-items:center;gap:2px}
+  .winbar .rgt{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .open-ed{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--card);border-radius:8px;padding:4px 10px;font-size:12px;color:var(--fg);cursor:pointer}
+  .open-ed:hover{background:var(--card-2)}
+  .open-ed .qlogo{width:15px;height:15px;border-radius:4px;background:linear-gradient(135deg,var(--accent-2),var(--accent));display:grid;place-items:center;color:#fff;font-size:9px;font-weight:800}
+  .gift{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--fg);border:1px solid var(--border);background:var(--card);border-radius:8px;padding:4px 10px;cursor:pointer}
+  .gift:hover{background:var(--card-2)}
+  .winctl{display:flex;align-items:center;gap:1px;margin-left:6px}
+  .winctl .wbtn{width:34px}
+
+  /* ═══════════ 两栏骨架 ═══════════ */
+  .app{display:flex;height:calc(100vh - 40px)}
+
+  /* ── 侧栏：Qoder 任务树 + ClawsGO 功能入口 ── */
+  .side{width:262px;flex:none;background:var(--bg-side);border-right:1px solid var(--border-soft);display:flex;flex-direction:column;padding:12px 12px 10px;overflow-y:auto}
+  .newq{display:flex;align-items:center;gap:8px;width:100%;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:9px 13px;cursor:pointer;font-size:13px;color:var(--fg);transition:background .12s}
+  .newq:hover{background:var(--card-2)}
+  .newq .plus{font-size:15px;color:var(--accent)}
+  .newq .kbd{margin-left:auto;font-size:11px;color:var(--faint);background:var(--bg-side);border:1px solid var(--border);border-radius:5px;padding:1px 6px}
+
+  .sec-h{display:flex;align-items:center;margin:18px 4px 5px}
+  .sec-h .t{font-size:11.5px;color:var(--faint);font-weight:600;letter-spacing:.04em}
+  .sec-h .ops{margin-left:auto;display:flex;gap:2px}
+  .sec-h .ops .wbtn{width:22px;height:20px;color:var(--faint)}
+  .sec-h .ops .wbtn:hover{color:var(--fg-2)}
+
+  .folder{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:8px;font-size:12.5px;cursor:pointer}
+  .folder:hover{background:var(--pill)}
+  .folder svg.i{color:var(--fg-2);width:14px;height:14px}
+  .folder .chev{color:var(--faint);transition:transform .15s}
+  .fgroup:not(.open) .folder .chev{transform:rotate(-90deg)}
+  .folder .nm{color:var(--fg-2);font-weight:500}
+  .folder .cnt{margin-left:auto;color:var(--faint);font-size:11px}
+  .fgroup:not(.open) .ftasks{display:none}
+  .ftasks{margin-top:2px}
+  .folder .fops{display:none;align-items:center;gap:3px;margin-left:auto}
+  .folder:hover .fops{display:flex}
+  .folder:hover .cnt{display:none}
+  .fop{border:none;background:var(--card);color:var(--fg-2);width:21px;height:21px;border-radius:6px;cursor:pointer;font-size:12px;display:grid;place-items:center;line-height:1;border:1px solid var(--border-soft)}
+  .fop:hover{background:var(--pill-active);color:var(--fg)}
+  .ctx-menu{position:fixed;z-index:100;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:5px;min-width:198px;box-shadow:0 10px 40px rgba(0,0,0,.5);display:none}
+  .ctx-menu.open{display:block}
+  .ctx-item{display:flex;align-items:center;gap:10px;padding:8px 11px;border-radius:8px;font-size:12.5px;color:var(--fg-2);cursor:pointer;white-space:nowrap}
+  .ctx-item:hover{background:var(--pill);color:var(--fg)}
+  .ctx-item svg.i{width:14px;height:14px;color:var(--muted)}
+  .ctx-item.danger:hover{color:#ff8a8a}
+  .folder .rn{background:#111;border:1px solid var(--accent);border-radius:6px;color:var(--fg);font-size:12px;padding:2px 8px;width:150px;outline:none}
+  .fgroup.dragover .folder{background:rgba(255,122,26,.1);outline:1px dashed rgba(255,122,26,.5);outline-offset:-1px;border-radius:8px}
+  .titem.dragging{opacity:.45}
+
+  .titem{display:flex;align-items:center;gap:9px;padding:6.5px 8px 6.5px 14px;border-radius:8px;cursor:pointer}
+  .titem:hover{background:var(--pill)}
+  .titem.on{background:var(--pill)}
+  .titem .dot{width:6px;height:6px;border-radius:99px;flex:none;background:#4a4a4a}
+  .titem.run .dot{background:var(--ok);box-shadow:0 0 0 3px rgba(52,199,89,.12);animation:pg 2s infinite}
+  .titem.wait .dot{background:var(--warn);box-shadow:0 0 0 3px rgba(255,159,10,.12)}
+  @keyframes pg{0%,100%{box-shadow:0 0 0 0 rgba(52,199,89,.35)}50%{box-shadow:0 0 0 4px rgba(52,199,89,0)}}
+  .titem .nm{font-size:12.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+  .titem .tm{font-size:11px;color:var(--faint);flex:none}
+  .titem .badge{background:var(--warn);color:#1a1a1a;font-size:9.5px;font-weight:700;min-width:15px;height:15px;border-radius:99px;display:grid;place-items:center;padding:0 4px}
+
+  .witem{display:flex;align-items:center;gap:9px;padding:6.5px 8px;border-radius:8px;cursor:pointer;color:var(--fg-2);font-size:12.5px}
+  .witem:hover{background:var(--pill);color:var(--fg)}
+  .witem svg.i{color:var(--muted)}
+  .witem .navbadge{margin-left:auto;background:rgba(255,122,26,.15);color:var(--accent-2);font-size:10px;padding:1px 7px;border-radius:9999px;font-weight:600}
+
+  .side .gap{flex:1;min-height:14px}
+  .mitem{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:8px;font-size:12.5px;color:var(--fg-2);cursor:pointer}
+  .mitem:hover{background:var(--pill);color:var(--fg)}
+  .mitem svg.i{color:var(--muted)}
+  .mitem .beta{font-size:9.5px;color:var(--accent-2);background:rgba(255,122,26,.12);padding:1px 6px;border-radius:99px;font-weight:600}
+  .me{display:flex;align-items:center;gap:9px;padding:9px 6px 4px;border-top:1px solid var(--border-soft);margin-top:8px}
+  .me .ava{width:26px;height:26px;border-radius:99px;background:linear-gradient(135deg,#4d9dff,#8a5cff);display:grid;place-items:center;font-size:11px;color:#fff;font-weight:600}
+  .me .who{line-height:1.3;min-width:0}
+  .me .who .n{font-size:12px;font-weight:600}
+  .me .who .p{font-size:10.5px;color:var(--faint)}
+  .me .gpu{margin-left:auto;display:flex;align-items:center;gap:4px;font-size:11px;color:var(--fg-2);background:var(--pill);border:1px solid var(--border-soft);padding:2.5px 9px;border-radius:9999px}
+  .me .gpu svg{width:11px;height:11px;stroke:var(--accent-2);fill:none;stroke-width:2}
+  .me .gear{border:none;background:transparent;color:var(--muted);width:26px;height:26px;border-radius:8px;display:grid;place-items:center;cursor:pointer;margin-left:2px}
+  .me .gear:hover{background:var(--pill);color:var(--fg-2)}
+  .me .gear svg{width:16px;height:16px;fill:currentColor}
+
+  /* ── 设置菜单 ── */
+  .settings{position:fixed;z-index:120;background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:6px;min-width:220px;box-shadow:0 12px 40px rgba(0,0,0,.55);display:none;animation:rise .15s ease both}
+  .settings.open{display:block}
+  .sep{height:1px;background:var(--border);margin:6px 8px}
+  .sitem{display:flex;align-items:center;gap:10px;padding:8px 11px;border-radius:8px;font-size:12.5px;color:var(--fg-2);cursor:pointer}
+  .sitem:hover{background:var(--pill);color:var(--fg)}
+  .sitem svg.i{width:15px;height:15px;color:var(--muted)}
+  .sitem .chev{margin-left:auto;color:var(--faint);width:12px;height:12px}
+  .sitem .tick{margin-left:auto;color:var(--accent);width:14px;height:14px;fill:currentColor}
+  .sitem .val{margin-left:auto;color:var(--faint);font-size:11.5px}
+  .sitem.danger{color:#c97b7b}
+  .sitem.danger:hover{color:#ff8a8a}
+
+  /* ── 主题变量覆盖 ── */
+  :root[data-theme="cool"]{
+    --bg:#0f1115;--bg-side:#0b0d11;
+    --panel:#161922;--card:#1a1d26;--card-2:#222631;
+    --border:#232836;--border-soft:#1d2230;
+    --pill:#1b1f29;--pill-active:#2a3040;
+    --fg:#e8eaf0;--fg-2:#b8bcc8;--muted:#7a7f8e;--faint:#4a4f5e;
+    --accent:#ff7a1a;--accent-2:#ff9f4d;
+    --star: 255,255,255;
+  }
+  :root[data-theme="light"]{
+    --bg:#f5f6f8;--bg-side:#eef0f3;
+    --panel:#ffffff;--card:#fafbfd;--card-2:#f1f3f6;
+    --border:#e3e5ea;--border-soft:#eeeef2;
+    --pill:#eef0f3;--pill-active:#e0e3e9;
+    --fg:#18191c;--fg-2:#4a4c52;--muted:#8a8c92;--faint:#b0b2b8;
+    --accent:#ff7a1a;--accent-2:#ff9f4d;
+    --star: 120,122,130;
+  }
+  :root[data-theme="bright"]{
+    --bg:#ffffff;--bg-side:#ffffff;
+    --panel:#ffffff;--card:#fcfcfd;--card-2:#f5f5f7;
+    --border:#e8e8ea;--border-soft:#f2f2f4;
+    --pill:#f5f5f7;--pill-active:#ececee;
+    --fg:#0d0d0f;--fg-2:#3a3a3e;--muted:#7b7b80;--faint:#b5b5ba;
+    --accent:#ff7a1a;--accent-2:#ff9f4d;
+    --star: 160,162,170;
+  }
+
+  /* ── 主区 ── */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+  .view{flex:1;overflow-y:auto;display:none;flex-direction:column}
+  .view.on{display:flex}
+  .content{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+
+  /* ═══════════ 首页：Hero + 工作流卡片 ═══════════ */
+  .hero{width:min(860px,100%);padding:6vh 40px 0;margin:0 auto;animation:rise .5s ease both}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .hero h1{font-size:30px;font-weight:700;letter-spacing:-.015em}
+  .runon{display:flex;align-items:center;gap:12px;margin-top:11px;color:var(--muted);font-size:12.5px}
+  .runon .seg2{display:flex;align-items:center;gap:5px;cursor:pointer;border-radius:7px;padding:3px 8px}
+  .runon .seg2:hover{background:var(--pill);color:var(--fg-2)}
+  .runon svg.i{width:13px;height:13px;color:var(--muted)}
+
+  .composer-big{margin-top:20px;background:var(--card);border:1px solid var(--border);border-radius:16px;padding:15px 16px 10px;box-shadow:0 8px 30px rgba(0,0,0,.25);transition:border-color .15s;animation:rise .5s .16s ease both}
+  .composer-big:focus-within{border-color:#454545}
+  .composer-big textarea{width:100%;border:none;outline:none;resize:none;background:transparent;font-family:var(--font);font-size:14px;color:var(--fg);line-height:1.6;min-height:24px;max-height:140px}
+  .composer-big textarea::placeholder{color:var(--faint)}
+  .crow{display:flex;align-items:center;gap:4px;margin-top:14px}
+  .cbtn{width:28px;height:28px;border-radius:8px;border:none;background:transparent;color:var(--fg-2);cursor:pointer;display:grid;place-items:center;font-size:14px}
+  .cbtn:hover{background:var(--pill);color:#fff}
+  .cpill{display:flex;align-items:center;gap:5px;border:none;background:transparent;color:var(--fg-2);font-size:12.5px;padding:5px 10px;border-radius:8px;cursor:pointer}
+  .cpill:hover{background:var(--pill)}
+  .cpill svg.i{width:13px;height:13px}
+  .cpill .lv{color:var(--faint)}
+  .crt{margin-left:auto;display:flex;align-items:center;gap:2px}
+  .send{width:30px;height:30px;border-radius:9999px;border:none;background:linear-gradient(135deg,var(--accent-2),var(--accent));color:#fff;font-size:14px;cursor:pointer;display:grid;place-items:center;margin-left:6px;box-shadow:0 2px 10px rgba(255,122,26,.35);transition:transform .12s}
+  .send:hover{transform:translateY(-1px)}
+  .send:disabled{background:#2e2e2e;color:#666;box-shadow:none;cursor:default;transform:none}
+
+  .sugs{margin-top:16px;display:flex;flex-direction:column;gap:2px;animation:rise .5s .2s ease both}
+  .sug{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;cursor:pointer;font-size:13px;color:var(--fg-2)}
+  .sug:hover{background:var(--pill);color:var(--fg)}
+  .sug svg.i{color:var(--faint)}
+
+  .pills{display:flex;gap:2px;background:var(--pill);border-radius:9999px;padding:3px;width:fit-content;margin:24px auto 0;animation:rise .5s .08s ease both}
+  .pill{border:none;background:transparent;color:var(--muted);font-size:12.5px;padding:5.5px 15px;border-radius:9999px;cursor:pointer;white-space:nowrap}
+  .pill:hover{color:var(--fg-2)}
+  .pill.on{background:var(--pill-active);color:var(--fg);font-weight:600}
+
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin-top:16px;padding-bottom:8px;animation:rise .5s .12s ease both}
+  .card{background:var(--card);border:1px solid var(--border-soft);border-radius:16px;padding:15px 17px 13px;cursor:pointer;position:relative;overflow:hidden;transition:background .15s,border-color .15s,transform .15s}
+  .card:hover{background:var(--card-2);border-color:#3a3a3a;transform:translateY(-1px)}
+  .card h3{font-size:14px;font-weight:650;margin-bottom:4px}
+  .card p{font-size:12px;color:var(--muted);line-height:1.55}
+  .card .ghost{margin-top:9px;font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,#000 30%,transparent 85%);mask-image:linear-gradient(90deg,#000 30%,transparent 85%)}
+  .card .tag{position:absolute;top:13px;right:13px;font-size:10px;color:var(--faint);border:1px solid var(--border);padding:1px 8px;border-radius:9999px}
+  .card .tag.live{color:var(--accent-2);border-color:rgba(255,122,26,.35)}
+
+  .promo{width:min(860px,100%);margin:14px auto 26px;padding:0 40px;animation:rise .5s .26s ease both}
+  .promo-card{display:flex;align-items:center;gap:16px;background:var(--panel);border:1px solid var(--border-soft);border-radius:14px;padding:12px 16px;position:relative}
+  .promo-card .thumb{width:64px;height:48px;border-radius:10px;background:linear-gradient(135deg,#3a2a1c,#2e2114);display:grid;place-items:center;color:var(--accent);font-size:20px}
+  .promo-card .tx .t1{font-size:13px;font-weight:600}
+  .promo-card .tx .t2{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .promo-card .cta{margin-left:auto;background:var(--fg);color:var(--bg);border:none;border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer;font-weight:600}
+  .promo-card .x{position:absolute;top:8px;right:10px;color:var(--faint);cursor:pointer;font-size:12px}
+  .dots{display:flex;gap:5px;justify-content:center;margin-top:9px}
+  .dots i{width:14px;height:3px;border-radius:99px;background:#2e2e2e}
+  .dots i.on{background:#4a4a4a}
+
+  /* ═══════════ 对话视图（Qoder 结构 · 深色）═══════════ */
+  .conv-top{display:flex;align-items:center;gap:10px;padding:13px 28px 2px;max-width:860px;width:100%;margin:0 auto;flex:none}
+  .conv-top .tt{font-size:15px;font-weight:700}
+  .st-chip{font-size:11px;padding:2.5px 11px;border-radius:9999px;font-weight:600;display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .st-chip.run{color:var(--ok);background:rgba(52,199,89,.1)}
+  .st-chip.wait{color:var(--warn);background:rgba(255,159,10,.1)}
+  .st-chip i{width:6px;height:6px;border-radius:99px;background:currentColor;animation:pg 2s infinite}
+  .conv-top .ws2{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--muted);cursor:pointer;padding:3px 8px;border-radius:7px;white-space:nowrap}
+  .conv-top .ws2:hover{background:var(--pill)}
+  .conv-top .ws2 svg.i{width:12px;height:12px}
+  .conv{width:min(720px,100%);margin:0 auto;padding:12px 28px 16px;flex:1}
+
+  .msg-user{background:var(--pill);border-radius:12px;padding:10px 15px;font-size:13.5px;line-height:1.65;max-width:94%}
+  .msg-time{font-size:10.5px;color:var(--faint);margin-top:5px;text-align:right}
+
+  .toolrow{display:flex;align-items:center;gap:7px;padding:9px 2px;color:var(--fg-2);font-size:12.5px;cursor:pointer}
+  .toolrow:hover{color:var(--fg)}
+  .toolrow svg.i{width:13px;height:13px}
+  .toolrow .chev{font-size:9px;color:var(--faint)}
+  .toolrow .body{display:none;padding:4px 0 6px 22px;flex-basis:100%}
+  .toolrow.open{align-items:flex-start;flex-wrap:wrap}
+  .toolrow.open .body{display:block}
+  .tstep{display:flex;gap:9px;padding:4.5px 0;font-size:12.5px;color:var(--fg-2);align-items:baseline}
+  .tstep .mk{color:var(--ok);font-size:11px;flex:none}
+  .tstep .d{margin-left:auto;color:var(--faint);font-size:11px;white-space:nowrap}
+
+  .agent-p{font-size:13.5px;line-height:1.75;color:var(--fg);margin:10px 0}
+  .agent-p b{font-weight:600}
+  .agent-p .hl{background:rgba(255,122,26,.16);color:var(--accent-2);border-radius:4px;padding:1px 5px}
+  .agent-p .hlg{background:rgba(52,199,89,.12);color:var(--ok);border-radius:4px;padding:1px 5px}
+
+  /* 对话内嵌：十阶段 + 指标 + 事件流 大卡（ClawsGO 任务视图精华） */
+  .prog-card{margin:13px 0;border:1px solid var(--border-soft);background:var(--panel);border-radius:14px;overflow:hidden}
+  .prog-card .ph2{display:flex;align-items:center;gap:8px;padding:10px 14px;font-size:11px;color:var(--faint);border-bottom:1px solid var(--border-soft)}
+  .prog-card .ph2 .spin{margin-left:auto}
+  .spin{width:11px;height:11px;border-radius:99px;display:inline-block;border:2px solid rgba(255,122,26,.25);border-top-color:var(--accent);animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .stages-mini{display:grid;grid-template-columns:1fr 1fr;gap:1px 18px;padding:10px 14px 6px}
+  .stp2{display:flex;align-items:center;gap:8px;padding:3.5px 0;font-size:11.5px;color:var(--muted)}
+  .stp2 .k{color:var(--faint);font-size:10px;width:16px;flex:none}
+  .stp2 .mk{width:13px;text-align:center;font-size:10px;flex:none}
+  .stp2.done .mk{color:var(--ok)}
+  .stp2.cur{color:var(--fg);font-weight:600}
+  .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;padding:8px 14px 12px}
+  .metric{background:var(--card-2);border:1px solid var(--border-soft);border-radius:11px;padding:9px 12px;cursor:pointer}
+  .metric:hover{background:#2a2a2a}
+  .metric .v{font-size:16px;font-weight:700;letter-spacing:-.01em}
+  .metric .v.up{color:var(--ok)}
+  .metric .l{font-size:10px;color:var(--faint);margin-top:1px}
+  .feed{max-height:150px;overflow:auto;border-top:1px solid var(--border-soft);padding:8px 8px;font-size:11.5px}
+  .fev{display:flex;gap:8px;padding:3.5px 8px;border-radius:7px;align-items:baseline}
+  .fev .ts{color:var(--faint);font-size:9.5px;flex:none}
+  .fev .ty{flex:none;font-size:9.5px;padding:1px 8px;border-radius:99px;background:#262626;color:var(--fg-2)}
+  .fev .ty.ok{color:var(--ok);background:rgba(52,199,88,.08)}
+  .fev .ty.tool{color:var(--accent-2);background:rgba(255,122,26,.08)}
+  .fev .ty.metric{color:var(--blue);background:rgba(77,157,255,.08)}
+  .fev .ty.gate{color:#ff6b6b;background:rgba(255,107,107,.08)}
+  .fev .ms{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fev.new{animation:flash 1s ease}
+  @keyframes flash{from{background:rgba(255,122,26,.1)}to{background:transparent}}
+
+  .gate-card{margin:13px 0;border:1px solid rgba(255,95,87,.35);background:rgba(255,95,87,.06);border-radius:14px;padding:13px 16px}
+  .gate-card .t{font-size:12.5px;font-weight:700;color:#ff8a84}
+  .gate-card p{font-size:12.5px;color:var(--fg-2);margin-top:4px;line-height:1.65}
+  .gate-card .ops2{display:flex;gap:8px;margin-top:11px}
+  .gbtn{border:1px solid var(--border);background:var(--card);border-radius:8px;padding:5.5px 13px;font-size:11.5px;color:var(--fg-2);cursor:pointer}
+  .gbtn:hover{color:var(--fg);background:var(--card-2)}
+  .gbtn.warn{color:#ff8a84;border-color:rgba(255,95,87,.4)}
+  .gbtn.ok{color:var(--ok);border-color:rgba(52,199,89,.4)}
+
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-top:11px}
+  .pcard{background:var(--card);border:1px solid var(--border-soft);border-radius:12px;overflow:hidden}
+  .pcard .ph3{padding:8px 13px;font-size:10.5px;color:var(--faint);border-bottom:1px solid var(--border-soft);display:flex;justify-content:space-between}
+  .pcard .pb{padding:11px 13px;font-size:12.5px;line-height:1.9;color:var(--fg-2)}
+  .pcard .big{font-size:19px;font-weight:700;margin-top:3px}
+
+  .deliv-card{margin:14px 0 4px;border:1px solid var(--border);border-radius:13px;overflow:hidden;background:var(--card)}
+  .deliv-card .dh{display:flex;align-items:center;gap:9px;padding:10px 14px;font-size:12.5px}
+  .deliv-card .dh .plus-n{color:var(--ok);font-weight:600}
+  .deliv-card .dh .rev{margin-left:auto;display:flex;align-items:center;gap:5px;font-size:12px;color:var(--fg-2);cursor:pointer;padding:3px 9px;border-radius:7px}
+  .deliv-card .dh .rev:hover{background:var(--pill)}
+  .deliv-card .df{display:flex;align-items:center;gap:9px;padding:9px 14px;border-top:1px solid var(--border-soft);font-size:12.5px;cursor:pointer}
+  .deliv-card .df:hover{background:var(--card-2)}
+  .deliv-card .df .code-ic{color:var(--fg-2);font-size:11px;font-family:var(--mono);border:1px solid var(--border);border-radius:4px;padding:0 5px}
+  .deliv-card .df .fn{color:var(--accent-2)}
+  .deliv-card .df .stat{margin-left:auto;font-size:11px;color:var(--faint)}
+  .deliv-card .df .stat b{color:var(--ok);font-weight:600}
+
+  .fbrow{display:flex;gap:2px;margin:10px 0 0}
+  .fbrow .cbtn{width:26px;height:26px;color:var(--faint)}
+  .fbrow .gen{margin-left:auto;font-size:11px;color:var(--faint);padding:5px 8px}
+
+  .kv{display:flex;justify-content:space-between;gap:14px;padding:6px 0;font-size:12.5px;border-bottom:1px dashed var(--border-soft)}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--faint);flex:none}
+  .kv .v{color:var(--fg-2);text-align:right}
+  .kv .v.good{color:var(--ok)}
+
+  .composer-foot{flex:none;padding:10px 28px 16px}
+  .composer-foot .inner{width:min(720px,100%);margin:0 auto}
+
+  /* ═══════════ 功能视图（ClawsGO 移植）═══════════ */
+  .fv-wrap{width:min(1160px,100%);margin:0 auto;padding:0 28px 20px;display:flex;flex-direction:column;flex:1;min-height:0}
+  .fv-head{display:flex;align-items:center;gap:10px;margin-top:12px;flex-wrap:wrap}
+  .fv-head .tt{font-size:16px;font-weight:700}
+  .schip{font-size:11px;padding:2px 10px;border-radius:9999px;font-weight:600;white-space:nowrap}
+  .schip.pass{color:var(--ok);background:rgba(52,199,88,.1)}
+  .schip.warn{color:var(--warn);background:rgba(255,159,10,.1)}
+  .schip.open{color:var(--blue);background:rgba(77,157,255,.1)}
+  .fv-head .meta{margin-left:auto;font-size:11.5px;color:var(--faint)}
+
+  .panel{background:var(--card);border:1px solid var(--border-soft);border-radius:16px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .panel .ph{padding:11px 15px;font-size:11px;color:var(--faint);border-bottom:1px solid var(--border-soft);display:flex;align-items:center;gap:6px;flex:none}
+
+  /* 门禁 R1-R7 */
+  .gate-grid{display:grid;grid-template-columns:320px 1fr;gap:14px;margin-top:15px;flex:1;min-height:0}
+  .gtree{padding:8px;overflow:auto}
+  .gnode{display:flex;align-items:center;gap:9px;padding:10px 12px;border-radius:10px;font-size:13px;color:var(--muted);cursor:pointer}
+  .gnode:hover{background:var(--card-2)}
+  .gnode.sel{background:rgba(255,122,26,.09);color:var(--fg);font-weight:600}
+  .gnode .code{font-size:10.5px;color:var(--faint);width:22px;flex:none}
+  .gnode .st{margin-left:auto;width:8px;height:8px;border-radius:99px;flex:none}
+  .st.pass{background:var(--ok)}
+  .st.warn{background:var(--warn)}
+  .st.open{background:var(--blue)}
+  .gdetail{overflow:auto}
+  .dhead{padding:15px 18px;border-bottom:1px solid var(--border-soft);display:flex;align-items:center;gap:10px}
+  .dhead h3{font-size:15px;font-weight:700}
+  .dsec{padding:13px 18px;border-bottom:1px solid var(--border-soft)}
+  .dsec:last-child{border-bottom:none}
+  .dsec h4{font-size:11px;color:var(--faint);font-weight:600;margin-bottom:7px;letter-spacing:.04em}
+  .quote{font-size:13px;color:var(--fg-2);font-style:italic;border-left:2px solid var(--border);padding:2px 0 2px 12px;line-height:1.6}
+  .dsec p{font-size:13px;color:var(--fg-2);line-height:1.65}
+  .ev-chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .ev-chip{font-size:11px;color:var(--blue);background:rgba(77,157,255,.08);padding:2px 10px;border-radius:9999px;cursor:pointer}
+
+  /* 文献库 */
+  .lit-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:15px;flex:none}
+  .lit-table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .lit-table th{text-align:left;color:var(--faint);font-size:11px;font-weight:600;padding:8px 12px;border-bottom:1px solid var(--border-soft)}
+  .lit-table td{padding:9px 12px;border-bottom:1px solid var(--border-soft);color:var(--fg-2)}
+  .lit-table tr:last-child td{border-bottom:none}
+  .lit-table tbody tr:hover td{background:var(--card-2)}
+  .badge{font-size:10.5px;padding:2px 9px;border-radius:9999px;font-weight:600;white-space:nowrap}
+  .badge.real{color:var(--ok);background:rgba(52,199,88,.1)}
+  .badge.pot{color:var(--warn);background:rgba(255,159,10,.1)}
+  .badge.hal{color:#ff8a8a;background:rgba(255,107,107,.1)}
+
+  /* 审批中心 */
+  .verdict{margin-top:15px;border:1px solid rgba(255,95,87,.35);background:rgba(255,95,87,.06);border-radius:16px;padding:14px 18px}
+  .verdict .t{font-size:13.5px;font-weight:700;color:#ff8a84}
+  .verdict p{font-size:12.5px;color:var(--fg-2);margin-top:3px;line-height:1.65}
+  .claim{background:var(--card-2);border:1px solid var(--border-soft);border-radius:14px;padding:14px 16px;margin-top:12px}
+  .claim h4{font-size:11px;color:var(--faint);font-weight:600;margin-bottom:7px}
+  .claim .q{font-size:13px;line-height:1.8}
+  .claim mark{background:rgba(255,107,107,.25);color:#ffb4b4;padding:1px 5px;border-radius:4px}
+  .actions{display:flex;gap:10px;margin-top:14px}
+  .btn2{border-radius:10px;padding:9px 16px;font-size:12.5px;cursor:pointer;border:1px solid var(--border);background:var(--card-2);color:var(--fg-2)}
+  .btn2:hover{background:#2c2c2c;color:var(--fg)}
+  .btn2.primary{background:linear-gradient(135deg,var(--accent-2),var(--accent));border:none;color:#fff}
+  .btn2.danger{border-color:rgba(255,107,107,.4);color:#ff8a84}
+
+  /* 实验环境 */
+  .env-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px;flex:1;min-height:0;overflow:auto;align-items:start}
+  .pad{padding:10px 16px 14px}
+  .tbar{display:flex;align-items:center;gap:10px;margin-top:9px;font-size:11px;color:var(--muted)}
+  .tbar .nm{width:118px;flex:none}
+  .tbar .track{flex:1;height:6px;background:#262626;border-radius:99px;overflow:hidden}
+  .tbar .fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent-2),var(--accent))}
+  .tbar .val{width:52px;text-align:right;flex:none;color:var(--fg-2)}
+  .ck{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:12.5px;border-bottom:1px dashed var(--border-soft)}
+  .ck:last-child{border:none}
+  .ck .cid{color:var(--blue);font-size:11.5px}
+  .ck .cd{color:var(--faint);font-size:11px}
+  .ck .btn2{margin-left:auto;padding:5px 12px;font-size:11px}
+
+  /* 假设环 */
+  .ops-list{display:flex;gap:8px;flex-wrap:wrap;padding:12px 14px 2px}
+  .op{font-size:11px;padding:3px 11px;border-radius:9999px;border:1px solid var(--border);color:var(--muted)}
+  .op.active{color:var(--accent-2);border-color:rgba(255,122,26,.4);background:rgba(255,122,26,.08)}
+  .hyps{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px 14px 16px;overflow:auto}
+  .hyp{background:var(--card-2);border:1px solid var(--border-soft);border-radius:14px;padding:13px 15px}
+  .hyp .hid{font-size:11px;color:var(--faint)}
+  .hyp h4{font-size:13px;font-weight:650;margin-top:6px;line-height:1.5}
+  .hyp .pred{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.6}
+  .hyp .foot{display:flex;align-items:center;gap:8px;margin-top:10px}
+  .nscore{font-size:11px;color:var(--blue);background:rgba(77,157,255,.08);padding:2px 9px;border-radius:9999px}
+  .pivot{font-size:11px;color:var(--accent-2)}
+  .hst{margin-left:auto;font-size:10.5px;padding:2px 9px;border-radius:9999px}
+  .hst.support{color:var(--ok);background:rgba(52,199,88,.1)}
+  .hst.contradict{color:#ff8a8a;background:rgba(255,107,107,.1)}
+  .hst.running{color:var(--accent-2);background:rgba(255,122,26,.1)}
+  .hst.queued{color:var(--muted);background:#2a2a2a}
+
+  /* dock */
+  .dock{position:fixed;top:52px;right:10px;display:flex;flex-direction:column;gap:4px;background:var(--panel);border:1px solid var(--border);border-radius:11px;padding:5px;box-shadow:0 8px 30px rgba(0,0,0,.35);z-index:30}
+  .dock .wbtn{width:30px;height:30px;border-radius:8px}
+  .dock .wbtn.on{background:rgba(255,122,26,.14);color:var(--accent-2)}
+
+  /* 证据下钻弹窗 */
+  .mask{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px);display:none;align-items:center;justify-content:center;z-index:60}
+  .mask.open{display:flex}
+  .modal{width:min(640px,92vw);max-height:84vh;overflow:auto;background:var(--panel);border:1px solid #333;border-radius:16px}
+  .modal .mh{padding:13px 17px;border-bottom:1px solid var(--border-soft);display:flex;align-items:center;gap:10px}
+  .modal .mh h3{font-size:14px}
+  .modal .mh .x{margin-left:auto}
+  .modal .mb{padding:14px 17px 17px}
+  .code-block{background:#111;border:1px solid var(--border-soft);border-radius:10px;padding:10px 13px;font-family:var(--mono);font-size:11.5px;color:#b5d6b5;line-height:1.75;overflow:auto;margin-top:8px;white-space:pre}
+</style>
+</head>
+<body>
+<canvas id="stars"></canvas>
+
+<!-- ═════ 窗口顶栏 ═════ -->
+<header class="winbar">
+  <div class="lft">
+    <button class="wbtn"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9.5 4v16"/></svg></button>
+    <button class="wbtn"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+  </div>
+  <div class="rgt">
+    <button class="open-ed"><span class="qlogo">R</span>打开编辑器<svg class="i" style="width:11px;height:11px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+    <button class="gift">一周年限时好礼 🎁</button>
+    <button class="wbtn">⋯</button>
+    <button class="wbtn"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M14.5 4v16"/></svg></button>
+    <div class="winctl"><button class="wbtn">—</button><button class="wbtn">□</button><button class="wbtn">✕</button></div>
+  </div>
+</header>
+
+<div class="app">
+
+  <!-- ═════ 侧栏 ═════ -->
+  <aside class="side">
+    <button class="newq" id="newqBtn"><span class="plus">＋</span>创建 Quest<span class="kbd">Ctrl N</span></button>
+
+    <div class="sec-h">
+      <span class="t">QUESTS</span>
+      <span class="ops">
+        <button class="wbtn" title="列表视图"><svg class="i" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></button>
+        <button class="wbtn" title="筛选"><svg class="i" viewBox="0 0 24 24"><path d="M22 3H2l8 9.5V19l4 2v-8.5z"/></svg></button>
+        <button class="wbtn" title="新建文件夹"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      </span>
+    </div>
+
+    <div class="fgroup open">
+      <div class="folder">
+        <svg class="i chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+        <svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span class="nm">research</span><span class="cnt">4</span>
+        <span class="fops"><button class="fop more" title="更多操作">⋯</button><button class="fop add" title="新建 Quest">＋</button></span>
+      </div>
+      <div class="ftasks">
+        <div class="titem run on" data-task="run"><span class="dot"></span><span class="nm">TSP/CVRP δ 检验</span><span class="tm">26分钟</span></div>
+        <div class="titem wait" data-task="wait"><span class="dot"></span><span class="nm">论文声明审核</span><span class="badge">1</span><span class="tm">2天</span></div>
+        <div class="titem" data-task="ready"><span class="dot"></span><span class="nm">文献综述 · HPO</span><span class="tm">2天</span></div>
+        <div class="titem" data-task="ready"><span class="dot"></span><span class="nm">rejection-corpus 标注</span><span class="tm">3天</span></div>
+      </div>
+    </div>
+
+    <div class="fgroup">
+      <div class="folder">
+        <svg class="i chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+        <svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        <span class="nm">新建文件夹 (2)</span><span class="cnt">1</span>
+        <span class="fops"><button class="fop more" title="更多操作">⋯</button><button class="fop add" title="新建 Quest">＋</button></span>
+      </div>
+      <div class="ftasks">
+        <div class="titem run" data-task="run2"><span class="dot"></span><span class="nm">FJSP 泛化补测</span><span class="tm">1小时</span></div>
+      </div>
+    </div>
+
+    <div class="sec-h"><span class="t">工作台</span></div>
+    <div class="witem" data-view="lit"><svg class="i" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>文献库</div>
+    <div class="witem" data-view="gate"><svg class="i" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>评审门禁</div>
+    <div class="witem" data-view="review"><svg class="i" viewBox="0 0 24 24"><path d="M12 9v4"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="10"/></svg>审批中心<span class="navbadge">1</span></div>
+    <div class="witem" data-view="env"><svg class="i" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>实验环境</div>
+    <div class="witem" data-view="loop"><svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>假设环</div>
+
+    <div class="gap"></div>
+
+    <div class="mitem"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>定时任务</div>
+    <div class="mitem"><svg class="i" viewBox="0 0 24 24"><path d="M4 17l6-6-6-6M12 19h8"/></svg>Better Harness<span class="beta">Beta</span></div>
+    <div class="mitem"><svg class="i" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>知识中心</div>
+    <div class="mitem"><svg class="i" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg>插件市场</div>
+
+    <div class="me">
+      <span class="ava">W</span>
+      <span class="who"><div class="n">wangj</div><div class="p">研究者 · Pro</div></span>
+      <span class="gpu"><svg viewBox="0 0 24 24"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg>2.0 GPU·h</span>
+      <button class="gear" id="gearBtn" title="设置"><svg viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.2.46.27.96.2 1.45H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+    </div>
+  </aside>
+
+  <!-- ═════ 主区 ═════ -->
+  <main class="main">
+
+    <!-- ── 首页 ── -->
+    <div class="view on" id="viewHome">
+      <div class="content">
+        <div class="hero">
+          <h1>Quest on, hands off</h1>
+          <div class="runon">
+            <span>运行于</span>
+            <span class="seg2"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>research-agent-v2<svg class="i" style="width:10px;height:10px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+            <span class="seg2"><svg class="i" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg>本地模式<svg class="i" style="width:10px;height:10px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></span>
+          </div>
+
+          <div class="pills">
+            <button class="pill on">科研学术</button>
+            <button class="pill">实验闭环</button>
+            <button class="pill">论文评审</button>
+            <button class="pill">数据洞察</button>
+            <button class="pill">工程开发</button>
+            <button class="pill">创意创作</button>
+          </div>
+
+          <div class="cards">
+            <div class="card">
+              <span class="tag live">case study</span>
+              <h3>跑通 AutoEP 实验闭环</h3>
+              <p>从想法到可复现 δ：生成改进假设、跑 TSP/CVRP 基线、预注册统计检验。</p>
+              <div class="ghost">gap-to-optimal −0.49pt · 3 seeds × 3 instances · p=0.041</div>
+            </div>
+            <div class="card">
+              <span class="tag">文献</span>
+              <h3>写一篇文献综述</h3>
+              <p>检索并精读重要论文、梳理脉络，产出带完整引用锚点的结构化综述。</p>
+              <div class="ghost">元启发式 · LLM 超参优化 · 42 篇核心文献</div>
+            </div>
+            <div class="card">
+              <span class="tag">门禁</span>
+              <h3>R1-R7 拒稿树自评</h3>
+              <p>用拒稿理由分类树逐条消解风险，输出可辩护性报告，提前过审稿人这一关。</p>
+              <div class="ghost">4 pass / 1 warn · R2 incremental 已消解</div>
+            </div>
+            <div class="card">
+              <span class="tag">写作</span>
+              <h3>把结果写成论文</h3>
+              <p>基于 results.json 生成 LaTeX 初稿，附对抗 novelty 反证与完整证据锚定。</p>
+              <div class="ghost">NeurIPS D&B 模板 · 每个数据皆可溯源</div>
+            </div>
+          </div>
+
+          <div class="composer-big">
+            <textarea id="heroInput" rows="1" placeholder="提出你的研究需求，专家团帮你完成，@ 添加上下文，/ 使用命令"></textarea>
+            <div class="crow">
+              <button class="cbtn">＋</button>
+              <button class="cpill"><svg class="i" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>专家团<svg class="i" style="width:10px;height:10px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+              <button class="cpill">Auto<svg class="i" style="width:10px;height:10px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+              <button class="cpill">qwen3-30b <span class="lv">· 高</span></button>
+              <div class="crt">
+                <button class="cbtn">✨</button>
+                <button class="cbtn">🎙</button>
+                <button class="send">↑</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sugs">
+            <div class="sug"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v6h6"/></svg>跑通 AutoEP 实验闭环，产出可复现的 δ ≥ +2.0%</div>
+            <div class="sug"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v6h6"/></svg>用 R1-R7 拒稿树把当前稿件自评一遍，输出可辩护性报告</div>
+            <div class="sug"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v6h6"/></svg>调研 LLM 辅助超参优化近三年工作，输出带引用锚点的综述</div>
+          </div>
+        </div>
+
+        <div class="promo">
+          <div class="promo-card">
+            <span class="thumb">🌱</span>
+            <div class="tx">
+              <div class="t1">全新 research-agent，不止于写代码</div>
+              <div class="t2">面向研究者的智能体工作台，以实验闭环为核心引擎，从想法到可复现结果，轻松搞定。</div>
+            </div>
+            <button class="cta">立刻体验</button>
+            <span class="x">✕</span>
+          </div>
+          <div class="dots"><i class="on"></i><i></i><i></i></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 对话视图 ── -->
+    <div class="view" id="viewConv">
+      <div class="conv-top">
+        <span class="tt" id="convTitle">TSP/CVRP δ 检验</span>
+        <span class="st-chip run" id="convChip"><i></i>Running</span>
+        <span class="ws2"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>research</span>
+        <span class="ws2" style="margin-left:auto">qwen3-30b · 高</span>
+      </div>
+      <div class="conv" id="convBody"></div>
+      <div class="composer-foot">
+        <div class="inner composer-big" style="margin-top:0;padding:12px 14px 9px">
+          <input id="convInput" type="text" placeholder="追加需求或提问（任务运行中也可下达指令，如：把 seed 数加到 5）" spellcheck="false"
+            style="border:none;outline:none;width:100%;background:transparent;font-family:var(--font);font-size:13.5px;color:var(--fg)">
+          <div class="crow">
+            <button class="cbtn">＋</button>
+            <button class="cpill"><svg class="i" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>专家团<svg class="i" style="width:10px;height:10px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+            <button class="cpill">Auto<svg class="i" style="width:10px;height:10px" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+            <div class="crt">
+              <button class="cbtn">☰</button>
+              <button class="cbtn">✨</button>
+              <button class="cbtn">🎙</button>
+              <button class="send" id="convSend">↑</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 评审门禁 ── -->
+    <div class="view" id="viewGate">
+      <div class="fv-wrap">
+        <div class="fv-head">
+          <button class="wbtn" data-back="conv" title="返回">←</button>
+          <span class="tt">评审门禁 · R1-R7 拒稿树</span>
+          <span class="schip pass">4 pass</span><span class="schip warn">1 warn</span><span class="schip open">2 open</span>
+          <span class="meta">TSP/CVRP δ 检验 · 最近检查 23:06</span>
+        </div>
+        <div class="gate-grid">
+          <aside class="panel">
+            <div class="ph">拒稿理由 · 分类树</div>
+            <div class="gtree" id="glist"></div>
+          </aside>
+          <section class="panel gdetail" id="gdetail"></section>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 文献库 ── -->
+    <div class="view" id="viewLit">
+      <div class="fv-wrap">
+        <div class="fv-head">
+          <button class="wbtn" data-back="conv" title="返回">←</button>
+          <span class="tt">文献库</span>
+          <span class="schip pass">Real 58</span><span class="schip warn">Potential 2</span>
+          <span class="schip open" style="color:#ff8a8a;background:rgba(255,107,107,.08)">拦截幻觉 1</span>
+          <span class="meta">三源去重 · 无原始回执禁止入库（SLO-2）</span>
+        </div>
+        <div class="lit-stats">
+          <div class="metric"><div class="v">28</div><div class="l">arXiv API</div></div>
+          <div class="metric"><div class="v">19</div><div class="l">OpenReview API</div></div>
+          <div class="metric"><div class="v">24</div><div class="l">Semantic Scholar</div></div>
+          <div class="metric"><div class="v">58</div><div class="l">去重后入库（DOI &gt; 标题 &gt; 年份）</div></div>
+        </div>
+        <section class="panel" style="margin-top:14px">
+          <div class="ph">论文条目 · 每条含 source_api + raw_response_id</div>
+          <table class="lit-table">
+            <thead><tr><th>条目</th><th>venue / 年份</th><th>source_api</th><th>引用锚点</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr><td>AutoEP: LLMs-Driven Hyperparameter Evolution for Metaheuristics</td><td>ICLR '26 Oral</td><td class="mono">openreview</td><td class="mono">[[ref:autoep-2026]]</td><td><span class="badge real">Real</span></td></tr>
+              <tr><td>Centaur: Hybrid LLM + Classical HPO with Shared Internal State</td><td>arXiv 2603.24647</td><td class="mono">arxiv</td><td class="mono">[[ref:centaur-2026]]</td><td><span class="badge real">Real</span></td></tr>
+              <tr><td>Iterated Racing for Automatic Algorithm Configuration (iRace)</td><td>Springer 2009</td><td class="mono">semscholar</td><td class="mono">[[ref:irace-2009]]</td><td><span class="badge real">Real</span></td></tr>
+              <tr><td>SMAC3: A Versatile Bayesian Optimization Library</td><td>JMLR 2017</td><td class="mono">semscholar</td><td class="mono">[[ref:smac-2017]]</td><td><span class="badge real">Real</span></td></tr>
+              <tr><td>Self-Adaptive ELA Feedback Scheduling for Tuners</td><td>GECCO '25 ?</td><td class="mono">arxiv</td><td class="mono">[[ref:ela-sched-2025]]</td><td><span class="badge pot">Potential · judger 裁决中</span></td></tr>
+              <tr><td style="text-decoration:line-through;opacity:.65">Adaptive ELA Tuning via Neural Controllers</td><td>—</td><td class="mono">—</td><td class="mono">DOI 不存在</td><td><span class="badge hal">Hallucinated · 已拦截</span></td></tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+    </div>
+
+    <!-- ── 审批中心 ── -->
+    <div class="view" id="viewReview">
+      <div class="fv-wrap" style="max-width:860px">
+        <div class="fv-head">
+          <button class="wbtn" data-back="conv" title="返回">←</button>
+          <span class="tt">审批中心</span>
+          <span class="schip open" style="color:#ff8a8a;background:rgba(255,107,107,.08)">1 待审</span>
+          <span class="meta">SLO-6 · 全部介入留痕可回放</span>
+        </div>
+        <div class="verdict">
+          <div class="t">⚠ L1 门禁失败 · contradicted（阶段 8 paper-writing）</div>
+          <p>论文声明的显著性口径与预注册检验计划矛盾：声明 "p &lt; 0.01"，但预注册 α = 0.05、BH 校正后 p = 0.041 —— 证据真实、结论过度声明（R4）。</p>
+        </div>
+        <div class="claim">
+          <h4>论文原句（paper.json §5.2）</h4>
+          <div class="q">"在固定评估预算下，改进方法显著优于 AutoEP 基线（<mark>p &lt; 0.01</mark>），解质量相对提升 [[ev:gap_to_optimal_delta]]。"</div>
+        </div>
+        <div class="pair">
+          <div class="pcard">
+            <div class="ph3"><span>论文声明</span><span class="mono">[[ev:gap_to_optimal_delta]]</span></div>
+            <div class="pb">delta = +2.31%（真实，已登记）<br>声明显著性：<b style="color:#ff8a84">p &lt; 0.01</b><div class="big" style="color:#ff8a84">0.01 ✕</div></div>
+          </div>
+          <div class="pcard">
+            <div class="ph3"><span>results.json 权威通道</span><span class="mono">sha256 3f9a…c21e</span></div>
+            <div class="pb">mean_delta = <b>+2.31%</b> · std 0.09 · n_seeds 3<br>paired p = <b>0.041</b>（BH 校正后）<br>预注册 α = <b>0.05</b><div class="big" style="color:var(--ok)">p = 0.041 ✓</div></div>
+          </div>
+        </div>
+        <div style="padding:14px 2px 0">
+          <h4 style="font-size:11px;color:var(--faint);font-weight:600">judger 三元组（仅此步用 LLM，原文已留痕）</h4>
+          <p class="mono" style="margin-top:5px">(metric: gap_to_optimal_delta) · (relation: 显著优于 p&lt;0.01) · (baseline: autoep_baseline)</p>
+          <h4 style="font-size:11px;color:var(--faint);font-weight:600;margin-top:10px">确定性判定链（免 LLM，按预注册计划执行）</h4>
+          <p style="font-size:12.5px;color:var(--fg-2);line-height:1.7;margin-top:5px">① BH 校正后 p = 0.041 → ② 预注册 α = 0.05、声明阈值 0.01 → ③ 0.041 &gt; 0.01，声明不成立 → verdict = <b style="color:#ff8a84">contradicted</b></p>
+        </div>
+        <div class="actions">
+          <button class="btn2 danger">驳回重写（retry 1/2 · 只重写未命中 claim）</button>
+          <button class="btn2">回退至 ckpt-042</button>
+          <button class="btn2 primary">放行（需留痕理由，入事件流）</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 实验环境 ── -->
+    <div class="view" id="viewEnv">
+      <div class="fv-wrap">
+        <div class="fv-head">
+          <button class="wbtn" data-back="conv" title="返回">←</button>
+          <span class="tt">实验环境 · 复现与重放</span>
+          <span class="schip pass">SLO-5 重放 10/10 · 100% 还原</span>
+          <span class="meta">事件溯源 append-only · checkpoint = 确定性重放投影</span>
+        </div>
+        <div class="env-grid">
+          <aside class="panel">
+            <div class="ph">环境锁 · 三要素（SLO-3）</div>
+            <div class="pad">
+              <div class="kv"><span class="k">依赖 lockfile</span><span class="v mono">requirements.lock · sha256 8e12…f03a</span></div>
+              <div class="kv"><span class="k">python / numpy / scipy</span><span class="v mono">3.11.9 / 2.0.1 / 1.13.1</span></div>
+              <div class="kv"><span class="k">平台指纹</span><span class="v mono">Windows-11 · x86_64 · AVX2</span></div>
+              <div class="kv"><span class="k">线程控制</span><span class="v mono">OMP_NUM_THREADS=8（固定）</span></div>
+              <div class="kv"><span class="k">网络白名单</span><span class="v">关闭（默认断网 · 豁免 0 条）</span></div>
+              <div class="kv"><span class="k">资源限额</span><span class="v mono">8 GB · 30 min · Bash 白名单 12 条</span></div>
+            </div>
+          </aside>
+          <section class="panel">
+            <div class="ph">上下文预算 · SLO-4 单阶段 ≤ 64K，与阶段数解耦</div>
+            <div class="pad" style="padding-top:6px">
+              <div class="tbar"><span class="nm">01 topic-ideation</span><div class="track"><div class="fill" style="width:28%"></div></div><span class="val">18K</span></div>
+              <div class="tbar"><span class="nm">02 literature-search</span><div class="track"><div class="fill" style="width:66%"></div></div><span class="val">42K</span></div>
+              <div class="tbar"><span class="nm">03 literature-review</span><div class="track"><div class="fill" style="width:80%"></div></div><span class="val">51K</span></div>
+              <div class="tbar"><span class="nm">04 research-design</span><div class="track"><div class="fill" style="width:73%"></div></div><span class="val">47K</span></div>
+              <div class="tbar"><span class="nm">05 env-setup</span><div class="track"><div class="fill" style="width:19%"></div></div><span class="val">12K</span></div>
+              <div class="tbar"><span class="nm">06 code-generate</span><div class="track"><div class="fill" style="width:52%"></div></div><span class="val">33K</span></div>
+              <div class="tbar"><span class="nm">07 code-execute</span><div class="track"><div class="fill" style="width:45%"></div></div><span class="val">29K</span></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="ph">Checkpoint · 抽样重放（agent_step 落 LLM 请求+响应原文）</div>
+            <div class="pad">
+              <div class="ck"><span class="cid">ckpt-038</span><span>阶段 6 code-generate 完成</span><span class="cd">23:41</span><button class="btn2">重放</button></div>
+              <div class="ck"><span class="cid">ckpt-042</span><span>L1 门禁 human_review 暂停</span><span class="cd">00:12</span><button class="btn2">重放</button></div>
+              <div class="ck"><span class="cid">ckpt-051</span><span>阶段 7 code-execute 进行中</span><span class="cd">00:47</span><button class="btn2">重放</button></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="ph">复现包 · 阶段 10 materialize 产出</div>
+            <div class="pad">
+              <div class="kv"><span class="k">reproducibility.zip</span><span class="v mono">2.4 MB · sha256 9c4f…77aa</span></div>
+              <div class="kv"><span class="k">内容</span><span class="v">代码 + 数据 + 环境锁 + 一键重跑脚本</span></div>
+              <div class="kv"><span class="k">最近重跑</span><span class="v good">δ = +2.31% 与登记值一致 ✓</span></div>
+              <div style="display:flex;gap:10px;margin-top:12px">
+                <button class="btn2 primary">一键重跑</button>
+                <button class="btn2">下载 zip</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 假设环 ── -->
+    <div class="view" id="viewLoop">
+      <div class="fv-wrap">
+        <div class="fv-head">
+          <button class="wbtn" data-back="conv" title="返回">←</button>
+          <span class="tt">假设搜索环 · 第 3/5 轮</span>
+          <span class="st-chip run"><i></i>搜索中</span>
+          <span class="meta">预算 1.2 / 2.0 GPU·h · 全局 BH-FDR 校正</span>
+        </div>
+        <section class="panel" style="margin-top:14px;flex:1;min-height:0">
+          <div class="ph">显式提案算子 · LLM 只做算子内实例化，不得擅自发明新算子</div>
+          <div class="ops-list">
+            <span class="op active">replace-module ×2</span>
+            <span class="op active">counterfactual-mechanism ×1</span>
+            <span class="op active">negative-result-pivot ×1</span>
+            <span class="op">cross-domain-transfer ×1</span>
+            <span class="op">data-deficit-to-task</span>
+          </div>
+          <div class="hyps">
+            <div class="hyp">
+              <span class="hid">H0 · 轮 1</span>
+              <h4>纯 prompt 优化超参（零 ELA 反馈）</h4>
+              <div class="pred">预测：gap 下降 ≥2% —— 实测 +0.4%，未越阈值</div>
+              <div class="foot"><span class="nscore">novelty 0.55</span><span class="hst contradict">contradicted</span></div>
+            </div>
+            <div class="hyp">
+              <span class="hid">H1 · 轮 3 · replace-module</span>
+              <h4>把 CMA-ES 内部状态共享进 LLM 推理链（补 AutoEP 无状态共享缺口）</h4>
+              <div class="pred">预测：gap-to-optimal 相对下降 ≥2.0%（预注册）· 检验：bootstrap over instances</div>
+              <div class="foot"><span class="nscore">novelty 0.82</span><span class="hst running">running</span></div>
+            </div>
+            <div class="hyp">
+              <span class="hid">H2 · 轮 2 · counterfactual-mechanism</span>
+              <h4>移除 ELA 反馈节点 → 效应量按预注册口径回落</h4>
+              <div class="pred">消融已跑：效应 2.31% → 0.51%，回落显著 · 机制可证（R3）</div>
+              <div class="foot"><span class="nscore">novelty 0.74</span><span class="hst support">support</span></div>
+            </div>
+            <div class="hyp">
+              <span class="hid">H3 · 轮 2 · negative-result-pivot ← H0</span>
+              <h4>固定反馈频率 → 由搜索动态自适应调节频率</h4>
+              <div class="pred">H0 矛盾方向反推：反馈时机比反馈量更关键 · 已并入 H1 检验计划</div>
+              <div class="foot"><span class="pivot">↩ pivot 自 H0</span><span class="hst support">support</span></div>
+            </div>
+            <div class="hyp">
+              <span class="hid">H4 · 轮 4 排队 · cross-domain-transfer</span>
+              <h4>CV 折间重采样 → 元启发式搜索轨迹评估</h4>
+              <div class="pred">预测：可替代多种子路径作为显著主渠道（方法论迁移）</div>
+              <div class="foot"><span class="nscore">novelty 0.61</span><span class="hst queued">queued</span></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ═════ 右侧 dock ═════ -->
+<div class="dock">
+  <button class="wbtn" title="知识库"><svg class="i" viewBox="0 0 24 24"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg></button>
+  <button class="wbtn" title="终端"><svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3M12 15h5"/></svg></button>
+  <button class="wbtn" title="产物"><svg class="i" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></button>
+  <button class="wbtn" title="文档"><svg class="i" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></button>
+  <button class="wbtn" title="浏览器"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg></button>
+</div>
+
+<!-- ═════ 文件夹操作菜单 ═════ -->
+<div class="ctx-menu" id="ctxMenu">
+  <div class="ctx-item" data-act="rename"><svg class="i" viewBox="0 0 24 24"><path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg>编辑工作区</div>
+  <div class="ctx-item" data-act="editor"><svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>在编辑器中打开</div>
+  <div class="ctx-item danger" data-act="remove"><svg class="i" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>从侧边栏移除</div>
+</div>
+
+<!-- ═════ 设置菜单 ═════ -->
+<div class="settings" id="settingsMenu">
+  <div class="sitem" data-sub="language"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18z"/></svg>界面语言<span class="val" id="curLang">简体中文</span><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+  <div class="sitem" data-sub="theme"><svg class="i" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>主题<span class="val" id="curTheme">暖黑</span><svg class="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></div>
+  <div class="sep"></div>
+  <div class="sitem"><svg class="i" viewBox="0 0 24 24"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>升级计划</div>
+  <div class="sitem"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/></svg>帮助文档</div>
+  <div class="sitem"><svg class="i" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>更新日志</div>
+  <div class="sitem"><svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>检查更新…</div>
+  <div class="sitem"><svg class="i" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>问题反馈</div>
+  <div class="sep"></div>
+  <div class="sitem danger"><svg class="i" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>退出登录</div>
+</div>
+
+<!-- ═════ 设置二级面板（语言/主题） ═════ -->
+<div class="settings" id="settingsSub">
+  <div id="subBody"></div>
+</div>
+
+<!-- ═════ 证据下钻弹窗 ═════ -->
+<div class="mask" id="evMask">
+  <div class="modal">
+    <div class="mh">
+      <h3>证据下钻 · [[ev:gap_to_optimal_delta]]</h3>
+      <button class="wbtn x" id="evClose">✕</button>
+    </div>
+    <div class="mb">
+      <div class="kv"><span class="k">规范名（指标注册表 v3）</span><span class="v mono">gap_to_optimal_delta</span></div>
+      <div class="kv"><span class="k">值</span><span class="v mono">mean=+2.31% · std=0.09 · n_seeds=3 · per_seed=[2.18, 2.30, 2.45]</span></div>
+      <div class="kv"><span class="k">source_ref</span><span class="v mono">run r-20260827-01 · tool_call tc-114</span></div>
+      <div class="kv"><span class="k">字段路径</span><span class="v mono">results.json $.metrics.gap_to_optimal</span></div>
+      <div class="kv"><span class="k">sha256 存证</span><span class="v mono">3f9ac2be21e…7d04</span></div>
+      <h4 style="font-size:11px;color:var(--faint);margin:13px 0 0;font-weight:600">stdout 原始行（provisional，不入写作引用链）</h4>
+      <div class="code-block">[run 9/9] seed=3 · A-n80 · budget=1000  gap=1.86%  exit=0
+→ delta vs autoep_baseline = +2.31%   (paired p=0.041, BH-corrected)</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  /* ───────── 星空斑点背景（独立块，出错不影响主逻辑）───────── */
+  (function(){
+    const cv = document.getElementById('stars');
+    if(!cv) return;
+    const ctx = cv.getContext('2d');
+    let W, H, stars = [];
+    const rand = (a,b) => a + Math.random()*(b-a);
+
+    function resize(){
+      W = cv.width = innerWidth * devicePixelRatio;
+      H = cv.height = innerHeight * devicePixelRatio;
+      cv.style.width = innerWidth+'px'; cv.style.height = innerHeight+'px';
+      // 星点：小而多，随机亮度与闪烁相位
+      stars = Array.from({length: 900}, () => ({
+        x: rand(0,W), y: rand(0,H),
+        r: rand(.3,1.6) * devicePixelRatio,
+        a: rand(.08,.5),
+        tw: rand(.4,1.6),          // 闪烁速度
+        ph: rand(0,Math.PI*2),
+        vy: rand(-.012,.012) * devicePixelRatio   // 缓慢漂移
+      }));
+    }
+
+    let t = 0;
+    function draw(){
+      t += .016;
+      ctx.clearRect(0,0,W,H);
+      const starRGB = getComputedStyle(document.documentElement).getPropertyValue('--star').trim() || '255,255,255';
+      for(const s of stars){
+        s.y += s.vy; if(s.y < 0) s.y = H; if(s.y > H) s.y = 0;
+        const a = s.a * (0.55 + 0.45*Math.sin(t*s.tw + s.ph));
+        ctx.fillStyle = `rgba(${starRGB},${a})`;
+        ctx.beginPath(); ctx.arc(s.x,s.y,s.r,0,Math.PI*2); ctx.fill();
+      }
+      requestAnimationFrame(draw);
+    }
+    addEventListener('resize', resize);
+    resize(); draw();
+  })();
+</script>
+
+<script>
+  /* ───────── 视图切换 ───────── */
+  const VIEWS = { home:'viewHome', conv:'viewConv', gate:'viewGate', lit:'viewLit', review:'viewReview', env:'viewEnv', loop:'viewLoop' };
+  function show(key){
+    Object.values(VIEWS).forEach(id => document.getElementById(id).classList.toggle('on', id === VIEWS[key]));
+    if(key !== 'conv') document.querySelectorAll('.titem').forEach(x=>x.classList.remove('on'));
+  }
+  document.getElementById('newqBtn').addEventListener('click', () => show('home'));
+  document.querySelectorAll('.witem[data-view]').forEach(w => w.addEventListener('click', () => show(w.dataset.view)));
+  document.querySelectorAll('[data-back]').forEach(b => b.addEventListener('click', () => show(b.dataset.back)));
+
+  /* ───────── 对话数据（Qoder 结构 × ClawsGO 数据）───────── */
+  const STAGES = [
+    ['01','topic-ideation 选题创意',1],['02','literature-search 检索',1],
+    ['03','literature-review 综述',1],['04','research-design 设计',1],
+    ['05','env-setup 环境',1],['06','code-generate 生成',1],
+    ['07','code-execute 执行',2],['08','paper-writing 写作',0],
+    ['09','review-revise 评审',0],['10','output 转化',0]
+  ];
+  const progCard = `
+    <div class="prog-card">
+      <div class="ph2">流水线 · 十阶段<span class="spin"></span></div>
+      <div class="stages-mini">
+        ${STAGES.map(s=>`<div class="stp2 ${s[2]===1?'done':s[2]===2?'cur':''}"><span class="k">${s[0]}</span><span class="mk">${s[2]===1?'✓':s[2]===2?'⟳':'·'}</span>${s[1]}</div>`).join('')}
+      </div>
+      <div class="metrics">
+        <div class="metric" data-ev="1"><div class="v up">+2.31%</div><div class="l">δ vs AutoEP 基线</div></div>
+        <div class="metric" data-ev="1"><div class="v">p = 0.041</div><div class="l">paired · 阈值 +2.0% PASS</div></div>
+        <div class="metric" data-ev="1"><div class="v">9 / 9</div><div class="l">3 seeds × 3 instances</div></div>
+      </div>
+      <div class="feed" id="feed"></div>
+    </div>`;
+
+  const CONV = {
+    run: { title:'TSP/CVRP δ 检验', chip:['run','Running'], html: `
+      <div class="msg-user">在 AutoEP 基线上跑通闭环实验：生成改进假设，TSP/CVRP 上 3 seeds × 3 instances，δ ≥ +2.0% 预注册，BH-FDR 校正后显著才算数。</div>
+      <div class="msg-time">2026-09-03 22:48</div>
+
+      <div class="toolrow"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v6h6"/></svg>已操作 2 次工具调用<span class="chev">▸</span>
+        <div class="body">
+          <div class="tstep"><span class="mk">✓</span>bash: python src/baseline/autoep_repro.py --suite tsp,cvrp<span class="d">与原文 Table 3 偏差 &lt;0.3%</span></div>
+          <div class="tstep"><span class="mk">✓</span>write: preregistration.md（δ 阈值 +2.0% 登记）<span class="d">2026-08-27</span></div>
+        </div>
+      </div>
+
+      <p class="agent-p">实验执行工程师正在跑 <b>H1（replace-module：把 CMA-ES 内部状态共享进 LLM 推理链）</b>，当前 9/9 runs 完成，<span class="hlg">delta = +2.31%（paired p = 0.041，BH 校正后）</span>，已越过预注册阈值。第二指标 <span class="hl">eval-count −18.2%</span> 交叉印证，排除单指标侥幸。</p>
+
+      ${progCard}
+
+      <div class="toolrow"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>已处理 3 个操作<span class="chev">▸</span>
+        <div class="body">
+          <div class="tstep"><span class="mk">✓</span>env-setup：requirements.lock + 平台指纹 + 线程控制<span class="d">阶段 5</span></div>
+          <div class="tstep"><span class="mk">✓</span>code-generate：run_exp.py / h1_state_share.py<span class="d">阶段 6</span></div>
+          <div class="tstep"><span class="mk">✓</span>results.json 写入权威通道 · sha256 3f9a…c21e<span class="d">阶段 7</span></div>
+        </div>
+      </div>
+
+      <div class="deliv-card">
+        <div class="dh">📄 1 个文件已变更 <span class="plus-n">+9</span><span class="rev">审查 ↗</span></div>
+        <div class="df"><span class="code-ic">&lt;&gt;</span><span class="fn">results/results.json</span><span class="stat"><b>+9</b> −1 · A</span></div>
+      </div>
+
+      <div class="fbrow">
+        <button class="cbtn">⧉</button><button class="cbtn">👍</button><button class="cbtn">👎</button><button class="cbtn">⑂</button>
+        <span class="gen">内容由 AI 生成</span>
+      </div>`
+    },
+    wait: { title:'论文声明审核', chip:['wait','Action Required'], html: `
+      <div class="msg-user">基于 results.json 撰写论文 §5.2 结果段落，所有数值带证据锚点，显著性口径与预注册一致。</div>
+      <div class="msg-time">2026-09-01 10:12</div>
+
+      <div class="toolrow"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v6h6"/></svg>已操作 1 次工具调用<span class="chev">▸</span>
+        <div class="body"><div class="tstep"><span class="mk">✓</span>write: paper/main.tex §5.2（+24 −6）<span class="d">11/11 数值命中锚点</span></div></div>
+      </div>
+
+      <div class="gate-card">
+        <div class="t">⚠ L1 门禁 · contradicted（确定性判定，免 LLM）</div>
+        <p>论文声明 "p &lt; 0.01"，但预注册 α = 0.05、BH 校正后实测 <b>p = 0.041</b> —— 证据真实、结论过度声明（拒稿树 R4）。需要你处置后任务才会继续。</p>
+        <div class="pair">
+          <div class="pcard">
+            <div class="ph3"><span>论文声明</span><span class="mono">[[ev:gap_to_optimal_delta]]</span></div>
+            <div class="pb">delta = +2.31%（真实，已登记）<br>声明显著性：<b style="color:#ff8a84">p &lt; 0.01</b><div class="big" style="color:#ff8a84">0.01 ✕</div></div>
+          </div>
+          <div class="pcard">
+            <div class="ph3"><span>results.json 权威通道</span><span class="mono">sha256 3f9a…c21e</span></div>
+            <div class="pb">paired p = <b>0.041</b>（BH 校正后）<br>预注册 α = <b>0.05</b><div class="big" style="color:var(--ok)">p = 0.041 ✓</div></div>
+          </div>
+        </div>
+        <div class="ops2">
+          <button class="gbtn warn">驳回重写（retry 1/2）</button>
+          <button class="gbtn">回退至 ckpt-042</button>
+          <button class="gbtn ok">放行（留痕入事件流）</button>
+        </div>
+      </div>
+
+      <div class="fbrow">
+        <button class="cbtn">⧉</button><button class="cbtn">👍</button><button class="cbtn">👎</button><button class="cbtn">⑂</button>
+        <span class="gen">内容由 AI 生成</span>
+      </div>`
+    },
+    ready: { title:'文献综述 · HPO', chip:['run','Ready'], chipReady:true, html: `
+      <div class="msg-user">调研 LLM 辅助超参优化近三年工作，覆盖经典 tuner / 纯 LLM / 混合三条线，输出带完整引用锚点的综述。</div>
+      <div class="msg-time">2026-09-01 09:03</div>
+
+      <div class="toolrow"><svg class="i" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>已处理 4 个操作<span class="chev">▸</span>
+        <div class="body">
+          <div class="tstep"><span class="mk">✓</span>三源检索 61 篇 → 去重入库 42 篇<span class="d">arXiv 28 / OpenReview 19 / S2 24</span></div>
+          <div class="tstep"><span class="mk">✓</span>引用质量：Real 58 · Potential 2 · 拦截 Hallucinated 1<span class="d">SLO-2</span></div>
+          <div class="tstep"><span class="mk">✓</span>write: survey/survey-hpo.md（12,400 字 · 7 章节）<span class="d">全锚点</span></div>
+          <div class="tstep"><span class="mk">✓</span>知识沉淀：Knowledge Cards +6 · Memory 更新<span class="d">经典基线数字</span></div>
+        </div>
+      </div>
+
+      <p class="agent-p">综述已完成。<b>关键发现</b>：固定搜索空间内经典 HPO（CMA-ES/TPE）一致优于纯 LLM agent；Centaur 类混合（共享内部状态）最优 —— 这正是 <span class="hl">AutoEP 的缺口</span>，已写入 Memory 供「TSP/CVRP δ 检验」任务复用。</p>
+
+      <div class="deliv-card">
+        <div class="dh">📄 2 个文件已变更 <span class="plus-n">+1298</span><span class="rev">审查 ↗</span></div>
+        <div class="df"><span class="code-ic">&lt;&gt;</span><span class="fn">survey/survey-hpo.md</span><span class="stat"><b>+1240</b> · A</span></div>
+        <div class="df"><span class="code-ic">&lt;&gt;</span><span class="fn">lit/library.json</span><span class="stat"><b>+58</b> · A</span></div>
+      </div>
+
+      <div class="fbrow">
+        <button class="cbtn">⧉</button><button class="cbtn">👍</button><button class="cbtn">👎</button><button class="cbtn">⑂</button>
+        <span class="gen">内容由 AI 生成</span>
+      </div>`
+    },
+    run2: { title:'FJSP 泛化补测', chip:['run','Running'], html: `
+      <div class="msg-user">把 H1 的检验扩展到 FJSP 域，验证 δ 结论是否跨域成立（对应拒稿树 R6 泛化性弱）。</div>
+      <div class="msg-time">2026-09-04 09:40</div>
+
+      <div class="toolrow"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 3v6h6"/></svg>已操作 1 次工具调用<span class="chev">▸</span>
+        <div class="body">
+          <div class="tstep"><span class="mk">✓</span>fetch: fjsp-instances/（公开库 12 例 · 与 AutoEP 评测域对齐）<span class="d">2 分钟前</span></div>
+          <div class="tstep"><span class="mk">✓</span>write: plan/fjsp-suite.md（3 seeds × 12 instances · 预算 2 GPU·h）<span class="d">刚刚</span></div>
+        </div>
+      </div>
+
+      <p class="agent-p">实验工程师正在准备 FJSP 运行环境：<span class="hlg">12 个公开实例已就位</span>，环境锁沿用主任务的 conda-lock（sha256 8e12…f03a 一致）。跑完后将自动更新拒稿树 <b>R6 · 泛化性弱</b> 的消解状态。</p>
+
+      <div class="fbrow">
+        <button class="cbtn">⧉</button><button class="cbtn">👍</button><button class="cbtn">👎</button><button class="cbtn">⑂</button>
+        <span class="gen">内容由 AI 生成</span>
+      </div>`
+    },
+    blank: { title:'新 Quest', chip:['run','Running'], html: `
+      <div class="msg-user">（这是一个新建的空 Quest —— 在下方输入框下达你的第一个指令）</div>
+      <div class="msg-time">刚刚</div>
+
+      <p class="agent-p">专家团已就位：Team Lead 负责拆解目标、实验工程师负责执行、审查员负责门禁。告诉我你的研究目标，我会规划十阶段流水线并开始执行。</p>
+
+      <div class="fbrow">
+        <button class="cbtn">⧉</button><button class="cbtn">👍</button><button class="cbtn">👎</button><button class="cbtn">⑂</button>
+        <span class="gen">内容由 AI 生成</span>
+      </div>`
+    }
+  };
+
+  const convBody = document.getElementById('convBody');
+  const convTitle = document.getElementById('convTitle');
+  const convChip = document.getElementById('convChip');
+
+  function openTask(key, el){
+    document.querySelectorAll('.titem').forEach(x=>x.classList.remove('on'));
+    (el || document.querySelector('.titem[data-task="'+key+'"]'))?.classList.add('on');
+    const c = CONV[key];
+    convTitle.textContent = c.title;
+    convChip.className = 'st-chip ' + (c.chipReady ? 'run' : c.chip[0]);
+    convChip.innerHTML = '<i></i>' + (c.chipReady ? 'Ready' : c.chip[1]);
+    convBody.innerHTML = c.html;
+    bindConv();
+    show('conv');
+    document.getElementById('viewConv').scrollTop = 0;
+  }
+  /* 文件夹折叠/展开 + hover 操作按钮（⋯ 菜单 / ＋ 新建）+ 重命名 */
+  const ctxMenu = document.getElementById('ctxMenu');
+  let dragEl = null, ctxFolder = null, ctxGroup = null, newQ = 0;
+  document.querySelectorAll('.fgroup .folder').forEach(f => {
+    const group = f.closest('.fgroup');
+    let clickTimer = null;
+    f.addEventListener('click', () => {
+      if (f.querySelector('.rn')) return;             // 编辑中不折叠
+      clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => group.classList.toggle('open'), 160);
+    });
+    const startRename = () => {
+      clearTimeout(clickTimer);
+      const nm = f.querySelector('.nm');
+      if (!nm || f.querySelector('.rn')) return;
+      const old = nm.textContent;
+      const inp = document.createElement('input');
+      inp.className = 'rn'; inp.value = old;
+      nm.replaceWith(inp); inp.focus(); inp.select();
+      let finished = false;
+      const done = (save) => {
+        if (finished) return; finished = true;
+        const span = document.createElement('span');
+        span.className = 'nm';
+        span.textContent = save && inp.value.trim() ? inp.value.trim() : old;
+        inp.replaceWith(span);
+      };
+      inp.addEventListener('keydown', ev => {
+        ev.stopPropagation();
+        if (ev.key === 'Enter') done(true);
+        if (ev.key === 'Escape') done(false);
+      });
+      inp.addEventListener('click', ev => ev.stopPropagation());
+      inp.addEventListener('blur', () => done(true));
+    };
+    f.querySelector('.nm').addEventListener('dblclick', startRename);
+    f.querySelector('.more').addEventListener('click', ev => {
+      ev.stopPropagation(); clearTimeout(clickTimer);
+      ctxFolder = f; ctxGroup = group;
+      const r = ev.currentTarget.getBoundingClientRect();
+      ctxMenu.classList.add('open');
+      const mw = ctxMenu.offsetWidth, mh = ctxMenu.offsetHeight;
+      ctxMenu.style.left = Math.min(r.left, innerWidth - mw - 8) + 'px';
+      ctxMenu.style.top = (r.bottom + mh > innerHeight ? r.top - mh - 6 : r.bottom + 6) + 'px';
+    });
+    f.querySelector('.add').addEventListener('click', ev => {
+      ev.stopPropagation(); clearTimeout(clickTimer);
+      group.classList.add('open');
+      const el = document.createElement('div');
+      el.className = 'titem';
+      el.dataset.task = 'blank';
+      el.innerHTML = '<span class="dot"></span><span class="nm">新 Quest ' + (++newQ) + '</span><span class="tm">刚刚</span>';
+      el.addEventListener('click', () => openTask('blank', el));
+      group.querySelector('.ftasks').appendChild(el);
+      group.querySelector('.cnt').textContent = group.querySelectorAll('.titem').length;
+    });
+  });
+  ctxMenu.addEventListener('click', ev => {
+    const act = ev.target.closest('.ctx-item')?.dataset.act;
+    if (!act) return;
+    ctxMenu.classList.remove('open');
+    if (act === 'rename') ctxFolder?.querySelector('.nm')?.dispatchEvent(new MouseEvent('dblclick'));
+    if (act === 'remove') { ctxGroup?.remove(); }
+    /* editor：原型演示，无实际动作 */
+  });
+  document.addEventListener('click', ev => {
+    if (!ctxMenu.contains(ev.target) && !ev.target.closest('.fop.more')) ctxMenu.classList.remove('open');
+  });
+
+  /* ── 设置菜单 + 悬停触发语言/主题子面板 ── */
+  const gearBtn = document.getElementById('gearBtn');
+  const settingsMenu = document.getElementById('settingsMenu');
+  const settingsSub = document.getElementById('settingsSub');
+  const SETTINGS = {
+    language: {
+      label: '界面语言',
+      key: 'lang',
+      options: [
+        { id:'zh', label:'简体中文' },
+        { id:'en', label:'English' },
+      ]
+    },
+    theme: {
+      label: '主题',
+      key: 'theme',
+      options: [
+        { id:'warm', label:'暖黑' },
+        { id:'cool', label:'冷黑' },
+        { id:'bright', label:'纯白' },
+        { id:'light', label:'象牙白' },
+      ]
+    }
+  };
+
+  const openSub = (kind, r) => {
+    const cfg = SETTINGS[kind];
+    const cur = localStorage.getItem(cfg.key) || (kind==='theme'?'warm':'zh');
+    const body = document.getElementById('subBody');
+    body.innerHTML = cfg.options.map(o =>
+      `<div class="sitem" data-opt="${o.id}" data-kind="${kind}">
+        <span>${o.label}</span>
+        ${o.id===cur ? '<svg class="tick" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
+      </div>`).join('');
+    settingsSub.classList.add('open');
+    // 定位到悬停项的右侧
+    settingsSub.style.left = (r.right + 4) + 'px';
+    settingsSub.style.top = r.top + 'px';
+  };
+
+  let hoverTimer = null;
+  const closeSub = () => {
+    hoverTimer = setTimeout(() => settingsSub.classList.remove('open'), 150);
+  };
+  const cancelClose = () => clearTimeout(hoverTimer);
+
+  gearBtn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    settingsSub.classList.remove('open');
+    const r = gearBtn.getBoundingClientRect();
+    settingsMenu.classList.toggle('open');
+    if (settingsMenu.classList.contains('open')) {
+      const mw = settingsMenu.offsetWidth, mh = settingsMenu.offsetHeight;
+      settingsMenu.style.left = Math.min(r.right - mw + 26, innerWidth - mw - 8) + 'px';
+      settingsMenu.style.top = (r.bottom + mh > innerHeight ? r.top - mh - 6 : r.bottom + 6) + 'px';
+    }
+  });
+
+  // hover 打开子菜单（主题/语言），离开自动关
+  settingsMenu.addEventListener('mouseover', ev => {
+    cancelClose();
+    const it = ev.target.closest('.sitem[data-sub]');
+    if (!it) { settingsSub.classList.remove('open'); return; }
+    openSub(it.dataset.sub, it.getBoundingClientRect());
+  });
+  settingsMenu.addEventListener('mouseleave', closeSub);
+  settingsSub.addEventListener('mouseenter', cancelClose);
+  settingsSub.addEventListener('mouseleave', closeSub);
+
+  settingsSub.addEventListener('click', ev => {
+    const opt = ev.target.closest('.sitem[data-opt]');
+    if (!opt) return;
+    const kind = opt.dataset.kind, id = opt.dataset.opt;
+    const cfg = SETTINGS[kind];
+    localStorage.setItem(cfg.key, id);
+    if (kind === 'theme') {
+      document.documentElement.dataset.theme = id === 'warm' ? '' : id;
+      document.getElementById('curTheme').textContent = cfg.options.find(o => o.id===id).label;
+    } else {
+      document.getElementById('curLang').textContent = cfg.options.find(o => o.id===id).label;
+    }
+    // 刷新对勾
+    const cur = localStorage.getItem(cfg.key) || (kind==='theme'?'warm':'zh');
+    document.getElementById('subBody').innerHTML = cfg.options.map(o =>
+      `<div class="sitem" data-opt="${o.id}" data-kind="${kind}">
+        <span>${o.label}</span>
+        ${o.id===cur ? '<svg class="tick" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
+      </div>`).join('');
+  });
+  document.addEventListener('click', ev => {
+    if (!settingsMenu.contains(ev.target) && !settingsSub.contains(ev.target) && ev.target !== gearBtn && !gearBtn.contains(ev.target)) {
+      settingsMenu.classList.remove('open');
+      settingsSub.classList.remove('open');
+    }
+  });
+  /* 初始化主题 */
+  (() => {
+    const t = localStorage.getItem('theme') || 'warm';
+    if (t !== 'warm') document.documentElement.dataset.theme = t;
+    document.getElementById('curTheme').textContent = SETTINGS.theme.options.find(o=>o.id===t).label;
+    const l = localStorage.getItem('lang') || 'zh';
+    document.getElementById('curLang').textContent = SETTINGS.language.options.find(o=>o.id===l).label;
+  })();
+
+  /* 拖拽任务跨文件夹 */
+  document.querySelectorAll('.titem').forEach(t => {
+    t.draggable = true;
+    t.addEventListener('dragstart', () => { dragEl = t; t.classList.add('dragging'); });
+    t.addEventListener('dragend', () => {
+      t.classList.remove('dragging'); dragEl = null;
+      document.querySelectorAll('.fgroup').forEach(g => g.classList.remove('dragover'));
+    });
+  });
+  document.querySelectorAll('.fgroup').forEach(g => {
+    g.addEventListener('dragover', e => { e.preventDefault(); g.classList.add('dragover'); });
+    g.addEventListener('dragleave', () => g.classList.remove('dragover'));
+    g.addEventListener('drop', e => {
+      e.preventDefault(); g.classList.remove('dragover');
+      if (!dragEl) return;
+      g.querySelector('.ftasks').appendChild(dragEl);
+      g.classList.add('open');
+      document.querySelectorAll('.fgroup').forEach(x =>
+        x.querySelector('.cnt').textContent = x.querySelectorAll('.titem').length);
+      dragEl = null;
+    });
+  });
+
+  document.querySelectorAll('.titem').forEach(t => t.addEventListener('click', () => openTask(t.dataset.task, t)));
+
+  function bindConv(){
+    document.querySelectorAll('.toolrow').forEach(r => r.addEventListener('click', e => {
+      if(e.target.closest('.body')) return;
+      r.classList.toggle('open');
+    }));
+    document.querySelectorAll('.metric[data-ev], .ev-chip').forEach(m => m.addEventListener('click', openEv));
+  }
+
+  /* 事件流模拟 */
+  const POOL = [
+    ['tool','bash: python run_exp.py --seed 4 --instance eil51'],
+    ['metric','metric:gap-to-optimal = 2.01%'],
+    ['ok','run 6/9 完成 · 42.3s'],
+    ['tool','evidence:results.json → 锚定 [[ev-014]]'],
+    ['metric','metric:eval-count = −18.2% (best)'],
+    ['gate','R1-R7 自评：4 pass / 1 warn（R2 incremental 已消解）'],
+    ['ok','基线复现完成 · 与 AutoEP 论文 Table 3 偏差 <0.3%'],
+    ['metric','metric:delta = +2.31% ≥ 2.0%（预注册阈值）'],
+    ['gate','novelty 反证：近邻检索 12 篇 · 无撞车'],
+  ];
+  let pi = 0;
+  function pushEvent(){
+    const f = document.getElementById('feed'); if(!f) return;
+    const [ty, ms] = POOL[pi++ % POOL.length];
+    const ts = new Date().toTimeString().slice(0,8);
+    const el = document.createElement('div');
+    el.className = 'fev new';
+    el.innerHTML = `<span class="ts">${ts}</span><span class="ty ${ty}">${ty}</span><span class="ms">${ms}</span>`;
+    f.appendChild(el);
+    while (f.children.length > 30) f.removeChild(f.firstChild);
+    f.scrollTop = f.scrollHeight;
+  }
+
+  /* 门禁 R1-R7 */
+  const GATES = [
+    { code:'R1', name:'增量性不足', st:'pass',
+      quote:'The improvement over AutoEP (+2.31%) appears marginal and within tuning noise.',
+      resolve:'δ 阈值 +2.0% 于实验前预注册登记，非事后挑选；paired 检验 p=0.041；第二指标 eval-count −18.2% 交叉印证，排除单指标侥幸。',
+      ev:['preregistration.md','results.json','ev-014'] },
+    { code:'R2', name:'基线缺失 / 弱基线', st:'pass',
+      quote:"Comparisons are only against the authors' own variant.",
+      resolve:'复现 iRace / SMAC / Optuna(TPE) / AutoEP 四条基线，关键数字与原文 Table 3 偏差 <0.3% 后再对比。',
+      ev:['baseline/irace.log','baseline/smac.log','autoep-repro.md'] },
+    { code:'R3', name:'可复现性', st:'pass',
+      quote:'No code or random seeds provided.',
+      resolve:'3 seeds × 3 instances 全量日志留痕，conda-lock 环境锁 + 一键复现脚本，artifact 随论文发布。',
+      ev:['artifact/','run-logs/','conda-lock.yml'] },
+    { code:'R4', name:'过度声明', st:'warn',
+      quote:'The claim of "first LLM-driven hyperparameter evolution" is overstated.',
+      resolve:'措辞降级为 "a closed-loop variant of AutoEP-style pipelines"；Related Work 已纳入 AutoEP 与 Centaur，delta 明示。待修改稿落地后复检。',
+      ev:['diff-paper.tex','related-work.md'] },
+    { code:'R5', name:'指标博弈', st:'pass',
+      quote:'Improvement may come from evaluating on easier instances.',
+      resolve:'实例集固定取自公开库（eil51 / att532 / A-n80），与 AutoEP 评测集一致；主指标用 gap-to-optimal 而非自选代理指标。',
+      ev:['instances/','metrics.md'] },
+    { code:'R6', name:'泛化性弱', st:'open',
+      quote:'Only TSP/CVRP are evaluated; conclusions may not transfer.',
+      resolve:'排队加入 FJSP 与 UAV 轨迹两个域（AutoEP 原评测域），预计增加 2 GPU·h。域扩展完成后转 pass。',
+      ev:['plan:fjsp-suite','plan:uav-trajectory'] },
+    { code:'R7', name:'novelty 撞车', st:'open',
+      quote:'Similar hybrid LLM + classical-optimizer designs exist (Centaur, 2026).',
+      resolve:'反证检索进行中：近邻 12 篇已排除 9 篇；Centaur 差异点整理中（其无 ELA 反馈回路、非超参域）。结论出具后转 pass/fail。',
+      ev:['novelty-scan/','near-miss-12.md'] },
+  ];
+  const STXT = { pass:'PASS', warn:'WARN', open:'待决' };
+  const glist = document.getElementById('glist'), gdetail = document.getElementById('gdetail');
+  let sel = 0;
+  function renderGates(){
+    glist.innerHTML = '';
+    GATES.forEach((g, i) => {
+      const el = document.createElement('div');
+      el.className = 'gnode' + (i === sel ? ' sel' : '');
+      el.innerHTML = `<span class="code">${g.code}</span><span>${g.name}</span><span class="st ${g.st}"></span>`;
+      el.addEventListener('click', () => { sel = i; renderGates(); });
+      glist.appendChild(el);
+    });
+    const g = GATES[sel];
+    gdetail.innerHTML = `
+      <div class="dhead"><h3>${g.code} · ${g.name}</h3><span class="schip ${g.st}">${STXT[g.st]}</span></div>
+      <div class="dsec"><h4>典型拒稿措辞</h4><div class="quote">“${g.quote}”</div></div>
+      <div class="dsec"><h4>消解策略</h4><p>${g.resolve}</p></div>
+      <div class="dsec"><h4>证据锚定</h4><div class="ev-chips">${g.ev.map(e=>`<span class="ev-chip">${e}</span>`).join('')}</div></div>`;
+    gdetail.querySelectorAll('.ev-chip').forEach(c => c.addEventListener('click', openEv));
+  }
+
+  /* 首页交互 */
+  document.querySelectorAll('.pill').forEach(p => p.addEventListener('click', () => {
+    document.querySelectorAll('.pill').forEach(x=>x.classList.remove('on'));
+    p.classList.add('on');
+  }));
+  document.querySelectorAll('.card').forEach(c => c.addEventListener('click', () => openTask('run')));
+  const heroInput = document.getElementById('heroInput');
+  heroInput.addEventListener('input', () => { heroInput.style.height='auto'; heroInput.style.height=Math.min(heroInput.scrollHeight,140)+'px'; });
+
+  /* conv composer */
+  const convInput = document.getElementById('convInput');
+  const convSend = document.getElementById('convSend');
+  convSend.disabled = true;
+  convInput.addEventListener('input', () => convSend.disabled = convInput.value.trim() === '');
+  convSend.addEventListener('click', () => {
+    const v = convInput.value.trim(); if(!v) return;
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `<div class="msg-user" style="margin-top:12px">${v.replace(/</g,'&lt;')}</div><div class="msg-time">刚刚</div>`;
+    convBody.appendChild(wrap);
+    convInput.value=''; convSend.disabled=true;
+    convBody.scrollTop = convBody.scrollHeight;
+  });
+  convInput.addEventListener('keydown', e => { if(e.key==='Enter') convSend.click(); });
+
+  /* 证据弹窗 */
+  const evMask = document.getElementById('evMask');
+  function openEv(){ evMask.classList.add('open'); }
+  document.getElementById('evClose').addEventListener('click', () => evMask.classList.remove('open'));
+  evMask.addEventListener('click', e => { if(e.target === evMask) evMask.classList.remove('open'); });
+  document.addEventListener('keydown', e => { if(e.key === 'Escape') evMask.classList.remove('open'); });
+
+  /* 启动 */
+  if (location.protocol === 'file:') {
+    openTask('run');
+    for(let k=0;k<5;k++) pushEvent();
+    setInterval(pushEvent, 1800);
+    renderGates();
+  }
+</script>
+</body>
+</html>

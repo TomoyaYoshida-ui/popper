@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "frozen_before_execution": true,
+  "dataset": {
+    "name": "Breast Cancer Wisconsin (Diagnostic)",
+    "official_url": "https://archive.ics.uci.edu/ml/machine-learning-databases/breast-cancer-wisconsin/wdbc.data",
+    "doi": "10.24432/C5DW2B",
+    "license": "CC BY 4.0",
+    "expected_sha256": "d606af411f3e5be8a317a5a8b652b425aaf0ff38ca683d5327ffff94c3695f4a",
+    "expected_rows": 569,
+    "expected_feature_columns": 30
+  },
+  "target_claim": {
+    "id": "PAPER-C001",
+    "metric": {"name": "accuracy", "direction": "max", "unit": "fraction"},
+    "reported_value": 0.97,
+    "absolute_tolerance": 0.02
+  },
+  "features": [
+    {"name": "mean texture", "zero_based_index": 1},
+    {"name": "worst area", "zero_based_index": 23},
+    {"name": "worst smoothness", "zero_based_index": 24}
+  ],
+  "primary": {
+    "name": "lp_surrogate_3_features",
+    "description": "Fold-wise StandardScaler plus an L1-regularized soft-margin linear program; a documented surrogate for the unavailable MSM-T/RLP implementation.",
+    "regularization": 0.001
+  },
+  "method_controls": [
+    {"name": "linear_svc_3_features", "C": 1.0},
+    {"name": "linear_svc_30_features", "C": 1.0}
+  ],
+  "validation": {
+    "primary": "StratifiedKFold",
+    "n_splits": 10,
+    "shuffle": true,
+    "random_state": 1993,
+    "robustness": {"name": "RepeatedStratifiedKFold", "n_splits": 10, "n_repeats": 30, "random_state": 1993}
+  },
+  "decision_rule": {
+    "close_reproduction": "absolute difference from reported accuracy <= 0.02",
+    "method_exactness": "approximate because original fold assignments and MSM-T implementation/parameters are unavailable"
+  }
+}

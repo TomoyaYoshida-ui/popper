@@ -1,0 +1,22 @@
+{
+  "dataset": "Breast Cancer Wisconsin (Diagnostic)",
+  "provider": "scikit-learn.datasets.load_breast_cancer",
+  "original_source": "UCI Machine Learning Repository / WDBC",
+  "scikit_learn_version": "1.7.2",
+  "instances": 569,
+  "features": 30,
+  "class_names": [
+    "malignant",
+    "benign"
+  ],
+  "split": {
+    "train": 341,
+    "dev": 114,
+    "test": 114
+  },
+  "random_states": {
+    "train_remaining": 20260908,
+    "dev_test": 20260909
+  },
+  "use": "工程接入评测；不用于临床诊断"
+}

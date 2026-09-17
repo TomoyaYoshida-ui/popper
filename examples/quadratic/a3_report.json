@@ -1,0 +1,1 @@
+{"controlled_corpus":{"includes_near_miss":true,"n_negative_hard_samples":40},"fpr":0.0,"method":"确定性 fixture（详见代码）；未接 LLM/检索后端","pass":false,"pass_criteria":"FPR 不升且反证幻觉率 ≤10%","reverse_citation_hallucination_rate":0.25,"schema":"a3-1.0"}

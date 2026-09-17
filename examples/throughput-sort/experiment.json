@@ -1,0 +1,16 @@
+{
+  "name": "算法吞吐 · 排序实现演示",
+  "objective": "在声明的工作负载清单上比较三种排序实现的每秒基本操作数；不声称算法或科研创新",
+  "entrypoint": "model.py",
+  "code_files": ["model.py"],
+  "train": "train.json",
+  "dev": "dev.json",
+  "test": "test.json",
+  "baseline": {"algorithm": "insertion"},
+  "candidates": [{"algorithm": "merge"}, {"algorithm": "shell"}],
+  "metric": {"name": "throughput", "direction": "max"},
+  "seeds": [11, 29, 47],
+  "budget": 2,
+  "timeout_seconds": 60,
+  "min_improvement": 0.1
+}

@@ -1,0 +1,48 @@
+{
+  "schema_version": "1.0",
+  "status": "partially_implemented",
+  "primary_metric": "valid_autonomous_research_loops / planned_trajectories",
+  "integrity_hard_gates": [
+    "event_snapshot_state_version_replay",
+    "family_budget_cannot_reset_or_overdraw",
+    "observation_recomputed_from_hashed_artifact",
+    "unregistered_hypothesis_and_scorer_rejected",
+    "holdout_not_consumed_before_confirmation"
+  ],
+  "controlled_evidence_conditions": [
+    "positive_effect",
+    "negative_effect",
+    "near_zero_effect",
+    "scope_boundary_or_counterexample"
+  ],
+  "pilot": {
+    "task_families": ["tabular", "small_time_series", "small_vision"],
+    "tasks_per_family": 4,
+    "independent_runs_per_task": 3,
+    "planned_trajectories": 36,
+    "progression_target": 29,
+    "target_is_engineering_goal_not_population_claim": true
+  },
+  "comparators": [
+    "fixed_registered_search",
+    "same_model_same_tools_fixed_plan",
+    "adaptive_research_controller"
+  ],
+  "current_evidence": {
+    "research_controller_unit_and_integration_tests": true,
+    "real_local_quadratic_engineering_loop": true,
+    "immutable_code_revision_and_worker_receipts": true,
+    "real_windows_low_integrity_revision_execution": true,
+    "generated_revision_to_independent_development_observation": true,
+    "per_seed_changed_statement_execution_evidence": true,
+    "real_model_pending_hypothesis_revision_and_control_execution": true,
+    "atomic_reflection_recovery_without_repeated_experiments": true,
+    "independent_scoring_process_same_os_account": true,
+    "complete_seed_and_scoring_implementation_binding": true,
+    "real_cuda_training_fixed_engineering_fixture": true,
+    "secure_external_holdout_service": false,
+    "cross_task_blind_pilot_complete": false,
+    "prospective_novel_research_complete": false
+  },
+  "claim_policy": "Software tests and controlled tasks establish mechanism-specific capability only. General autonomous research requires the frozen blind pilot and prospective independent review."
+}

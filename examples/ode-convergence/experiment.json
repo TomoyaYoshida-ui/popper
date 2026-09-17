@@ -1,0 +1,16 @@
+{
+  "name": "数值收敛阶 · 显式单步法演示",
+  "objective": "在声明的细化表上比较三种显式单步法对同一初值问题的观测收敛阶；不声称数值方法或科研创新",
+  "entrypoint": "model.py",
+  "code_files": ["model.py"],
+  "train": "train.json",
+  "dev": "dev.json",
+  "test": "test.json",
+  "baseline": {"scheme": "euler"},
+  "candidates": [{"scheme": "midpoint"}, {"scheme": "rk4"}],
+  "metric": {"name": "convergence_order", "direction": "max"},
+  "seeds": [10, 11, 12],
+  "budget": 2,
+  "timeout_seconds": 60,
+  "min_improvement": 0.5
+}

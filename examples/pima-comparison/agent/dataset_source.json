@@ -1,0 +1,27 @@
+{
+  "dataset": "Pima Indians Diabetes",
+  "provider": "UCI Machine Learning Repository",
+  "original_source": "https://archive.ics.uci.edu/dataset/34/pima+indians+diabetes",
+  "mirror_url": "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv",
+  "mirror_sha256": "6bfe5d0f379d17a0e0819b996407e3c09bf80febd4287f2ed212190dfff154af",
+  "instances": 768,
+  "features": 8,
+  "class_names": [
+    "0",
+    "1"
+  ],
+  "zero_as_missing_columns": {
+    "plas": 5,
+    "pres": 35,
+    "skin": 227,
+    "insu": 374,
+    "mass": 11
+  },
+  "split": {
+    "train": 460,
+    "dev": 154,
+    "test": 154
+  },
+  "random_state": 7,
+  "use": "M2 真实研究试点（零值插补比较）；不用于临床诊断"
+}

@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "id": "street-1993-wdbc-c001",
+  "title": "Street et al. (1993) WDBC three-feature accuracy claim",
+  "paper_record": "paper.json",
+  "protocol": "protocol.json",
+  "runner": "reproduce.py",
+  "verifier": "verify.py",
+  "required_outputs": [
+    "source/wdbc.data",
+    "predictions.csv",
+    "results.json",
+    "REPORT.md"
+  ],
+  "timeout_seconds": 600
+}

@@ -1,0 +1,22 @@
+{
+  "name": "Pima 糖尿病零值插补 · M2 真实研究试点",
+  "objective": "在固定公开数据划分上，检验将生理上不可能的零值（缺失值）做中位数插补，是否比直接把零当有效值更能提升糖尿病诊断准确率；预注册比较，不做显著性检验，不声称医学有效性",
+  "entrypoint": "model.py",
+  "code_files": ["model.py", "prepare_data.py"],
+  "provenance_files": ["dataset_source.json"],
+  "train": "train.json",
+  "dev": "dev.json",
+  "test": "test.json",
+  "baseline": {"impute": "none", "model": "logistic_regression", "C": 1.0},
+  "candidates": [
+    {"impute": "median", "model": "logistic_regression", "C": 1.0},
+    {"impute": "median", "model": "logistic_regression", "C": 0.01},
+    {"impute": "median", "model": "random_forest", "n_estimators": 200, "max_depth": 6},
+    {"impute": "none", "model": "random_forest", "n_estimators": 200, "max_depth": 6}
+  ],
+  "metric": {"name": "accuracy", "direction": "max"},
+  "seeds": [11, 29, 47],
+  "budget": 4,
+  "timeout_seconds": 60,
+  "min_improvement": 0.02
+}

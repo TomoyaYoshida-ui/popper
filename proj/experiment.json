@@ -1,0 +1,16 @@
+{
+  "name": "二次回归 · 合成数据工程演示",
+  "objective": "检验二次特征是否比线性基线降低指定划分上的 MSE；不声称科研创新",
+  "entrypoint": "model.py",
+  "code_files": ["model.py"],
+  "train": "train.json",
+  "dev": "dev.json",
+  "test": "test.json",
+  "baseline": {"degree": 1},
+  "candidates": [{"degree": 0}, {"degree": 2}, {"degree": 3}],
+  "metric": {"name": "mse", "direction": "min"},
+  "seeds": [11, 29, 47],
+  "budget": 3,
+  "timeout_seconds": 20,
+  "min_improvement": 0.1
+}

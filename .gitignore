@@ -1,0 +1,40 @@
+.popper/
+.popper-reproduction/
+integrations/runs/*
+!integrations/runs/README.md
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.venv-gpu/
+
+# ---- 密钥与本地状态库：绝不入库 ----
+# 历史上只挡了 signing-key.pem / runner-key.pem，而 evaluation/runs 下还有大量
+# 叫 runner.pem 的测试私钥（旧规则没覆盖这个名字）；按后缀全量拦。
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+# holdout.sqlite 含保留集真值，state.db / research.sqlite 是本地运行态
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-journal
+
+# ---- 构建产物与依赖 ----
+node_modules/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 运行产物：只保留每个 run 目录顶层的报告 json ----
+# 完整产物（~200MB、含 per-cell 轨迹与本地状态库）只存在本机；仓库内保留可读的
+# 结论报告与脚本，任何人不该需要把 holdout 真值库推进 git。
+evaluation/runs/**
+!evaluation/runs/*/
+!evaluation/runs/*/*.json

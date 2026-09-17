@@ -1,0 +1,22 @@
+{
+  "name": "Wisconsin 乳腺癌诊断 · 真实 ML 接入",
+  "objective": "在固定公开数据划分上，比较标准分类器是否能相对 GaussianNB 基线提高诊断标签准确率；这是系统接入验证，不声称医学有效性或科研创新",
+  "entrypoint": "model.py",
+  "code_files": ["model.py", "prepare_data.py"],
+  "provenance_files": ["dataset_source.json"],
+  "train": "train.json",
+  "dev": "dev.json",
+  "test": "test.json",
+  "baseline": {"model": "gaussian_nb"},
+  "candidates": [
+    {"model": "logistic_regression", "C": 1.0},
+    {"model": "random_forest", "n_estimators": 200, "max_depth": 6},
+    {"model": "svc_rbf", "C": 2.0},
+    {"model": "extra_trees", "n_estimators": 200, "max_depth": 8}
+  ],
+  "metric": {"name": "accuracy", "direction": "max"},
+  "seeds": [11, 29, 47],
+  "budget": 4,
+  "timeout_seconds": 60,
+  "min_improvement": 0.02
+}

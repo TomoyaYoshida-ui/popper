@@ -1,0 +1,8 @@
+{
+  "status": "verified",
+  "primary_accuracy": 0.9648506151142355,
+  "reported_accuracy": 0.97,
+  "difference": -0.005149384885764441,
+  "repeats": 30,
+  "method_exactness": "approximate"
+}

@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Popper 总体架构（M0 实施版）</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ffffff; font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif; color: #1e293b; }
+  .canvas { width: 1440px; padding: 30px 32px 34px; background: #ffffff; }
+
+  .titlebar { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  .titlebar h1 { font-size: 20px; font-weight: 700; color: #0f172a; letter-spacing: .5px; }
+  .titlebar h1 span { color: #0d9488; }
+  .titlebar .note { font-size: 13px; color: #64748b; }
+
+  /* ---- 顶部三种模式 ---- */
+  .modes { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+  .mode { border-radius: 10px; padding: 14px 16px 12px; border: 1px solid; }
+  .mode .tag { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px; color: #fff; margin-bottom: 8px; }
+  .mode .name { font-size: 16px; font-weight: 700; margin-bottom: 5px; }
+  .mode .desc { font-size: 13px; color: #475569; line-height: 1.5; }
+  .mode-b { background: #eef2ff; border-color: #c7d2fe; }
+  .mode-b .tag { background: #6366f1; } .mode-b .name { color: #3730a3; }
+  .mode-a { background: #ecfdf5; border-color: #a7f3d0; }
+  .mode-a .tag { background: #10b981; } .mode-a .name { color: #065f46; }
+  .mode-bf { background: #fff7ed; border-color: #fed7aa; }
+  .mode-bf .tag { background: #f97316; } .mode-bf .name { color: #9a3412; }
+
+  /* ---- 连接件 ---- */
+  .merge { display: grid; grid-template-columns: 1fr 1fr 1fr; height: 30px; }
+  .merge > div { position: relative; }
+  .merge .vline { position: absolute; left: 50%; top: 4px; width: 2px; height: 18px; background: #94a3b8; }
+  .merge .tri { position: absolute; left: 50%; top: 22px; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid #94a3b8; }
+  .conn-label { text-align: center; font-size: 12.5px; color: #64748b; margin: 2px 0 6px; }
+  .conn-label b { color: #334155; font-weight: 600; }
+  .arrow { position: relative; height: 34px; }
+  .arrow .vline { position: absolute; left: 50%; top: 2px; width: 2px; height: 22px; background: #94a3b8; }
+  .arrow .tri { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid #94a3b8; }
+
+  /* ---- 大层卡片 ---- */
+  .layer { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 13px 18px 13px 16px; border-left: 4px solid; box-shadow: 0 1px 3px rgba(15,23,42,.05); }
+  .layer .head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .layer .head .t { font-size: 15.5px; font-weight: 700; }
+  .layer .head .sub { font-size: 12.5px; color: #64748b; }
+  .shell { border-left-color: #0ea5e9; } .shell .t { color: #0369a1; }
+  .orch { border-left-color: #8b5cf6; } .orch .t { color: #6d28d9; }
+  .engine { border-left-color: #0d9488; } .engine .t { color: #0f766e; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font-size: 12.5px; padding: 4px 12px; border-radius: 999px; background: #f8fafc; border: 1px solid #e2e8f0; color: #334155; }
+  .chip.hl { background: #f0f9ff; border-color: #bae6fd; color: #0369a1; }
+  .layer .foot { font-size: 12.5px; color: #64748b; margin-top: 8px; }
+
+  /* ---- 创新点引擎三层 ---- */
+  .stages { display: grid; grid-template-columns: 1fr 26px 1fr 26px 1fr; align-items: stretch; margin-bottom: 12px; }
+  .stage { background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px; padding: 10px 12px; }
+  .stage .st { font-size: 13.5px; font-weight: 700; color: #0f766e; margin-bottom: 5px; }
+  .stage .sd { font-size: 12.5px; color: #475569; line-height: 1.55; }
+  .sflow { display: flex; align-items: center; justify-content: center; color: #14b8a6; font-size: 16px; font-weight: 700; }
+  .toolline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-top: 1px dashed #e2e8f0; padding-top: 10px; }
+  .toolline .tl { font-size: 13px; font-weight: 700; color: #334155; white-space: nowrap; }
+  .toolline .chip { font-family: Consolas, monospace; font-size: 12px; padding: 3px 10px; }
+
+  /* ---- 存储与隔离 ---- */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .duo .layer { margin: 0; }
+  .store { border-left-color: #64748b; } .store .t { color: #334155; }
+  .ree { border-left-color: #ef4444; } .ree .t { color: #b91c1c; }
+
+  /* ---- LLM 层 ---- */
+  .llm { margin-top: 26px; background: #0f172a; border-radius: 10px; padding: 13px 18px; display: flex; align-items: center; gap: 14px; }
+  .llm .t { font-size: 14.5px; font-weight: 700; color: #fff; white-space: nowrap; }
+  .llm .d { font-size: 12.5px; color: #94a3b8; }
+  .llm .chip { background: #1e293b; border-color: #334155; color: #e2e8f0; }
+  .llm .chips { gap: 8px; }
+</style>
+</head>
+<body>
+<div class="canvas">
+
+  <div class="titlebar">
+    <h1>Popper <span>·</span> 总体架构</h1>
+    <div class="note">M0 实施版 ｜ 本地优先 + BYOK 可选算力 ｜ 编排 = SQLite 状态机（LangGraph campaign 为可选增强） ｜ 工具 = vendors 脚本 + function-calling（MCP 未启用） ｜ 隔离 = OS 原生沙箱</div>
+  </div>
+
+  <div class="modes">
+    <div class="mode mode-a">
+      <span class="tag">实验推进</span>
+      <div class="name">search → freeze → confirm</div>
+      <div class="desc">预注册候选 + 控制器评分 + 一次性最终测试 → claim</div>
+    </div>
+    <div class="mode mode-b">
+      <span class="tag">论文复现</span>
+      <div class="name">reproduce init/run/status</div>
+      <div class="desc">预注册协议 + 领域执行器 + 离线核验器 → verified</div>
+    </div>
+    <div class="mode mode-bf">
+      <span class="tag">Brownfield</span>
+      <div class="name">已有稿件 / 代码</div>
+      <div class="desc">load / ingest / audit / gap-report → 修补 → 投稿</div>
+    </div>
+  </div>
+
+  <div class="merge">
+    <div><div class="vline"></div><div class="tri"></div></div>
+    <div><div class="vline"></div><div class="tri"></div></div>
+    <div><div class="vline"></div><div class="tri"></div></div>
+  </div>
+  <div class="conn-label"><b>共享核心（同一 state.db 与门禁）</b> ｜ Brownfield 的定向修补可调用创新点引擎 arbor 闭环</div>
+
+  <div class="layer shell">
+    <div class="head"><span class="t">应用壳（本地优先）</span><span class="sub">Python 标准库，无前端框架依赖</span></div>
+    <div class="chips">
+      <span class="chip hl">CLI（popper 子命令树）</span><span class="chip hl">stdlib HTTP 工作台</span><span class="chip hl">loopback 127.0.0.1</span><span class="chip">session token</span><span class="chip">双模式（实验/复现）</span>
+    </div>
+    <div class="foot">本地运行（SQLite / workspace 本机）· 仅绑定回环地址，Host + 同源校验 · 无任意路径读取 / shell 接口</div>
+  </div>
+
+  <div class="arrow"><div class="vline"></div><div class="tri"></div></div>
+
+  <div class="layer orch">
+    <div class="head"><span class="t">编排层（SQLite 状态机）</span></div>
+    <div class="chips">
+      <span class="chip">state.db</span><span class="chip">事件哈希链</span><span class="chip">事务预算</span><span class="chip">replay 离线重算</span><span class="chip">LangGraph campaign（可选）</span>
+    </div>
+    <div class="foot">实验状态机（searching→frozen→confirming→completed）· 测试一次性消费 · 失败/中断不可静默撤销 · 离线重算不调用模型</div>
+  </div>
+
+  <div class="arrow"><div class="vline"></div><div class="tri"></div></div>
+
+  <div class="layer engine">
+    <div class="head"><span class="t">创新点引擎（三层 · vendor 主线）</span></div>
+    <div class="stages">
+      <div class="stage">
+        <div class="st">① 生成层</div>
+        <div class="sd">idea-next（ResearchStudio-Idea 导航器）+ ideate（语料→候选卡）<br>code-proposal / code-variant（受控代码修改，绑定源 SHA-256）</div>
+      </div>
+      <div class="sflow">→</div>
+      <div class="stage">
+        <div class="st">② 过滤层</div>
+        <div class="sd">paper-search 多源检索/去重 + scoop-run 七步状态机反证查新<br>novelty 硬降级（全文不可达 → provisional）</div>
+      </div>
+      <div class="sflow">→</div>
+      <div class="stage">
+        <div class="st">③ 验证层</div>
+        <div class="sd">arbor 闭环（idea/scoop→arbor→dispatch）+ 控制器评分（mse-v1 / accuracy-v1）<br>门禁 L0 确定性 + L1 统计/语义 + R1–R7 + 7-mode</div>
+      </div>
+    </div>
+    <div class="toolline">
+      <span class="tl">工具层（vendors.json 登记 + function-calling）</span>
+      <span class="chip">paper_search</span><span class="chip">scoop_run</span><span class="chip">idea_next</span><span class="chip">arbor_*</span><span class="chip">code_proposal</span><span class="chip">evidence_check</span><span class="chip">materialize</span><span class="chip">corpus</span><span class="chip">memory</span><span class="chip">observe</span><span class="chip">reproduce</span>
+    </div>
+  </div>
+
+  <div class="merge" style="grid-template-columns:1fr 1fr;">
+    <div><div class="vline"></div><div class="tri"></div></div>
+    <div><div class="vline"></div><div class="tri"></div></div>
+  </div>
+
+  <div class="duo">
+    <div class="layer store">
+      <div class="head"><span class="t">存储</span><span class="sub">SQLite + 文件</span></div>
+      <div class="chips"><span class="chip">runs / events / projections</span><span class="chip">workspace.json</span><span class="chip">deliverables/</span><span class="chip">领域语料 corpus/</span><span class="chip">archive 冷存储</span></div>
+    </div>
+    <div class="layer ree">
+      <div class="head"><span class="t">隔离（OS 原生沙箱）</span><span class="sub">Windows 低完整性，无 Docker</span></div>
+      <div class="chips">
+        <span class="chip">Low IL 文件写作用域</span><span class="chip">Job Object 资源限额</span><span class="chip">命令拦截</span><span class="chip">代理拦截</span><span class="chip">提权 WFP 断网</span>
+      </div>
+      <div class="foot" style="margin-top:6px;">`--trusted-local` 可信本地 ｜ `--sandbox` 沙箱（互斥）· 容器隔离（Docker+gVisor）留待未来 BYOK 云算力</div>
+    </div>
+  </div>
+
+  <div class="llm">
+    <span class="t">LLM 层</span>
+    <span class="d">BYOK OpenAI 兼容 proposer（POPPER_API_KEY 注入，不落盘）</span>
+    <div class="chips">
+      <span class="chip">DeepSeek</span><span class="chip">Qwen</span><span class="chip">任意 OpenAI 兼容端点</span><span class="chip">无 key → 确定性队列</span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
