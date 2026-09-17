@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+from popper.capabilities import vendor_corpus_status
 from popper.core import Experiment, ProtocolError, file_hash, initialize
 from popper.vendors import VendorRegistry
 from popper.scoop import ScoopRun, fetch_pdf_text
@@ -16,6 +17,13 @@ PROJECT = Path(__file__).resolve().parents[1]
 QUADRATIC = PROJECT / "examples" / "quadratic"
 
 
+VENDOR_CORPUS_OK, VENDOR_CORPUS_DETAIL = vendor_corpus_status()
+
+
+@unittest.skipUnless(VENDOR_CORPUS_OK,
+                     "真实开源语料不可用（`integrations/vendors.json` 的 source_root 指向与本项目"
+                     "同级的上游仓库）：" + VENDOR_CORPUS_DETAIL +
+                     "；注册表本身的逻辑由 tests/test_vendors_registry.py 用仓库内合成 fixture 覆盖")
 class VendorIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

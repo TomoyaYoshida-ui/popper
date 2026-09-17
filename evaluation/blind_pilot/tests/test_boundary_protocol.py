@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from popper.capabilities import extra_available
 from popper.core import initialize, write_json
 from popper.research.actions import RUN_EXPERIMENT, ActionProposal
 from popper.research.confirmation_contracts import (load_private_key, public_key_b64)
@@ -61,6 +62,8 @@ class BoundaryProtocolIntegrationTests(unittest.TestCase):
         self.service.close()
         shutil.rmtree(self.root, ignore_errors=True)
 
+    @unittest.skipUnless(extra_available("ml"),
+                         "ml extra 未安装（scikit-learn）：真实切片的分数来自跑模型代码")
     def test_real_slice_scores_drive_auditable_boundary_stop(self):
         run_dir = self.cell / "research"
         ResearchController.initialize(

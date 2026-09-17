@@ -36,11 +36,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: 安装（含 ml / research / confirmation）
+      - name: 安装（含全部四个 extras）
+        # 四个 extra 必须装齐：pyproject 声明的每个 extra 都要有 job 真装真跑，
+        # 否则对应用例在 CI 上等于不存在（曾漏装 orchestration，langgraph 分支全没跑过）。
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install -e ".[ml,research,confirmation]"
+          python -m pip install -e ".[ml,research,orchestration,confirmation]"
       - name: 全量测试（覆盖需要可选依赖的分支）
         run: python -m pytest -q
 
@@ -64,11 +66,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: 安装
+      - name: 安装（Linux job 装齐四个 extra）
+        # 与 test job 相反：这里不是零依赖验证点，而是沙箱硬门禁。真实沙箱 worker
+        # 用例同时要求沙箱后端与 cryptography（见 test_research_confirmation_runner.py 的
+        # 类级守卫），少装任何一个 extra 都会让 POPPER_REQUIRE_SANDBOX=1 的硬门禁在
+        # 「对应用例被 skip」的情况下发绿——那正是本 job 存在的理由被空转。
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install -e .
+          python -m pip install -e ".[ml,research,orchestration,confirmation]"
       - name: 安装 bubblewrap
         run: |
           sudo apt-get update

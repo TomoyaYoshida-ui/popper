@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from popper.capabilities import extra_available
 from popper.core import Experiment, ProtocolError, digest, file_hash, initialize, read_json, write_json
 from popper.research.actions import REQUEST_CONFIRMATION, RUN_EXPERIMENT, ActionProposal
 from popper.research.confirmation_bundle import export_confirmation_bundle, verify_bundle
@@ -94,6 +95,9 @@ def ready_generated_controller(root):
     return controller, envelope, service_public, service_key
 
 
+@unittest.skipUnless(extra_available("confirmation"),
+                     "confirmation extra 未安装（cryptography）：核心零依赖 job 显式跳过，"
+                     "装齐 extras 的 job 逐条真跑")
 class ConfirmationBundleTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

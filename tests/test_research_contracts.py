@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from popper.capabilities import extra_available
 from popper.core import ProtocolError, digest
 from popper.research import (BudgetLedger, Decision, DesignStatus,
                              ExperimentDesign, Hypothesis, HypothesisStatus,
@@ -470,6 +471,8 @@ class BudgetLedgerTests(unittest.TestCase):
 class SchemaMigrationTests(unittest.TestCase):
     """A6：各物理库共用同一迁移入口，且版本可查询。"""
 
+    @unittest.skipUnless(extra_available("confirmation"),
+                         "confirmation extra 未安装（cryptography）：confirmation 库不在内")
     def test_every_store_reports_the_same_schema_version(self):
         import runpy
         from popper.core import Experiment, initialize

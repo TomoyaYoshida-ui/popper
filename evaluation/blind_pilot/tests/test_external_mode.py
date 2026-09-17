@@ -3,10 +3,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from popper.capabilities import extra_available
+
 from evaluation.blind_pilot.audit import audit_cell
 from evaluation.blind_pilot.matrix import build_matrix, run_matrix
 
 
+@unittest.skipUnless(extra_available("ml"),
+                     "ml extra 未安装（scikit-learn）：外部确认用例依赖真模型跑完一个 cell")
 class ExternalModeTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="blind-external-test-"))

@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from popper.capabilities import extra_available
 from popper.core import ProtocolError
 from popper.orchestrator import Orchestrator, CampaignFatal, SUCCESS
 
@@ -15,6 +16,9 @@ def _ok(key_result):
     return lambda run_dir, state: {"outcome": SUCCESS, "value": key_result}
 
 
+@unittest.skipUnless(extra_available("orchestration"),
+                     "orchestration extra 未安装（langgraph）：编译图需要它，"
+                     "核心零依赖 job 显式跳过，装齐 extras 的 job 逐条真跑")
 class OrchestratorTests(unittest.TestCase):
     def setUp(self):
         self.run = _make_run()

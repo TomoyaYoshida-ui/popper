@@ -13,6 +13,7 @@ from popper.core import EVALUATORS, Experiment, ProtocolError, digest, initializ
 from popper.cli import main
 from popper.proposer import make_proposer
 from popper.server import Workstation
+from popper import server as popper_server
 
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "quadratic"
@@ -351,9 +352,21 @@ class ProtocolTests(unittest.TestCase):
         thread.start()
         base = f"http://127.0.0.1:{server.server_address[1]}"
         try:
-            with urllib.request.urlopen(base + "/", timeout=2) as response:
-                page = response.read().decode()
-            self.assertIn("<html", page.lower())
+            # 前端未构建时 `/` 必须显式 503（不回退任何内嵌 HTML）。已构建才断言 HTML：
+            # 分支不是放宽守卫，而是把两种状态都钉住——干净克隆里没有 dist，
+            # 只断言 HTML 的写法会把一个正确的 fail-closed 行为误判成测试失败。
+            dist_built = (Path(popper_server.__file__).resolve().parents[1]
+                          / "frontend" / "dist" / "index.html").is_file()
+            if dist_built:
+                with urllib.request.urlopen(base + "/", timeout=2) as response:
+                    page = response.read().decode()
+                self.assertIn("<html", page.lower())
+            else:
+                with self.assertRaises(urllib.error.HTTPError) as unbuilt:
+                    urllib.request.urlopen(base + "/", timeout=2)
+                self.assertEqual(503, unbuilt.exception.code)
+                self.assertIn("前端未构建",
+                              unbuilt.exception.read().decode("utf-8", errors="replace"))
             # token 通过 /api/session 引导端点返回，不再注入 HTML（React 前端）
             with urllib.request.urlopen(base + "/api/session", timeout=2) as response:
                 session = json.loads(response.read())

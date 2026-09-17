@@ -6,12 +6,16 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
+from popper.capabilities import extra_available
 from popper.core import EVALUATORS, ProtocolError, digest, write_json
 from popper.research.confirmation_contracts import (load_private_key, public_key_b64,
     sign_payload, validate_contract, validate_result, validate_ticket, verify_envelope)
 from popper.research.confirmation_service import HoldoutService
 
 
+@unittest.skipUnless(extra_available("confirmation"),
+                     "confirmation extra 未安装（cryptography）：核心零依赖 job 显式跳过，"
+                     "装齐 extras 的 job 逐条真跑")
 class HoldoutServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from popper.capabilities import extra_available
 from popper.core import initialize
 from popper.server import Workstation
 
@@ -69,6 +70,8 @@ class FakeNodes:
         return fn
 
 
+@unittest.skipUnless(extra_available("orchestration"),
+                     "orchestration extra 未安装（langgraph）：审批后的 resume 跑真实编译图")
 class CampaignApprovalHttpTests(unittest.TestCase):
     trusted_local = False
 

@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from popper.capabilities import extra_available
 from popper.campaign_nodes import (BUILTIN_NODES, DEFAULT_CAMPAIGN_STEPS,
                                    arbor_node, confirm_node, dev_node,
                                    dispatch_node, freeze_node, idea_node,
@@ -26,6 +27,8 @@ def _make_project(temp_root):
     return temp_root
 
 
+@unittest.skipUnless(extra_available("orchestration"),
+                     "orchestration extra 未安装（langgraph）：拓扑校验走编译图")
 class CampaignPresetTests(unittest.TestCase):
     def test_default_steps_covered_by_builtin_nodes(self):
         """默认编排的每个 key 都有内置节点，且依赖拓扑可排序。"""
@@ -51,6 +54,8 @@ class CampaignPresetTests(unittest.TestCase):
         self.assertIn("缺执行函数", str(ctx.exception))
 
 
+@unittest.skipUnless(extra_available("orchestration"),
+                     "orchestration extra 未安装（langgraph）：节点执行需要编译后的图")
 class CampaignExperimentNodesTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

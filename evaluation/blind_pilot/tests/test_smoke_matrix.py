@@ -8,12 +8,16 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from popper.capabilities import extra_available
 from popper.core import read_json
 
 from evaluation.blind_pilot.matrix import build_matrix, cell_done, run_matrix
 from evaluation.blind_pilot.report import build_report, is_valid_loop, classify_failure
 
 
+@unittest.skipUnless(extra_available("ml"),
+                     "ml extra 未安装（scikit-learn）：矩阵 cell 跑的是真模型代码，"
+                     "核心零依赖 job 显式跳过，装齐 extras 的 job 逐条真跑")
 class SmokeMatrixTests(unittest.TestCase):
     def setUp(self):
         self.trial_root = Path(tempfile.mkdtemp(prefix="blind-matrix-test-"))

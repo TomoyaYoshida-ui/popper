@@ -341,15 +341,33 @@ class SandboxWriteScopeTests(unittest.TestCase):
             shutil.rmtree(root, ignore_errors=True)
 
     def test_python_copy_launches(self):
-        """专用 python 副本（PYTHONHOME 指向真实安装）可独立运行。"""
+        """专用 python 副本可独立运行，且在 venv 里仍能看到真解释器与 venv 三方库路径。
+
+        不只断言退出码：venv 下的副本曾经是个跑不起来的壳（退出码 106），而“能跑”也不
+        等于“能用的还是那个解释器环境”——所以额外钉住三件事：跑的就是副本本身、
+        标准库能 import、PYTHONPATH 里挂的 venv site-packages 真的进了 sys.path。
+        """
         copy_dir, home = sandbox._make_python_copy()
+        probe = ("import json, sys\n"
+                 "mods = []\n"
+                 "for name in ('json', 'sqlite3', 'hashlib'):\n"
+                 "    __import__(name)\n"
+                 "    mods.append(name)\n"
+                 "print(json.dumps({'executable': sys.executable, 'prefix': sys.prefix,\n"
+                 "                   'path': sys.path, 'stdlib': mods}))\n")
         try:
-            r = subprocess.run([str(copy_dir / "python.exe"),
-                                "-c", "import sys; print(sys.executable)"],
+            r = subprocess.run([str(copy_dir / "python.exe"), "-c", probe],
                                capture_output=True, text=True,
                                env={**os.environ, **home}, timeout=60)
-            self.assertEqual(0, r.returncode)
-            self.assertIn("python.exe", r.stdout)
+            self.assertEqual(0, r.returncode, f"副本启动失败：{r.stderr}")
+            info = json.loads(r.stdout)
+            self.assertEqual(copy_dir.resolve(), Path(info["executable"]).parent.resolve())
+            self.assertEqual(["json", "sqlite3", "hashlib"], info["stdlib"])
+            self.assertEqual(Path(home["PYTHONHOME"]).resolve(), Path(info["prefix"]).resolve())
+            if home.get("PYTHONPATH"):
+                self.assertIn(str(Path(home["PYTHONPATH"]).resolve()),
+                              [str(Path(entry).resolve()) for entry in info["path"]
+                               if entry])
         finally:
             shutil.rmtree(copy_dir, ignore_errors=True)
 

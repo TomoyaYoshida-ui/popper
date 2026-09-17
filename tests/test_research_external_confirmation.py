@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from popper.capabilities import extra_available
 from popper.core import ProtocolError, digest, initialize, read_json, write_json
 from popper.research.actions import REQUEST_CONFIRMATION, RUN_EXPERIMENT, ActionProposal
 from popper.research.confirmation_contracts import load_private_key, public_key_b64, sign_payload
@@ -18,6 +19,9 @@ from popper.research.revisions import CodeEdit
 from tests.test_research_confirmation_bundle import EXAMPLE
 
 
+@unittest.skipUnless(extra_available("confirmation"),
+                     "confirmation extra 未安装（cryptography）：核心零依赖 job 显式跳过，"
+                     "装齐 extras 的 job 逐条真跑")
 class ExternalConfirmationControllerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

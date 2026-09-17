@@ -483,16 +483,29 @@ def _netblock_rule_name():
 
 def _make_python_copy():
     """为沙箱创建专用 python 副本（python.exe + 核心 DLL），便于防火墙按程序路径
-    只阻断沙箱解释器而不影响控制器。返回 (副本目录, PYTHONHOME 覆盖)。"""
-    base = Path(sys.executable).resolve().parent
+    只阻断沙箱解释器而不影响控制器。返回 (副本目录, 解释器环境覆盖)。
+
+    venv 里的 python.exe 只是靠旁边 pyvenv.cfg 找真解释器的重定向壳：直接拷到临时
+    目录既找不到配置也找不到标准库（实测退出码 106）。所以副本必须以 base 安装为源、
+    PYTHONHOME 指向 base；再把 venv 的 site-packages 挂进 PYTHONPATH，否则沙箱 worker
+    会失去 venv 里装的第三方库（sklearn / numpy 等），断网路径就变成不可用路径。
+    """
+    base_prefix = Path(getattr(sys, "base_prefix", sys.prefix)).resolve()
+    venv_prefix = Path(sys.prefix).resolve()
+    source = base_prefix if (base_prefix / "python.exe").is_file() else venv_prefix
     copy_dir = Path(tempfile.gettempdir()) / f"popper-pycopy-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     copy_dir.mkdir(parents=True, exist_ok=True)
     dll = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
     for name in (dll, "python3.dll", "vcruntime140.dll", "vcruntime140_1.dll", "python.exe"):
-        src = base / name
+        src = source / name
         if src.exists():
             shutil.copy2(src, copy_dir / name)
-    return copy_dir, {"PYTHONHOME": str(base)}
+    overrides = {"PYTHONHOME": str(source)}
+    if venv_prefix != source:
+        site_packages = venv_prefix / "Lib" / "site-packages"
+        if site_packages.is_dir():
+            overrides["PYTHONPATH"] = str(site_packages)
+    return copy_dir, overrides
 
 
 def _netsh(command):
@@ -598,7 +611,11 @@ def launch_low_integrity(command, cwd, env, stdout, stderr, timeout_seconds,
         if netblock_available():
             python_copy, home = _make_python_copy()
             env = dict(env)
-            env["PYTHONHOME"] = home["PYTHONHOME"]
+            for key, value in home.items():
+                if key == "PYTHONPATH" and env.get("PYTHONPATH"):
+                    env["PYTHONPATH"] = value + os.pathsep + env["PYTHONPATH"]
+                else:
+                    env[key] = value
             interpreter = str(python_copy / "python.exe")
             rule_name = _netblock_rule_name()
             _apply_netblock(rule_name, interpreter)

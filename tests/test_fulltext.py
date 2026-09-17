@@ -5,6 +5,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from popper.capabilities import extra_available
 from popper.core import ProtocolError
 from popper.fulltext import PdfLinks, fetch_paper_text, pdf_candidates, public_https
 from popper.scoop import AXES, ScoopRun, _paper_id
@@ -126,6 +127,8 @@ class FulltextEvidenceTests(unittest.TestCase):
         self.assertEqual(2, llm.call_count)
         self.assertIn("validation_error", llm.call_args.args[1])
 
+    @unittest.skipUnless(extra_available("orchestration"),
+                         "orchestration extra 未安装（langgraph）：该用例走 campaign 刷新链路")
     def test_campaign_refresh_flag_reaches_fulltext_runner(self):
         from popper.campaign_nodes import BUILTIN_NODES
         from popper.orchestrator import Orchestrator

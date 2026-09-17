@@ -7,6 +7,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from popper.capabilities import vendor_corpus_status
 from popper.core import ProtocolError
 from popper.scoop import AXES, ScoopRun, make_json_client
 from popper.candidate_contract import validate_candidate
@@ -104,6 +105,8 @@ class CandidateContractTests(unittest.TestCase):
 
 
 class SearchDeadlineTests(unittest.TestCase):
+    @unittest.skipUnless(vendor_corpus_status()[0],
+                         "真实开源语料不可用：本用例要拉起 vendor 侧的搜索 worker")
     def test_search_subprocess_receives_bounded_http_policy(self):
         from popper.vendors import VendorRegistry
         registry = VendorRegistry()

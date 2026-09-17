@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from popper.capabilities import extra_available
 from popper.core import ProtocolError, file_hash, read_json, validate_spec
 
 from evaluation.blind_pilot.tasks.base import (assert_objective_neutral, neutral_objective,
@@ -25,6 +26,8 @@ class TaskBuilderTests(unittest.TestCase):
             self.assertEqual(set(CONTROLLED_EVIDENCE_CONDITIONS), conds,
                              f"{family} 应覆盖全部四类隐藏情形")
 
+    @unittest.skipUnless(extra_available("ml"),
+                         "ml extra 未安装（scikit-learn）：构建后的任务要跑真模型代码做自校验")
     def test_build_is_deterministic(self):
         import tempfile
         import shutil
