@@ -37,7 +37,7 @@ jobs:
         # Actions 日志页需登录才能看，run 页面的 job summary 对公开仓库免登录可读：
         # 红的时候让 CI 自己把 FAILED/ERROR 清单递出来，而不是剩个 exit code 1 给人猜。
         if: failure()
-        run: python .github/scripts/ci_failure_summary.py pytest-output.txt
+        run: python -X utf8 .github/scripts/ci_failure_summary.py pytest-output.txt
 
   test-optional-extras:
     name: pytest / windows / 可选 extras
@@ -63,7 +63,7 @@ jobs:
           exit $status
       - name: 失败清单写进 job summary
         if: failure()
-        run: python .github/scripts/ci_failure_summary.py pytest-output.txt
+        run: python -X utf8 .github/scripts/ci_failure_summary.py pytest-output.txt
 
   linux:
     name: pytest / ubuntu / bubblewrap 沙箱后端
@@ -131,4 +131,4 @@ jobs:
         # 本 job 在测试步骤之前还有 apt/ bubblewrap / 沙箱探活三道门槛，哪一步红都会
         # 在这里写明「没拿到 pytest 输出」，避免被误读成「测试挂了」。
         if: failure()
-        run: python .github/scripts/ci_failure_summary.py pytest-output.txt
+        run: python -X utf8 .github/scripts/ci_failure_summary.py pytest-output.txt

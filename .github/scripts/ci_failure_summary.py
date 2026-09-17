@@ -18,6 +18,20 @@ import sys
 from pathlib import Path
 
 MAX_FAILURE_LINES = 200
+# annotation 上限：够看清问题，又不至于把 run 页面埋了。完整清单在 job summary 里。
+MAX_ANNOTATIONS = 40
+ANNOTATION_LINE_CHARS = 300
+
+# pytest 的断言消息本身就是中文，所以 ::error:: 行会带中文：stdout 必须自己钉在 UTF-8，
+# 不能靠宿主 locale（runner 把 stdout 当管道收，中文 Windows 上不钉就是 cp936）。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+
+
+def workflow_error(message: str) -> str:
+    """拼 GitHub Actions 工作流命令；按文档预转义 % / CR / LF，否则会被截断或误解析。"""
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::error::{escaped}"
 
 
 def failure_lines(text: str) -> list[str]:
@@ -70,10 +84,17 @@ def main() -> int:
     except OSError as error:  # 诊断步骤不得让 job 再红一次
         print(f"[ci_failure_summary] cannot write summary: {error}")
         return 0
-    # 只往 stdout 打 ASCII 状态行：本脚本的中文只进摘要文件，不依赖宿主 locale。
-    # （把含中文的结果 print 到管道，正是 verify_claims.py 刚踩过的同一个坑。）
+    # stdout 只放两类东西：ASCII 状态行 + 带中文的 ::error:: annotation（已钉 UTF-8）；
+    # 中文 Markdown 正文只进摘要文件，不往管道里刷。
     print(f"[ci_failure_summary] ok: wrote {len(markdown)} chars to job summary; "
           f"missing_output={int(missing)} failure_lines={len(failure_lines(payload))}")
+    # job summary 需要浏览器渲染才能看，而 annotation 直接落在 run 页面的静态 HTML 里
+    # （GitHub 的 checks UI 与外部工具都能读）。每个失败项一条 ::error::，
+    # 没登录凭据的人也能从 run 页面看到到底是哪几个用例红了。
+    for line in failure_lines(payload)[:MAX_ANNOTATIONS]:
+        print(workflow_error(line[:ANNOTATION_LINE_CHARS]))
+    if missing:
+        print(workflow_error("no pytest-output.txt: the failure happened BEFORE the test step"))
     return 0
 
 
