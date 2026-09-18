@@ -194,8 +194,15 @@ def discover_font() -> str | None:
 
 
 def _probe_cjk(font_path: str | Path) -> bool:
-    """加载字体并确认常见汉字（'中' 0x4E2D）在其中的映射不为空。"""
+    """加载字体并确认两件事：常见汉字（'中' 0x4E2D）映射不为空，且轮廓是 TrueType。
+
+    第二条不是锦上添花：子集化器直接按字节读 `glyf`/`loca`，而 CFF 轮廓的字体（典型如
+    Debian/Ubuntu 的 fonts-noto-cjk，.ttc 里装的是 CFF）能过 cmap 探测、却会在渲染
+    中途才炸。“探测通过 = 真能渲染”才是这条探测存在的意义，不能只验字形映射。
+    """
     font = load_font(font_path)
+    if "glyf" not in font.tables or "loca" not in font.tables:
+        return False
     gid = font.glyph_map.get(0x4E2D, 0)
     return bool(gid)
 

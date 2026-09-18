@@ -559,7 +559,10 @@ def main(argv=None):
                 else:
                     result = materializer.build_repro_package(args.out_dir)
             elif args.research_command == "paper":
-                flow = ManuscriptFlow(Experiment(args.project))
+                # 给 main() 末尾的 finally 去关：内联构造会让这个 sqlite 句柄没人接，
+                # 而在进程内调用 main()（工作台与测试都是）时它会一直开着。
+                experiment = Experiment(args.project)
+                flow = ManuscriptFlow(experiment)
                 if args.paper_command == "submit":
                     result = flow.submit(args.manuscript, args.evidence_dir, args.reason)
                 elif args.paper_command == "publish":

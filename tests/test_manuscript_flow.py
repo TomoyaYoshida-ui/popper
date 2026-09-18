@@ -19,6 +19,10 @@ EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "quadratic"
 class ManuscriptFlowTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        # 测试自己打开的 Experiment：必须在删临时目录**之前**关掉。
+        # Experiment 持有 state.db 的 sqlite 连接，靠 GC 收尾在本机单文件跑没事，
+        # 整仓跑与 CI 上就不成立：Windows 报 [WinError 32]，Linux 报 Directory not empty。
+        self._opened = []
         self.root = Path(self.temp.name)
         for name in ("experiment.json", "model.py"):
             shutil.copyfile(EXAMPLE / name, self.root / name)
@@ -30,11 +34,15 @@ class ManuscriptFlowTests(unittest.TestCase):
             encoding="utf-8")
 
     def tearDown(self):
+        for exp in self._opened:
+            exp.close()
         self.temp.cleanup()
 
     def start(self):
         initialize(self.root)
-        return Experiment(self.root)
+        exp = Experiment(self.root)
+        self._opened.append(exp)
+        return exp
 
     def _write_ms(self, text):
         p = self.root / "m2.md"

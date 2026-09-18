@@ -90,6 +90,11 @@ class CampaignApprovalHttpTests(unittest.TestCase):
 
     def tearDown(self):
         if hasattr(self, "server"):
+            # 先等后台作业线程收尾再删目录：审批恢复跑在 daemon 线程里，不等它就删
+            # 临时目录，Linux 上会得到「Directory not empty」（线程在 rmtree 之后又
+            # 写了文件），Windows 上会得到 [WinError 32]。
+            leftover = self.server.wait_for_jobs(timeout=60)
+            self.assertEqual(0, leftover, "后台作业线程没收尾，临时目录会被继续写入")
             self.server.shutdown()
             self.server.server_close()
             self.thread.join(timeout=2)
@@ -174,15 +179,13 @@ class CampaignApprovalHttpTests(unittest.TestCase):
         code, body = self._post("/api/campaign", {"action": "approve", "reason": "ok"})
         self.assertEqual(200, code)
         self.assertEqual("approved", body["decision"])
-        # 后台恢复完成：轮询 campaign 状态
-        deadline = time.time() + 8
-        while time.time() < deadline:
-            state = json.loads((self.camp / "campaign.json").read_text(encoding="utf-8"))
-            if state.get("status") in {"completed", "failed"}:
-                break
-            time.sleep(0.1)
+        # 等后台线程真收尾，而不是猜一个固定轮询窗口：恢复路径要 import langgraph，
+        # 负载高的 runner 上「8 秒内还没完」与「真的失败了」会被混淆成同一条红。
+        leftover = self.server.wait_for_jobs(timeout=120)
+        self.assertEqual(0, leftover, f"后台恢复未结束：{self.server.campaign_job}")
         state = json.loads((self.camp / "campaign.json").read_text(encoding="utf-8"))
-        self.assertEqual("completed", state["status"])
+        self.assertEqual("completed", state["status"],
+                         f"campaign.json={state} campaign_job={self.server.campaign_job}")
         # 审批记录落盘
         approvals = json.loads((self.camp / "approvals.json").read_text(encoding="utf-8"))
         self.assertEqual("approved", approvals["records"][0]["decision"])

@@ -201,7 +201,12 @@ def run_confirmation_bundle(bundle_dir, ticket, features, service_public_key,
     # Preserve the user's path until verify_bundle has rejected symlink/reparse
     # ancestors; resolving first would erase that part of the validation evidence.
     bundle, output = Path(bundle_dir).absolute(), Path(output_dir).resolve()
-    if bundle.is_relative_to(output) or output.is_relative_to(bundle):
+    # 但隔离性检查必须两边同一规范化口径：output 已 resolve()，而 bundle 刻意保留用户
+    # 原样。Windows 的 TEMP 可能是 8.3 短名（C:\Users\RUNNER~1\...），两种写法指向同一
+    # 目录却互不为前缀——守卫会静默失效，「输出目录不得落在冻结 bundle 内」形同虚设。
+    # 只拿解析后的副本做比较，送验的 bundle 路径本身仍然保持原样。
+    bundle_canonical = bundle.resolve()
+    if bundle_canonical.is_relative_to(output) or output.is_relative_to(bundle_canonical):
         raise ProtocolError("Confirmation output must be separate from its frozen bundle")
     manifest, contract = verify_bundle(bundle, service_public_key)
     bundle = bundle.resolve()

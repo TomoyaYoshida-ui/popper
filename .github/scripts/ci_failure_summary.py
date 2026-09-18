@@ -18,9 +18,13 @@ import sys
 from pathlib import Path
 
 MAX_FAILURE_LINES = 200
-# annotation 上限：够看清问题，又不至于把 run 页面埋了。完整清单在 job summary 里。
-MAX_ANNOTATIONS = 40
+# annotation 预算：GitHub 对 push 触发的 run 只保留每个 check run 「最近 10 条」
+# annotation，且系统自己会占 2 条（Node 版本弃用 warning + “Process completed with
+# exit code 1”）。所以我们自己最多只能占 8 条：超出部分不是被 GitHub 显示不全，而是
+# 直接丢弃——拿一个会漏报的仪表做诊断，比没有仪表更危险（曾试过 40 条，实拿 10 条）。
+MAX_ANNOTATIONS = 8
 ANNOTATION_LINE_CHARS = 300
+SIGNATURE_CHARS = 180
 
 # pytest 的断言消息本身就是中文，所以 ::error:: 行会带中文：stdout 必须自己钉在 UTF-8，
 # 不能靠宿主 locale（runner 把 stdout 当管道收，中文 Windows 上不钉就是 cp936）。
@@ -36,6 +40,33 @@ def workflow_error(message: str) -> str:
 
 def failure_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.startswith(("FAILED", "ERROR"))]
+
+
+def test_id(line: str) -> str:
+    """`FAILED tests/x.py::K::t - 详情` -> `tests/x.py::K::t`。"""
+    return line.split(" - ", 1)[0].split(" ", 1)[-1]
+
+
+def reason_of(line: str) -> str:
+    return line.split(" - ", 1)[1].strip() if " - " in line else line
+
+
+def signatures(lines: list[str], limit: int = 4) -> list[str]:
+    """按异常消息聚类（保留出现顺序），返回 `Nx 消息` 形式。
+
+    同一根因往往覆盖几十个用例（例：netsh 短名、缺少字体）；annotation 装不下逐个详情，
+    但「几类根因、各多少条」能完整保住信息形状。
+    """
+    counts: dict[str, int] = {}
+    for line in lines:
+        key = reason_of(line)[:SIGNATURE_CHARS]
+        counts[key] = counts.get(key, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [f"{count}x {reason}" for reason, count in ranked[:limit]]
+
+
+def chunk_join(items: list[str], per_chunk: int) -> list[str]:
+    return ["; ".join(items[i:i + per_chunk]) for i in range(0, len(items), per_chunk)]
 
 
 def summary_lines(text: str) -> list[str]:
@@ -88,14 +119,42 @@ def main() -> int:
     # 中文 Markdown 正文只进摘要文件，不往管道里刷。
     print(f"[ci_failure_summary] ok: wrote {len(markdown)} chars to job summary; "
           f"missing_output={int(missing)} failure_lines={len(failure_lines(payload))}")
-    # job summary 需要浏览器渲染才能看，而 annotation 直接落在 run 页面的静态 HTML 里
-    # （GitHub 的 checks UI 与外部工具都能读）。每个失败项一条 ::error::，
-    # 没登录凭据的人也能从 run 页面看到到底是哪几个用例红了。
-    for line in failure_lines(payload)[:MAX_ANNOTATIONS]:
-        print(workflow_error(line[:ANNOTATION_LINE_CHARS]))
+    emit_annotations(payload)
     if missing:
         print(workflow_error("no pytest-output.txt: the failure happened BEFORE the test step"))
     return 0
+
+
+def emit_annotations(payload: str) -> None:
+    """在 8 条预算内把失败信息压出去；最重要的结论放最后一条（被挤掉时先没的是细节）。
+
+    job summary 里的完整清单照旧写（浏览器里看得全），但本仓库的作者常常只能拿到
+    免登录的静态页面，所以 annotation 必须自己就能回答「哪几个用例、几类根因」。
+    """
+    fails = failure_lines(payload)
+    if not fails:
+        return
+    budget = MAX_ANNOTATIONS
+    messages: list[str] = []
+    # 1) 根因聚类（最有价值，最后发，顺位上不会被顶掉）
+    clusters = signatures(fails)
+    # 2) 失败用例名：按每条 ~120 字、每次 6 条 annotation 均分剩下的预算
+    ids = [test_id(line) for line in fails]
+    id_slots = max(1, budget - 2)
+    per_chunk = max(1, len(ids) // id_slots + (1 if len(ids) % id_slots else 0))
+    chunks = chunk_join(ids, per_chunk)
+    dropped = max(0, len(chunks) - id_slots)
+    if dropped:
+        chunks = chunks[:id_slots]
+    for index, chunk in enumerate(chunks, start=1):
+        messages.append(f"FAILED[{index}/{len(chunks)}] {chunk}")
+    if dropped:
+        messages.append(f"FAILED 另有 {dropped * per_chunk} 项未列出（GitHub 10 条上限），"
+                        f"完整清单在 job summary")
+    messages.append(f"FAILED total={len(fails)} 根因聚类（前 {len(clusters)} 类）: "
+                    + " || ".join(clusters))
+    for message in messages[-budget:]:
+        print(workflow_error(message[:ANNOTATION_LINE_CHARS * 4]))
 
 
 if __name__ == "__main__":

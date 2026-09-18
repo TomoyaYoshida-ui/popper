@@ -336,6 +336,13 @@ class Workstation(ThreadingHTTPServer):
             raise ProtocolError("--campaign 仅对实验项目生效（当前为论文复现模式）")
         self.campaign_lock = threading.Lock()
         self.campaign_job = {"status": "idle"}
+        # 后台作业线程登记表：这些是 daemon 线程，进程退出时会被内核直接回收。
+        # 如果没有地方能等它们收尾，「服务器已关闭 = 副作用已落盘」就是个假命题：
+        # 实际表现为服务器关闭后仍有线程在写 run_dir / .popper（测试里是临时目录
+        # 删不掉、Linux 上报 Directory not empty；状态文件还停在 idle）。监控线程
+        # 是无限循环，刻意不登记，否则 wait_for_jobs 永远回不来。
+        self.job_threads_lock = threading.Lock()
+        self._job_threads: list[threading.Thread] = []
         # 审批恢复所用内置节点；测试可注入 fake 以便离线验证调用链。
         self._campaign_nodes = None
         self.ws_lock = threading.Lock()
@@ -579,7 +586,33 @@ class Workstation(ThreadingHTTPServer):
                 self.job = {"status": "failed", "action": action, "error": str(error)}
             finally:
                 self.job_lock.release()
-        threading.Thread(target=work, daemon=True).start()
+        self._start_job(work)
+
+    def _start_job(self, target):
+        """启动一个可被 `wait_for_jobs()` 等到的后台作业线程。"""
+        thread = threading.Thread(target=target, daemon=True)
+        with self.job_threads_lock:
+            self._job_threads.append(thread)
+        thread.start()
+        return thread
+
+    def wait_for_jobs(self, timeout=120):
+        """等所有已登记的后台作业线程结束，返回仍存活的个数。
+
+        超时不抛异常：调用方（测试与将来的优雅停机）需要知道「还没收尾」这个事实
+        本身，而不是在一个自己造的错误里丢掉现场。
+        """
+        with self.job_threads_lock:
+            pending = list(self._job_threads)
+            self._job_threads.clear()
+        deadline = time.time() + timeout
+        for thread in pending:
+            thread.join(max(0.0, deadline - time.time()))
+        still_alive = [thread for thread in pending if thread.is_alive()]
+        if still_alive:
+            with self.job_threads_lock:
+                self._job_threads.extend(still_alive)
+        return len(still_alive)
 
     def approve_campaign(self, decision, reason="", materialize=None):
         """工作台交互审批：记录决定，批准时在后台线程真正恢复执行 campaign。
@@ -642,7 +675,7 @@ class Workstation(ThreadingHTTPServer):
                                      "error": str(error)}
             finally:
                 self.campaign_lock.release()
-        threading.Thread(target=work, daemon=True).start()
+        self._start_job(work)
         return {"decision": "approved", "accepted": True,
                 "run_dir": str(self.campaign_dir)}
 

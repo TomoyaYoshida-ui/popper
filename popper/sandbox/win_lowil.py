@@ -493,7 +493,12 @@ def _make_python_copy():
     base_prefix = Path(getattr(sys, "base_prefix", sys.prefix)).resolve()
     venv_prefix = Path(sys.prefix).resolve()
     source = base_prefix if (base_prefix / "python.exe").is_file() else venv_prefix
-    copy_dir = Path(tempfile.gettempdir()) / f"popper-pycopy-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    # 副本目录必须落在**无 8.3 短名**的路径上：GitHub Windows runner 的 TEMP 本身就是
+    # 短名目录（C:\Users\RUNNER~1\...），而 WFP 按解析后的程序路径匹配规则，netsh 拿到
+    # 短名会直接报 "The application name could not be resolved"——规则加不上，内核级
+    # 断网层就静默变成不可用层。resolve() 会把短名展开成真实长名（已实测）。
+    copy_dir = (Path(tempfile.gettempdir()).resolve()
+                / f"popper-pycopy-{os.getpid()}-{uuid.uuid4().hex[:8]}")
     copy_dir.mkdir(parents=True, exist_ok=True)
     dll = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
     for name in (dll, "python3.dll", "vcruntime140.dll", "vcruntime140_1.dll", "python.exe"):
@@ -519,7 +524,11 @@ def _apply_netblock(rule_name, python_exe):
            f'program="{python_exe}" action=block')
     proc = _netsh(cmd)
     if proc.returncode != 0 or "Ok." not in (proc.stdout or ""):
-        raise OSError(f"netsh 添加出站阻断规则失败({proc.returncode}): {proc.stdout}{proc.stderr}")
+        # 把 program= 原样带进异常：这一层只在提权环境执行（本机非提权走不到），
+        # CI 是唯一实验场，错误信息必须能自己说清是「路径没解析」还是「权限/服务」问题。
+        raise OSError(f"netsh 添加出站阻断规则失败({proc.returncode}) "
+                      f"program={python_exe} 存在={Path(python_exe).is_file()}: "
+                      f"{proc.stdout}{proc.stderr}")
 
 
 def _remove_netblock(rule_name):

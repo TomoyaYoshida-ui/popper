@@ -58,13 +58,29 @@ def _pretend_linux():
 
 
 @contextlib.contextmanager
+def _pretend_non_linux():
+    """关平台闸门：让「非 Linux 不该探活」这条在 Linux runner 上也真的被验证。
+
+    不 patch 而是依赖「本机不是 Linux」的话，这条用例在 Linux 上断言的是本机事实，
+    闸门本身从未被执行过——CI 的 ubuntu job 正是这样红的。"""
+    with patch.object(linux_bwrap, "_is_linux_platform", return_value=False):
+        yield
+
+
+@contextlib.contextmanager
 def _clean_backend_state():
-    """隔离对模块级 scope/seal 集合与探活缓存的修改。"""
+    """隔离对模块级 scope/seal 集合与探活缓存的修改。
+
+    `_AVAILABLE` 必须在用例期间置回 None：探活结果是被缓存的，同一进程里先跑过
+    真探活的用例（如 `SandboxAvailabilityTests`）会把结果留在模块上。只「保存-恢复」
+    而不重置，等于让打桩用例沿用上一条的缓存——打进去的 `subprocess.run` 一次都不会
+    被调用，断言的对象变成缓存而不是探活逻辑本身。"""
     scopes, seals = set(linux_bwrap._SCOPE_PATHS), set(linux_bwrap._SEALED_PATHS)
     available, detail = linux_bwrap._AVAILABLE, linux_bwrap._PROBE_DETAIL
     try:
         linux_bwrap._SCOPE_PATHS.clear()
         linux_bwrap._SEALED_PATHS.clear()
+        linux_bwrap._AVAILABLE, linux_bwrap._PROBE_DETAIL = None, ""
         yield
     finally:
         linux_bwrap._SCOPE_PATHS.clear()
@@ -591,7 +607,7 @@ class LinuxBubblewrapProbeTests(unittest.TestCase):
         self.assertIn("--trusted-local", message)
 
     def test_non_linux_platforms_never_probe(self):
-        with _clean_backend_state():
+        with _clean_backend_state(), _pretend_non_linux():
             with patch.object(linux_bwrap.subprocess, "run",
                               side_effect=AssertionError("非 Linux 不应探活")):
                 self.assertFalse(linux_bwrap.available())
@@ -759,6 +775,19 @@ class ReadSealEnforcementTests(unittest.TestCase):
             shutil.rmtree(root, ignore_errors=True)
 
 
+def _namespace_visible_tmpdir(prefix):
+    """在 bwrap 视图里仍可见的临时目录：不能落在宕主 /tmp 下。
+
+    `--tmpfs /tmp` 会整体遮宕主 /tmp（设计如此：候选的临时文件不外泄）。把保留集
+    放在 /tmp 下，候选看到的是「文件不存在」，对照组先炸，症状是个看不懂的 KeyError，
+    反而像是屏蔽逻辑坏了。家目录在 `--ro-bind / /` 之下，不受遮蔽影响。
+    """
+    home = Path.home()
+    if not home.is_dir():
+        raise unittest.SkipTest("没有可用的家目录，无法在 bwrap 视图外放置保留集")
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=str(home)))
+
+
 @unittest.skipUnless(_is_linux(), "Linux bubblewrap mount namespace 屏蔽仅支持 Linux")
 class LinuxBubblewrapReadSealEnforcementTests(unittest.TestCase):
     """保留集读隔离（Linux 路径）：bwrap `--ro-bind /dev/null <path>` 屏蔽。
@@ -786,8 +815,18 @@ class LinuxBubblewrapReadSealEnforcementTests(unittest.TestCase):
                           cwd=str(scope), env=env, stdout=so, stderr=se, timeout_seconds=30)
         return json.loads(out.read_text(encoding="utf-8"))
 
+    def _candidate_sees_the_secret(self, scope, env, secret):
+        """对照组：未封读时沙箱候选必须真能读到保留集内容。
+
+        单独把 error 键断言出来：候选读不到文件（fixture 放在被遮蔽的 /tmp 下）与
+        候选被内核遮蔽（封读生效）都走 error 分支，不分开就分不清是哪种。
+        """
+        result = self._sandboxed_read(scope, env, secret)
+        self.assertNotIn("error", result, f"沙箱候选看不到保留集文件：{result}")
+        self.assertIn("a", result["read"])
+
     def test_sealed_paths_are_masked_for_the_sandboxed_candidate(self):
-        root = Path(tempfile.mkdtemp(prefix="popper-seal-"))
+        root = _namespace_visible_tmpdir("popper-seal-")
         try:
             scope, holdout = root / "scope", root / "holdout"
             scope.mkdir(), holdout.mkdir()
@@ -798,14 +837,14 @@ class LinuxBubblewrapReadSealEnforcementTests(unittest.TestCase):
             env = {k: v for k, v in os.environ.items()
                    if k.upper() in {"PATH", "LANG", "LC_ALL", "TMPDIR"}}
             # 受控对照：未封读时沙箱进程可以读到保留集真实内容
-            self.assertIn("a", self._sandboxed_read(scope, env, secret)["read"])
+            self._candidate_sees_the_secret(scope, env, secret)
             with sandbox.sealed_reads([secret]):
                 # Linux 路径：/dev/null 屏蔽 → 候选读到空字符串，不是真实数据
                 self.assertEqual("", self._sandboxed_read(scope, env, secret).get("read", ""))
                 # 用户在窗口内仍能读（封读只针对沙箱候选进程，不影响宿主）
                 self.assertIn("x", secret.read_text(encoding="utf-8"))
             # 窗口结束后沙箱进程重新可读真实内容
-            self.assertIn("a", self._sandboxed_read(scope, env, secret)["read"])
+            self._candidate_sees_the_secret(scope, env, secret)
         finally:
             try:
                 sandbox.unlabel_write_scope(scope)

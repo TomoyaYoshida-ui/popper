@@ -14,7 +14,12 @@ from popper.research import evaluation_service
 class IndependentEvaluatorContractTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.project = Path(self.temp.name) / "project"
+        # 归一到无 8.3 短名的真实路径：产品侧对工程根做 resolve()，而 GitHub Windows
+        # runner 的 TEMP 本身就是 C:\Users\RUNNER~1\... 形态。不归一，测试里的字面
+        # 路径与产品里的解析路径永远对不上：写进契约的 dataset 字符串差一截，而按
+        # `path == request_path` 打桩的用例会静默不匹配（注入没发生，断言却过了）。
+        root = Path(self.temp.name).resolve()
+        self.project = root / "project"
         self.project.mkdir()
         for split in ("train", "dev", "test"):
             write_json(self.project / f"{split}.json", [{"id": "a", "x": 1, "y": 2}])
@@ -31,7 +36,7 @@ class IndependentEvaluatorContractTests(unittest.TestCase):
             path = self.project / f"predictions-{seed}.json"
             write_json(path, [{"id": "a", "prediction": value}])
             self.predictions.append({"seed": seed, "path": str(path), "sha256": file_hash(path)})
-        self.output_dir = Path(self.temp.name) / "evaluations"
+        self.output_dir = root / "evaluations"
         self.evaluator = evaluation_service.IndependentEvaluator(self.project, self.output_dir)
 
     def tearDown(self):

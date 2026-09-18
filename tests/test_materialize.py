@@ -182,6 +182,20 @@ class MaterializeTests(unittest.TestCase):
         with self.assertRaisesRegex(ProtocolError, "experiment.json"):
             Materializer(missing).build_repro_package(self.out)
 
+    def test_build_rejects_declared_file_that_escapes_project(self):
+        # experiment.json 是项目自带的输入，它声明的相对路径却可以写 `../`。
+        # 原先的越界检查拿未 resolve 的拼接路径判前缀，`..` 不折叠因而恒不拦，
+        # 项目外的文件会被打进 reproducibility.zip（arcname 还带着 `../`）。
+        import json
+        secret = self.root / "outside-secret.json"
+        secret.write_text(json.dumps([{"id": "leak", "x": 0, "y": 0}]), encoding="utf-8")
+        spec = json.loads((self.project / "experiment.json").read_text(encoding="utf-8"))
+        spec["test"] = "../outside-secret.json"
+        write_json(self.project / "experiment.json", spec)
+        with self.assertRaisesRegex(ProtocolError, "越界"):
+            Materializer(self.project).build_repro_package(self.out)
+        self.assertFalse((self.out / "reproducibility.zip").exists())
+
     def test_self_contained_verify_claims_runs_standalone(self):
         # 完成实验（含 .popper 状态）的聚合结果会随包发出 results.json + verify_claims.py。
         # 这里用一个带 .popper/state.db 的已完成项目来走通自包含核验，且不依赖宿主 Popper 状态。

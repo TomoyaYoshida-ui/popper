@@ -99,6 +99,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap
           bwrap --version
+      - name: 安装中文字体（PDF 渲染用例需要）
+        # ubuntu runner 镜像不带中文字体，`popper.pdfgen.discover_font()` 找不到字体时
+        # 渲染显式报 ProtocolError——这是产品的 fail-closed，不是测试的锅。
+        # 刻意装 WQY（TrueType 轮廓）而不是 fonts-noto-cjk：后者 .ttc 里是 CFF 轮廓，
+        # 而我们的子集化器按字节读 glyf/loca，只支持 TrueType（discover_font 已钉住这点）。
+        run: |
+          sudo apt-get install -y fonts-wqy-microhei fonts-wqy-zenhei
+          python -c "from popper.pdfgen import discover_font; f = discover_font(); print('font:', f); raise SystemExit(0 if f else 1)"
       - name: 允许 bwrap 使用非特权用户命名空间
         # 只在系统真的有该限制时动策略；用 profile 级 userns 例外而不是全局
         # sysctl=0，免得把 runner 上其它主体的 userns 限制一并关掉。

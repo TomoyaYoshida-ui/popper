@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from .core import ProtocolError, read_json
+from .core import ProtocolError, inside, read_json
 
 
 DISCLOSURES = {
@@ -131,9 +131,11 @@ class Materializer:
             raise ProtocolError("experiment.json 缺少 code_files")
         for name in ["experiment.json", *code_files, spec.get("train"), spec.get("dev"),
                      spec.get("test")]:
-            path = self.root / name
-            if not path.is_file() or path.is_relative_to(self.root) is False:
-                raise ProtocolError(f"文件缺失或路径越界: {name}")
+            # 越界检查必须走 inside()：它对拼接结果先 resolve() 再判前缀。原先写成
+            # `(self.root / name).is_relative_to(self.root)`，而 resolve() 之前的 `..`
+            # 不折叠（`C:\proj\..\secret\x.json` 仍以前缀 `C:\proj` 开头），守卫对任何
+            # `../` 都恒真——形同虚设，项目外的文件会被打进 reproducibility.zip。
+            inside(self.root, name)
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         zip_path = out_dir / "reproducibility.zip"
