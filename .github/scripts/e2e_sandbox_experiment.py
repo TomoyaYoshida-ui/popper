@@ -23,6 +23,13 @@
   `popper.sandbox` 的能力探针真的主张它时才断言。探针说「不主张」时，观察值仍然记录，
   但不参与判红（能力清单说自己做不到，端到端却因为一个平台差异而红，是假信号）。
 
+工作区位置不是自由选择（首跑 78 条红的真实根因）：Linux/bwrap 用 `--tmpfs /tmp`
+遮蔽宿主 /tmp，而 dev 窗口只把 run_dir 回挂进沙箱——工程若放在 /tmp 下，候选沿
+`__file__` 向上找不到项目根（见证只能打 witness=NO_PROJECT_ROOT 早退），越界写探针
+还会落进 tmpfs 影子并误报 GRANTED（写成功了，但根本没写到宿主盘）。所以脚本入口对
+`/tmp` 下的工作区直接判红（workspace-under-tmp），默认工作区放在 `$HOME` 下，CI
+显式传 `--workspace "$HOME/..."`。
+
 输出通道沿用 `ci_failure_summary.py` 的教训：annotation 与 job summary 彼此独立，
 红的时候必发 `::error::`，绿的时候发一条 `::notice::` 摘要（Actions 日志需登录，
 annotation 常是免登录时唯一读得到的东西）。所有文件读写显式 UTF-8。
@@ -35,8 +42,8 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
-from pathlib import Path
+import uuid
+from pathlib import Path, PurePosixPath
 
 REPO = Path(__file__).resolve().parents[2]
 EXAMPLE = REPO / "examples" / "ode-convergence"
@@ -111,7 +118,10 @@ def _popper_e2e_witness():
     def read_holdout():
         raw = (project / "test.json").read_text(encoding="utf-8")
         if not raw.strip():
-            return "BLOCKED_EMPTY"  # Linux：/dev/null 屏蔽 ⇒ 读到空内容
+            # Linux 期望形状：/dev/null 屏蔽 ⇒ 读到空内容。部分 runner 内核/AppArmor
+            # 组合下读绑定上的 /dev/null 是 EACCES（首跑实测即 PermissionError），走下面
+            # 的 BLOCKED: 分支——语义同为「读不出真值」，门禁按 BLOCKED 前缀两种都收。
+            return "BLOCKED_EMPTY"
         rows = json.loads(raw)
         if any(str(row.get("id", "")).startswith("test-") for row in rows):
             return "READABLE"  # 读到了真值：封读根本没生效
@@ -143,6 +153,34 @@ except Exception as _witness_error:  # 见证自身坏了：报一行，门禁�
 
 
 # --------------------------------------------------------------------------- 构建 / 执行
+def default_workspace() -> Path:
+    """默认工作区：$HOME 下的唯一目录，刻意避开 /tmp（理由见 workspace_shadow_error）。"""
+    return Path.home() / ".popper-e2e-workspaces" / uuid.uuid4().hex[:12]
+
+
+def workspace_shadow_error(workspace, platform=sys.platform):
+    """工作区落在被 bwrap `--tmpfs /tmp` 遮蔽的 /tmp 下时，返回 (标签, 说明)，否则 None。
+
+    首跑 78 条红的根因就在这：① dev 窗口只回挂 run_dir，项目根在 tmpfs 影子里不存在，
+    候选沿 __file__ 找不到 experiment.json；② 越界写探针写到自动创建的 tmpfs 挂载点上
+    会「成功」（误报 GRANTED），但宿主盘上根本没有文件。纯函数（platform 可注入），
+    便于在非 Linux 上单测。
+    """
+    if platform.startswith("linux"):
+        # 本机就是 Linux 时 resolve() 可顺带拆掉指向 /tmp 的符号链接；跨平台单测注入
+        # platform="linux" 时按 POSIX 纯路径判断（Windows 的 resolve 会把 /tmp 变成 C:\tmp）。
+        if platform == sys.platform:
+            text = str(Path(workspace).resolve())
+        else:
+            text = str(PurePosixPath(str(workspace)))
+        if text == "/tmp" or text.startswith("/tmp/"):
+            return ("workspace-under-tmp",
+                "Linux/bwrap 用 --tmpfs /tmp 遮蔽宿主 /tmp：工作区在 /tmp 下时，dev 窗口"
+                "候选找不到项目根（witness=NO_PROJECT_ROOT），越界写还会误报 GRANTED。"
+                "请把 --workspace 指到 /tmp 之外（CI 用 \"$HOME/popper-e2e-ci\"）。")
+    return None
+
+
 def build_project(workspace: Path) -> Path:
     """把示例工程复制到工作区，并在 `init` 之前注入见证代码。
 
@@ -292,6 +330,20 @@ def gate(context: dict) -> list:
         rid = run["id"]
         for unit, seen in sorted(run["logs"].items()):
             where = f"{rid}/{unit}"
+            if seen.get("witness") == "NO_PROJECT_ROOT":
+                # 首跑的真实形状：dev 窗口 bwrap 只回挂 run_dir，工作区又在被 --tmpfs
+                # 遮蔽的 /tmp 下，候选沿 __file__ 找不到 experiment.json，见证在打 pid
+                # 之前早退。此时下面 8 条判据全部会连锁红，但根因只有这一个——单独点名，
+                # 并跳过该单元其余判据（它们在见证缺失时没有任何信息量）。
+                failures.append(("witness-project-root",
+                                 f"{where} 候选在沙箱挂载视图里沿 __file__ 找不到 experiment.json"
+                                 "（Linux 下典型成因：工作区在被 --tmpfs /tmp 遮蔽的 /tmp 里，"
+                                 "或 dev 窗口未回挂项目根；见 workspace-under-tmp 预检）"))
+                continue
+            if "self_error" in seen:
+                failures.append(("witness-self-error",
+                                 f"{where} 见证代码自身抛异常：{seen.get('self_error')!r}"))
+                continue
             missing = [key for key in WITNESS_KEYS if key not in seen]
             if missing:
                 failures.append(("witness-incomplete", f"{where} 缺观察行 {missing}"))
@@ -413,7 +465,9 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, default=None,
-                        help="工作区父目录（默认临时目录）；工程会复制到 <workspace>/proj")
+                        help="工作区父目录（默认 $HOME/.popper-e2e-workspaces/<id>，"
+                             "Linux 上禁止放在 /tmp 下：会被 --tmpfs /tmp 遮蔽导致见证失真）；"
+                             "工程会复制到 <workspace>/proj")
     parser.add_argument("--expect-backend", default=None,
                         help="期望的真实后端名（windows_low_integrity / linux_bubblewrap）")
     parser.add_argument("--keep", action="store_true", help="保留工作区以便取证")
@@ -430,11 +484,16 @@ def main(argv=None) -> int:
         # Windows 的限额由 Job Object 强制，候选进程内没有 resource 模块可自证
         "observable_rlimits": backend == "linux_bubblewrap",
     }
-    parent = args.workspace or Path(tempfile.mkdtemp(prefix="popper-e2e-workspace-"))
+    parent = args.workspace or default_workspace()
     if backend is None:
         # 本 job 的全部意义就是「在真沙箱下跑完」：没后端时绿的端到端是假端到端。
         # 与单测侧的 POPPER_REQUIRE_SANDBOX=1 同一取向：宁可红，不可静默降级。
         print(workflow_command("error", f"[e2e-sandbox] {sandbox.no_backend_message()}"))
+        return 2
+    shadow = workspace_shadow_error(parent)
+    if shadow is not None:
+        label, message = shadow
+        print(workflow_command("error", f"[e2e-sandbox] {label}: {message}"))
         return 2
     parent.mkdir(parents=True, exist_ok=True)
     project = build_project(parent)

@@ -134,6 +134,15 @@ def drop(key):
     return apply
 
 
+def replace_witness(observed):
+    """把每个执行单元的见证整体替换成一份给定观察（如见证早退时的 {witness: NO_PROJECT_ROOT}）。"""
+    def apply(context):
+        for item in context["runs"]:
+            for unit in item["logs"]:
+                item["logs"][unit] = dict(observed)
+    return apply
+
+
 def first_run(**over):
     def apply(context):
         item = context["runs"][0]
@@ -201,6 +210,10 @@ class GateBitesTests(unittest.TestCase):
         ("unknown-scheme", first_run(**{"config.scheme": "adam"}), "没登记过的方案"),
         ("metric-truth", first_run(mean=0.42), "实测阶偏离数学真值 ⇒ 执行被挡坏了"),
         ("no-witness-log", lambda c: c["runs"][0]["logs"].clear(), "该 run 没有任何见证"),
+        ("witness-project-root", replace_witness({"witness": "NO_PROJECT_ROOT"}),
+         "候选在沙箱挂载视图里找不到项目根（首跑 dev 零见证的真实形状，工作区在 /tmp 下所致）"),
+        ("witness-self-error", replace_witness({"self_error": "AttributeError"}),
+         "注入的见证代码自身抛了异常"),
         ("witness-incomplete", drop("scope_write"), "少了正向对照那一行"),
         ("scope-control", set_witness(scope_write="DENIED:OSError"),
          "作用域内写不动：两条 DENIED 就可能是假通过"),
@@ -263,6 +276,73 @@ class CommandBlockPrecisionTests(unittest.TestCase):
         self.assertTrue(e2e.blocked_by_interception("DENIED:PermissionError"))
         self.assertFalse(e2e.blocked_by_interception("GRANTED"))
         self.assertFalse(e2e.blocked_by_interception(""))
+
+
+class WitnessEarlyExitTests(unittest.TestCase):
+    """见证在打 pid 之前早退（NO_PROJECT_ROOT / self_error）时必须只报一个根因标签。
+
+    首跑的教训：当时这一种形状级联出 72 条红（witness-incomplete + scope-control +
+    escape-write + command-block + shim-visible + net-block + rlimit-claim），真正的
+    根因反而被淹了。单测钉死：早退单元只准点一个名，其余判据对它跳过。
+    """
+
+    BANNED_CASCADE = ("witness-incomplete", "scope-control", "escape-write",
+                      "command-block", "shim-visible", "net-block", "rlimit-claim")
+
+    def _dev_only_context(self, observed):
+        context = good_context()
+        for item in context["runs"]:
+            if item["payload"]["split"] != "dev":
+                continue
+            for unit in item["logs"]:
+                item["logs"][unit] = dict(observed)
+        return context
+
+    def test_no_project_root_names_one_root_cause_and_does_not_cascade(self):
+        failures = e2e.gate(self._dev_only_context({"witness": "NO_PROJECT_ROOT"}))
+        names = [name for name, _ in failures]
+        # dev 3 run × 3 重复 = 9 个早退单元，test 两个 run 保持干净
+        self.assertEqual(["witness-project-root"] * 9, names)
+        for banned in self.BANNED_CASCADE:
+            self.assertNotIn(banned, names, f"早退形状不该再级联出 {banned}")
+
+    def test_self_error_names_one_root_cause_and_does_not_cascade(self):
+        context = good_context()
+        for item in context["runs"]:
+            for unit in item["logs"]:
+                item["logs"][unit] = {"self_error": "AttributeError"}
+        names = [name for name, _ in e2e.gate(context)]
+        self.assertEqual(["witness-self-error"] * 15, names)
+        for banned in self.BANNED_CASCADE:
+            self.assertNotIn(banned, names)
+
+
+class WorkspaceShadowPreflightTests(unittest.TestCase):
+    """Linux 工作区在 /tmp 下会被 bwrap --tmpfs /tmp 遮蔽：预检必须硬红，且是纯函数可测。"""
+
+    def test_linux_paths_under_tmp_are_rejected(self):
+        for path in ("/tmp", "/tmp/popper-e2e-x", "/tmp/x/proj"):
+            with self.subTest(path=path):
+                hit = e2e.workspace_shadow_error(path, platform="linux")
+                self.assertIsNotNone(hit, f"{path} 该被判 workspace-under-tmp")
+                self.assertEqual("workspace-under-tmp", hit[0])
+
+    def test_linux_paths_outside_tmp_are_accepted(self):
+        self.assertIsNone(
+            e2e.workspace_shadow_error("/home/runner/popper-e2e-ci", platform="linux"))
+        self.assertIsNone(
+            e2e.workspace_shadow_error("/opt/ci/popper-e2e", platform="linux"))
+
+    def test_non_linux_platforms_are_not_checked(self):
+        # Windows 临时目录在别处且不存在 tmpfs 遮蔽，不该误伤本地全链路
+        self.assertIsNone(
+            e2e.workspace_shadow_error(r"C:\Users\tester\AppData\Local\Temp\popper-x",
+                                       platform="win32"))
+
+    def test_default_workspace_lives_under_home_not_tmp(self):
+        workspace = e2e.default_workspace()
+        self.assertEqual(Path.home(), workspace.parent.parent)
+        self.assertIsNone(e2e.workspace_shadow_error(workspace))
 
 
 class PlatformDifferencesAreNotFalseRedsTests(unittest.TestCase):
@@ -378,6 +458,19 @@ class WorkflowWiringTests(unittest.TestCase):
                       "job 没真调用取证脚本，门禁等于不存在")
         self.assertIn("--expect-backend linux_bubblewrap", block,
                       "没钉住期望后端：换成另一个机制也能绿")
+
+    def test_e2e_workspace_lives_outside_tmp(self):
+        """工作区必须显式放在 $HOME 下：runner 临时目录就是 /tmp，会被 --tmpfs /tmp 遮蔽。
+
+        首跑 78 条红的接线层根因；脚本入口虽有 workspace-under-tmp 预检，但 CI 这侧
+        直接接对，比「每次靠脚本判红再修」少烧一整轮 runner。
+        """
+        block = e2e_job_text()
+        assert block
+        self.assertRegex(block, r'--workspace "\$HOME/[^"]+"',
+                         "Linux e2e 必须把工作区显式放在 $HOME 下")
+        self.assertNotIn('--workspace "/tmp', block,
+                         "工作区不许放在 /tmp 下（bwrap --tmpfs /tmp 遮蔽，见证必失真）")
 
     def test_the_e2e_job_installs_no_extras(self):
         """这条 job 同时是「核心零运行时依赖」在真实执行路径上的验证点。"""

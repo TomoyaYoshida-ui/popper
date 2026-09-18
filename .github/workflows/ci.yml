@@ -199,13 +199,17 @@ jobs:
       - name: 跑一整个 --sandbox 端到端实验并取证
         # 退出码单独落盘、不用管道取退码（理由同全量测试那一步：GitHub 的 bash 带 -e）。
         # `--expect-backend` 是必须的：不钉住后端，「静默换成了另一个机制」也能绿。
+        # `--workspace` 必须在 $HOME 而非 runner 临时目录（/tmp）：bwrap --tmpfs /tmp 会遮蔽
+        # 宿主 /tmp，dev 窗口又只回挂 run_dir——工程放 /tmp 下时见证找不到项目根、越界写
+        # 探针还会误报 GRANTED（首跑 78 条红即此成因，脚本入口也会直接判 workspace-under-tmp）。
         # stdout 直接重定向给文件，不经 PowerShell（本地取证已踩过二次解码的乱码坑）。
         id: e2e
         shell: bash
         run: |
           status=0
           python -X utf8 .github/scripts/e2e_sandbox_experiment.py \
-            --expect-backend linux_bubblewrap > e2e-output.txt 2>&1 || status=$?
+            --expect-backend linux_bubblewrap \
+            --workspace "$HOME/popper-e2e-ci" > e2e-output.txt 2>&1 || status=$?
           echo "$status" > e2e-status.txt
           cat e2e-output.txt
           exit $status
