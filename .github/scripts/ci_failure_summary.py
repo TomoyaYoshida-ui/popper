@@ -2,8 +2,9 @@
 
 为什么需要它：Actions 的运行日志要求登录才能看（公开仓库也一样），失败时外面的人
 （包括没有凭据的协作者与本仓库的作者）只能看到「Process completed with exit code 1」，
-只能靠猜。job summary 渲染在 run 页面上，公开仓库免登录可读，所以把「哪些用例红了」
-写进摘要，就等于让 CI 自己把证据递出来。
+只能靠猜。job summary 渲染在 run 页面上，**人在宽屏浏览器里**免登录可见（窄版式不挂载该
+面板，summary 的 fragment 端点与 step 日志都要凭据），所以把「哪些用例红了」写进摘要有用，
+但它不是机器可读的那一条——那一条只能是 annotation。
 
 只做两件事：读测试步骤落盘的 pytest 输出（`> pytest-output.txt 2>&1`），抽取失败行
 （`FAILED`/`ERROR` 以及子测试的 `SUBFAILED`/`SUBERROR`）与跳过行（`SKIPPED [N] 位置: 原因`，
@@ -49,6 +50,14 @@ SKIP_LOOSE = re.compile(r"^SKIPPED(?: \[(\d+)\])? (.*)$")
 DECLARED_SKIPPED = re.compile(r"(\d+) skipped")
 MAX_SKIP_LINES = 200
 SKIP_SIGNATURE_CHARS = 160
+# skip 的 notice 要能装下全部类别：实测发现「job summary 免登录可读」只对**人在宽屏浏览器**
+# 成立——窄版式（曾测到 innerWidth=694）根本不挂载 summary 面板，而 summary 的 fragment
+# 端点全部 404、step 日志需 admin（run 35313943849 实拍）。所以机器能稳定读到的只有
+# annotation，它就不能只给前 5 类：上限抬到 8 类，每条原因截到 SKIP_NOTICE_REASON_CHARS，
+# 真装不下的部分继续由「另有 K 类 / M 次」那句明示。
+MAX_SKIP_NOTICE_CLUSTERS = 8
+SKIP_NOTICE_REASON_CHARS = 70
+TRUNCATION_MARK = "…"
 
 # pytest 的断言消息本身就是中文，所以 ::error:: 行会带中文：stdout 必须自己钉在 UTF-8，
 # 不能靠宿主 locale（runner 把 stdout 当管道收，中文 Windows 上不钉就是 cp936）。
@@ -182,21 +191,34 @@ def skip_clustered(entries: list[tuple[int, str, str]]) -> list[tuple[str, int]]
     return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
 
 
-def skip_notice(entries: list[tuple[int, str, str]], limit: int = 5) -> str:
-    """单条 notice 文本：前 N 类原因 + **明确的未列出量**。
+def cut_reason(reason: str) -> str:
+    """按字截断单条原因，**并留下截断标记**：静默剪短会被当成完整原因读。
+
+    这和「前 N 类不说还差多少」是同一个缺陷的小版本——仪表的任何一处
+    不完整都得自己标出来，否则下游会拿它做全量判断。
+    """
+    if len(reason) <= SKIP_NOTICE_REASON_CHARS:
+        return reason
+    return reason[:SKIP_NOTICE_REASON_CHARS] + TRUNCATION_MARK
+
+
+def skip_notice(entries: list[tuple[int, str, str]], limit: int = MAX_SKIP_NOTICE_CLUSTERS) -> str:
+    """单条 notice 文本：尽量装下全部原因类别 + **明确的未列出量**。
 
     只给前 N 类而不说「还差多少」，就是仪表自己的漏报：run 35312360291 的 ubuntu 实到
-    `SKIP total=27`，前 4 类只能对上 24 次，剩下 3 次归不入任何一类——读的人无从知道
-    名单不完整。现在把「另 K 类 / M 次」一并报出来，并指向逐条名单的位置。
+    `SKIP total=27`，当时前 4 类只能对上 24 次，剩下 3 次归不入任何一类——读的人无从知道
+    名单不完整。抬到 8 类并按字截断后，实测的 ubuntu 名单（共 7 类）能全部递出；真超
+    出时仍报「另 K 类 / M 次」并指向逐条名单。
     """
     total = skip_total(entries)
     ranked = skip_clustered(entries)
     shown, hidden = ranked[:limit], ranked[limit:]
-    message = (f"SKIP total={total} 按原因聚合（前 {len(shown)} 类）: "
-               + " || ".join(f"{count}x {reason}" for reason, count in shown))
+    message = (f"SKIP total={total} 按原因聚合（列出 {len(shown)}/{len(ranked)} 类）: "
+               + " || ".join(f"{count}x {cut_reason(reason)}" for reason, count in shown))
     if hidden:
         rest = sum(count for _, count in hidden)
-        message += (f" || 另有 {len(hidden)} 类 / {rest} 次未列出（逐条名单在 job summary）")
+        message += (f" || 另有 {len(hidden)} 类 / {rest} 次未列出"
+                    f"（逐条名单在 job summary，需宽屏浏览器看）")
     return message
 
 

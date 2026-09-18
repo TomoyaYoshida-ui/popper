@@ -49,10 +49,17 @@ GREEN_SAMPLE = "\n".join([
     "647 passed, 5 skipped in 284.35s"])
 # 汇总行说跳过了、短汇总里却没有 `SKIPPED` 行：测试步骤忘了 `-rs`。
 NO_RS_SAMPLE = "\n".join(["...." * 20, "642 passed, 5 skipped in 280.00s"])
-# 跳过的原因多于 notice 上限（5 类）：名单不完整时必须自己说「还差多少」。
+# 跳过的原因多于 notice 上限（8 类）：名单不完整时必须自己说「还差多少」。
 MANY_REASONS_SAMPLE = "\n".join(
     [f"SKIPPED [1] tests/test_x.py:{i + 10}: 原因编号 {i}" for i in range(7)]
     + ["640 passed, 7 skipped in 300.00s"])
+TEN_REASONS_SAMPLE = "\n".join(
+    [f"SKIPPED [1] tests/test_x.py:{i + 10}: 原因编号 {i}" for i in range(10)]
+    + ["637 passed, 10 skipped in 300.00s"])
+
+
+def sample_with_reason(text: str) -> str:
+    return "\n".join([f"SKIPPED [1] tests/test_x.py:12: {text}", "647 passed, 1 skipped in 1.00s"])
 
 
 def run_helper(root, output_text=None, status=None, summary=None, summary_env=True,
@@ -209,19 +216,40 @@ class CiFailureSummaryTests(unittest.TestCase):
     def test_partial_skip_list_declares_what_is_missing(self):
         """只报「前 N 类」而不说还差多少，就是仪表自己的漏报。
 
-        不是假想：run `35312360291` 的 ubuntu 实到 `SKIP total=27`，旧写法的前 4 类只能
+        不是假想：run `35312360291` 的 ubuntu 实到 `SKIP total=27`，当时的前 4 类只能
         对上 24 次，剩下 3 次归不入任何一类——读的人无从知道名单不完整。
+        反方向也要卡住：全部列出时不得虚报「未列出」（那会被读成名单仍有隐情）。
         """
-        code, out, summary = run_helper(self.root, MANY_REASONS_SAMPLE, status=0,
-                                        outcome="success")
-        self.assertEqual(0, code)
+        _, out, _ = run_helper(self.root, TEN_REASONS_SAMPLE, status=0, outcome="success")
         rows = notices(out)
         self.assertEqual(1, len(rows))
-        self.assertIn("SKIP total=7", rows[0])
-        self.assertIn("前 5 类", rows[0])
+        self.assertIn("SKIP total=10", rows[0])
+        self.assertIn("列出 8/10 类", rows[0])
         self.assertIn("另有 2 类 / 2 次未列出", rows[0],
                       "未列出的量必须自己报出来，不然「前 N 类」会被当成全量")
         self.assertIn("job summary", rows[0], "得指出去哪看逐条名单")
+
+        _, out, _ = run_helper(self.root, MANY_REASONS_SAMPLE, status=0, outcome="success")
+        rows = notices(out)
+        self.assertIn("列出 7/7 类", rows[0])
+        self.assertNotIn("未列出", rows[0], "全部列出时不得再说「还有没列出的」")
+
+    def test_long_skip_reasons_are_cut_to_keep_the_notice_readable(self):
+        """单条原因过长会顶爆 notice（零依赖 job 实测有 12 类）：按字截断，total 仍完整。"""
+        long_reason = "集合字体渲染用例：宿主字体差异" * 12          # 远超 70 字
+        _, out, _ = run_helper(self.root, sample_with_reason(long_reason), status=0,
+                               outcome="success")
+        rows = notices(out)
+        self.assertEqual(1, len(rows), f"应当只发一条 skip notice，实际 {rows}")
+        self.assertIn("SKIP total=1", rows[0])
+        self.assertIn(long_reason[:70], rows[0], "前 70 字是判读依据，不得被剪掉")
+        self.assertNotIn(long_reason[:90], rows[0], "超出 70 字的部分应被截断")
+        self.assertIn(long_reason[:70] + "…", rows[0],
+                      "截断必须留记，不然剪过的原因会被当成完整原因读")
+
+        _, out, _ = run_helper(self.root, sample_with_reason("需要沙箱后端"), status=0,
+                               outcome="success")
+        self.assertNotIn("…", notices(out)[0], "没被截断的原因不得虚带截断记")
 
     def test_truncated_skip_list_says_it_was_truncated(self):
         """逐条清单被上限切断时，摘要里得写明“共 N 行、列了前 M 行”。"""
