@@ -70,4 +70,7 @@ def isolation_status(project_dir):
     implemented = sum(1 for item in items if item["implemented"])
     return {"items": items,
             "summary": {"implemented": implemented, "total": len(items)},
-            "backend": sandbox.selected_backend_name()}
+            # 与 WorkerReceipt 共用同一份**稳定名**（``execution_backend_name``），不是内部模块名：
+            # 这份报告是对外递安全边界用的凭据，把 Linux bubblewrap 签成 `win_lowil` 就等于
+            # 让它自称 Windows 低完整性（C7.1 已经对执行回执立过同一条规矩）。
+            "backend": sandbox.execution_backend_name()}

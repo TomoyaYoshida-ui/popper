@@ -94,7 +94,47 @@ STEP = re.compile(r"(?ms)^      - name: (?P<name>.+?)\n(?P<body>.*?)(?=^      - 
 # 装依赖的那一步是例外：它挂了什么都跑不了，再跑下去也只会有噪声。匹的是原名（带括号），
 # 因为下面的展示名为了可读会把“（”后的修饰剪掉。
 DEPENDENCY_STEP = re.compile(r"^安装（")
-TEST_STEP = re.compile(r"全量测试")
+# 两个 ubuntu job 各自的「主门禁步骤」：扫描到它就停，它之前的才是环境/诊断步骤。
+TEST_STEP = re.compile(r"全量测试|端到端实验")
+LOCAL_ACTION = re.compile(r"^(\s*)(?:-\s+)?uses: (\./\S+)\s*$", re.M)
+
+
+ACTION_STEPS = re.compile(r"(?ms)^\s*steps:\s*\n(?P<body>.*?)(?=^\S|\Z)")
+
+
+def expand_local_actions(block):
+    """把 job 里的本地 action 就地展开成它自己的步骤（按 ci.yml 的步骤排版对齐：名 6 / 正文 8）。
+
+    为什么必须展开：下面的扫描只看 `run:` 步骤，把环境准备抽进 composite action 就等于把它
+    挪出门禁的视野——「诊断步骤不得当门禁」会当场变成假绿（它还在跑，只是查不到东西了）。
+    两个 ubuntu job 共用同一个 action，展开后两侧都被同一条门禁看着。
+
+    匹配两种写法：内联的 `- uses: ./x` 与本仓库用的「先 `- name:` 再另起一行 `uses:`」。
+    只写前者会默默匹配不到任何行，展开函数变成空操作，下面的扫描依旧看不见被抽走的步骤，
+    而两条门禁用例看起来全绿。
+
+    为什么要把缩进归一化：`STEP` 与反向验证都按 ci.yml 的排版钉死（步骤名 6 空格、正文 8
+    空格），而 action.yml 自己的排版是 4/6。直接拼固定偏移，等于把门禁能不能看见这些步骤
+    建在对方文件的缩进巧合上——action 内部重排一次就静默变成假绿。所以先按 body 自身的最小
+    缩进平移到 0，再整块递到 6 空格，action 里怎么写都不影响扫描结果。
+    """
+    out = []
+    for line in block.splitlines():
+        match = LOCAL_ACTION.match(line)
+        if not match:
+            out.append(line)
+            continue
+        action = REPO / match.group(2) / "action.yml"
+        text = action.read_text(encoding="utf-8")
+        steps = ACTION_STEPS.search(text)
+        assert steps, f"{action.relative_to(REPO).as_posix()} 找不到 steps: 段（展开函数无法取到它的步骤）"
+        body = steps.group("body")
+        # 归一化：把 body 自身的最小缩进平移到 0，再整块递到 6 空格——步骤名落在 6、
+        # 正文落在 8，与 ci.yml 里手写的步骤同形，下面的扫描才能一律对待它们。
+        pad = min((len(raw) - len(raw.lstrip()) for raw in body.splitlines() if raw.strip()), default=0)
+        out.extend("      " + raw[pad:] if raw.strip() else raw
+                   for raw in body.rstrip("\n").splitlines())
+    return "\n".join(out) + "\n"
 
 
 def run_steps_before_tests(block):
@@ -128,19 +168,34 @@ class PreTestStepIsolationTests(unittest.TestCase):
     """
 
     def test_environment_steps_cannot_mask_the_test_signal(self):
-        block = job_block("linux")
+        block = expand_local_actions(job_block("linux"))
         assert block, "ci.yml 里没有 linux job，无从校验步骤隔离"
         self.assertEqual([], hard_pre_test_steps(block),
                          "这些环境/诊断步骤会把全量测试遮掉，必须改 continue-on-error："
                          "实际门禁在测试本身")
 
+    def test_environment_steps_cannot_mask_the_e2e_signal(self):
+        """同一条性质也要盖端到端 job：它的「环境准备」一硬，取证步骤就会被整步 skip，
+        于是免登录侧只能看到「一个红步骤」而拿不到端到端结论（与单测侧是同一个缺陷形状）。"""
+        block = expand_local_actions(job_block("linux-sandbox-e2e"))
+        assert block, "ci.yml 里没有 linux-sandbox-e2e job，无从校验步骤隔离"
+        self.assertEqual([], hard_pre_test_steps(block),
+                         "e2e job 里的环境/诊断步骤会把端到端取证遮掉，必须 continue-on-error")
+
     def test_the_isolation_check_itself_bites(self):
-        """反向验证：抽掉一个 continue-on-error，上面那条门禁必须能拦住。"""
-        block = job_block("linux")
+        """反向验证：抽掉一个 continue-on-error，上面那条门禁必须能拦住。
+
+        样本是**展开后**的文本：被抽的那一步现在住在 composite action 里，不展开就改不动它，
+        这条反向验证也会因为「样本没改动任何东西」而红——那正是门禁失去牙的信号。
+        """
+        block = expand_local_actions(job_block("linux"))
         assert block, "ci.yml 里没有 linux job，无从校验步骤隔离"
+        self.assertIn("- name: 安装 bubblewrap", block,
+                      "展开没生效：composite action 里的步骤没被挪进 job 视野，\n"
+                      "上面两条「环境步骤不得当门禁」就都是假绿（扫不到东西）")
         broken = re.sub(r"(安装 bubblewrap\n)(?:        # [^\n]*\n)*        continue-on-error: true\n",
                         r"\1", block, count=1)
-        self.assertNotEqual(block, broken, "反向验证的样本没改动任何东西")
+        self.assertTrue(broken != block, "反向验证的样本没改动任何东西")
         self.assertIn("安装 bubblewrap", hard_pre_test_steps(broken),
                       "抽掉 continue-on-error 后仍未被识别为硬门禁，说明这份门禁不拦东西")
 

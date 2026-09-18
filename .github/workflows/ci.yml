@@ -94,9 +94,10 @@ jobs:
     name: pytest / ubuntu / bubblewrap 沙箱后端
     runs-on: ubuntu-latest
     # 沙箱后端注册表（popper/sandbox/__init__.py）已登记 win_lowil 与 linux_bwrap，
-    # Linux 上 selected_backend() 在探活通过时返回 linux_bwrap。本 job 是 Linux 隔离路径
-    # 唯一的真实执行验证点，所以三件事缺一不可：
-    #   1. 显式安装 bubblewrap，不依赖 runner 镜像「恰好带」；
+    # Linux 上 selected_backend() 在探活通过时返回 linux_bwrap。本 job 是 Linux 隔离路径在
+    # **单测层**的真实执行验证点（生命周期级的端到端另有 linux-sandbox-e2e job），所以三件事缺一不可：
+    #   1. 显式安装 bubblewrap，不依赖 runner 镜像「恰好带」（与第 2 条都在
+    #      `.github/actions/sandbox-env`，两个 ubuntu job 共用）；
     #   2. 给 /usr/bin/bwrap 开 AppArmor 的 userns 例外——Ubuntu 23.10+/24.04+ 默认拒绝
     #      非特权用户命名空间，此时 bwrap 装了也建不了沙箱，而 `bwrap --version` 依然返回 0；
     #   3. POPPER_REQUIRE_SANDBOX=1 让「后端不可用」从静默 skip 变成红：否则硬门禁绿得
@@ -119,14 +120,11 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest
           python -m pip install -e ".[ml,research,orchestration,confirmation]"
-      - name: 安装 bubblewrap
-        # 环境准备步骤不当门禁：装不上就会由需要沙箱的用例在测试里真红（见下面的
-        # POPPER_REQUIRE_SANDBOX），但测试本身仍会跑完，信号不被遮。
-        continue-on-error: true
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          bwrap --version
+      - name: 准备 bubblewrap 沙箱环境
+        # 装 bwrap / 开 AppArmor 的 userns 例外 / 按真实形状探活——三步都在
+        # `.github/actions/sandbox-env`，与下面的端到端 job 共用一个出处（为什么必须共用、
+        # 为什么它们全是 continue-on-error，见那个 action.yml 的 description）。
+        uses: ./.github/actions/sandbox-env
       - name: 安装中文字体（PDF 渲染用例需要）
         # ubuntu runner 镜像不带中文字体，`popper.pdfgen.discover_font()` 找不到字体时
         # 渲染显式报 ProtocolError——这是产品的 fail-closed，不是测试的锅。
@@ -145,31 +143,6 @@ jobs:
         # 同时打成 annotation）。
         continue-on-error: true
         run: python -X utf8 .github/scripts/check_cjk_font.py
-      - name: 允许 bwrap 使用非特权用户命名空间
-        # 只在系统真的有该限制时动策略；用 profile 级 userns 例外而不是全局
-        # sysctl=0，免得把 runner 上其它主体的 userns 限制一并关掉。
-        # 失败不阻断测试：命名空间真不可用时，由下面的探活与 POPPER_REQUIRE_SANDBOX
-        # 在用例层报红，而不是把整个测试步骤 skip 掉。
-        continue-on-error: true
-        run: |
-          set -uo pipefail
-          key=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
-          if [ ! -e "$key" ]; then echo "无 apparmor userns 限制，跳过"; exit 0; fi
-          echo "限制当前值：$(cat $key)"
-          if [ "$(cat $key)" = "0" ]; then exit 0; fi
-          if ! command -v apparmor_parser >/dev/null 2>&1; then
-            echo "apparmor_parser 不可用，退回全局 sysctl"
-            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-            exit 0
-          fi
-          printf '#include <tunables/global>\n\nprofile bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n\n  include if exists <local/bwrap>\n}\n' | sudo tee /etc/apparmor.d/bwrap >/dev/null
-          sudo apparmor_parser -r /etc/apparmor.d/bwrap
-      - name: 沙箱探活（真建一次命名空间，不看版本号）
-        # 只报告原因，不充当门禁：命名空间不可用时，需要沙箱的用例会在 POPPER_REQUIRE_SANDBOX=1
-        # 下自己红——那才是带完整失败清单的信号（这一步一硬，后面的全量测试会被整步 skip）。
-        continue-on-error: true
-        run: |
-          python -c "from popper import sandbox; from popper.sandbox import linux_bwrap; ok = linux_bwrap.available(); print('linux_bwrap available:', ok); print('probe detail:', linux_bwrap.probe_detail() or '-'); print('selected backend:', sandbox.selected_backend_name()); print('hint:', linux_bwrap.APPARMOR_HINT); raise SystemExit(0 if ok else 1)"
       - name: 全量测试（POPPER_REQUIRE_SANDBOX=1：沙箱用例不许静默 skip）
         # 含 tests/test_doc_consistency.py：文档口径与实现的漂移门禁
         # -rs 在本 job 尤其重要：硬门禁只能保证「该跑的不跑就红」，保证不了「没红的
@@ -195,3 +168,59 @@ jobs:
         env:
           TEST_STEP_OUTCOME: ${{ steps.pytest.outcome }}
         run: python -X utf8 .github/scripts/ci_failure_summary.py pytest-output.txt
+
+  linux-sandbox-e2e:
+    name: e2e / ubuntu / --sandbox 完整实验（C7 验证项 3）
+    runs-on: ubuntu-latest
+    # 上面那个 ubuntu job 只跑单测：它能证明「某个断言在 bwrap 下成立」，证明不了从
+    # init → search --sandbox → freeze → confirm --sandbox → report/replay 的**整条生命周期**
+    # 里候选进程始终在被约束的状态下执行——而 README/技术方案 M2 承诺的正是后者。
+    # 这条 job 就是把那条主张跑一遍并把证据递出来（取证逻辑、以及为何不能只看
+    # 「跑完了不报错」，全写在 .github/scripts/e2e_sandbox_experiment.py 的文档字符串里）。
+    # 为什么单独一个 job 而不是在上面那 job 里加一步：GitHub 的 annotation 预算是**每个
+    # check run 最近 10 条**，两套仪表挤在同一个 job 里会互相顶掉（skip 名单顶掉端到端结论，
+    # 或反之）。拆开后各有 10 条，且并行跑、不多花墙钟时间。
+    # 不设 POPPER_REQUIRE_SANDBOX：那是单测侧防止静默 skip 的闸门；本 job 的闸门是脚本
+    # 自己在没有可用后端时直接红（没有后端的端到端就是假端到端，见脚本 main）。
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 安装（只装 -e .，不装任何 extra）
+        # 端到端走的是核心 CLI，它只依赖标准库——这同时是「零运行时依赖」那条对外主张在
+        # **真实执行路径**上的验证点（零依赖单测 job 只证到测试层，没证到能跑完一个实验）。
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+      - name: 准备 bubblewrap 沙箱环境
+        # 与单测 job 同一个出处：装 bwrap + 开 AppArmor userns 例外 + 真实形状探活。
+        uses: ./.github/actions/sandbox-env
+      - name: 跑一整个 --sandbox 端到端实验并取证
+        # 退出码单独落盘、不用管道取退码（理由同全量测试那一步：GitHub 的 bash 带 -e）。
+        # `--expect-backend` 是必须的：不钉住后端，「静默换成了另一个机制」也能绿。
+        # stdout 直接重定向给文件，不经 PowerShell（本地取证已踩过二次解码的乱码坑）。
+        id: e2e
+        shell: bash
+        run: |
+          status=0
+          python -X utf8 .github/scripts/e2e_sandbox_experiment.py \
+            --expect-backend linux_bubblewrap > e2e-output.txt 2>&1 || status=$?
+          echo "$status" > e2e-status.txt
+          cat e2e-output.txt
+          exit $status
+      - name: 端到端仪表不得沉默
+        # 与 pytest 那侧同一个教训：脚本在能递出结论**之前**就挂掉时（import 失败、被 SIGKILL、
+        # runner 抽风），一条 annotation 也不会有，免登录侧只剩「exit code 1」让人猜。
+        # 本步自己永不红（它是诊断不是门禁；真红已由上一步递过）。
+        if: always()
+        shell: bash
+        run: |
+          status=$(cat e2e-status.txt 2>/dev/null || echo '?')
+          if grep -q '\[e2e-sandbox\]' e2e-output.txt 2>/dev/null; then
+            echo "端到端脚本自己已递出结论（退出码 $status），本步不多报"
+            exit 0
+          fi
+          tail=$(tail -c 400 e2e-output.txt 2>/dev/null | tr '\n' ' ')
+          bytes=$(wc -c < e2e-output.txt 2>/dev/null || echo 0)
+          echo "::error::[e2e-sandbox] exited $status with no self-report; output bytes=$bytes; tail: ${tail:-empty}"

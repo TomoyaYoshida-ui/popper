@@ -10,6 +10,7 @@
 免登录侧永远看不出。本文件同时钉住新通道：绿跑必递 skip 名单、且不得误发 error。
 """
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -302,6 +303,22 @@ class CiFailureSummaryTests(unittest.TestCase):
         self.assertIn("跳过（skip）条目", summary)
 
 
+STEP = re.compile(r"(?ms)^      - name: (?P<name>.+?)\n(?P<body>.*?)(?=^      - |\Z)")
+
+
+def reporter_steps(text):
+    """所有调用了上报脚本的步骤：[(展示名, 步骤体)]。
+
+    为什么按步骤看而不是比全局计数：旧写法拿 `count(ci_failure_summary.py)` == `count(if:
+    always())` 当判据，本质是赌「全仓只有这一种仪表、且每个 always() 都是上报步骤」。端到端
+    job 的兜底仪表也是上报步骤、却不调这个 helper，赌注当场输——门禁红在一处本来正确的改动上。
+    按步骤判才能既拦住「仪表挂在 failure()」，也不惩罚新增的第二套仪表。
+    """
+    return [(match.group("name").strip(), match.group("body"))
+            for match in STEP.finditer(text)
+            if "ci_failure_summary.py" in match.group("body")]
+
+
 class WorkflowReportingContractTests(unittest.TestCase):
     """ci.yml 与上报脚本的契约：每个用 helper 的 job 都必须把退出码落盘。"""
 
@@ -317,12 +334,27 @@ class WorkflowReportingContractTests(unittest.TestCase):
     def test_the_reporter_runs_on_green_jobs_too(self):
         """挂在 `if: failure()` 上的仪表，在绿跑上等于不存在——skip 名单就是给绿跑的。"""
         text = WORKFLOW.read_text(encoding="utf-8")
-        users = text.count("ci_failure_summary.py")
-        self.assertGreater(users, 0, "ci.yml 里已不再使用上报脚本，本用例该删")
-        self.assertEqual(users, text.count("if: always()"),
-                         "每个上报步骤都该是 always()；差值就是被改回 failure() 的那一步")
+        steps = reporter_steps(text)
+        self.assertGreater(len(steps), 0, "ci.yml 里已不再使用上报脚本，本用例该删")
+        silent = [name for name, body in steps if "if: always()" not in body]
+        self.assertEqual([], silent,
+                         f"这些上报步骤不是 always()，绿跑上不会执行：{silent}")
         self.assertNotIn("if: failure()", text,
                          "已无需要「只在红时跑」的上报步骤，留着就会制造沉默分支")
+
+    def test_that_contract_bites(self):
+        """反向验证：把某一步的 `always()` 换成别的条件，上面那条必须拓出来。"""
+        text = WORKFLOW.read_text(encoding="utf-8")
+        steps = reporter_steps(text)
+        assert len(steps) > 1, "只有一处上报步骤时本反向验证拓不出东西"
+        name, body = steps[0]
+        assert "if: always()" in body
+        broken = text.replace(body, body.replace("if: always()", "if: success()", 1), 1)
+        self.assertTrue(broken != text, "反向验证的样本没改动任何东西")
+        self.assertEqual([name], [n for n, b in reporter_steps(broken) if "if: always()" not in b],
+                         "改掉的那一步没被识别成沉默仪表：门禁不拦东西")
+        self.assertEqual(len(steps), len(reporter_steps(broken)),
+                         "上报步骤的识别数量变了：按步骤扫描的形状不稳")
 
     def test_outcome_is_passed_to_every_reporter(self):
         """没有 TEST_STEP_OUTCOME，绿跑会被「永不沉默」分支误报成 error。"""

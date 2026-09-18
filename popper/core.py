@@ -334,6 +334,31 @@ def _require_holdout_seal(sandboxed, split):
             "请改用 --trusted-local 并自行保证保留集不在候选进程可读范围内")
 
 
+def execution_mode_line(results):
+    """报告里的「执行模式」行，按实际 run 的 `trust` 字段实算。
+
+    曾写死为「可信本地代码；……尚未提供容器安全隔离」：一个用 `--sandbox` 跑完的项目
+    会在**交付产物里**自称没隔离，与同一目录下 `results.json` 的 `trust` 直接相矛盾（端到端
+    取证脚本正是拦在这上头）；反过来一个 `--trusted-local` 跑完的项目也不能被写成有隔离。
+    只统计次数与机制类别，不从「当前平台」推后端名——后端名不存在每条 run 里，拿今天的
+    探活去描述昨天的执行又是一次口径漂移（机制名在 `popper experiment isolation` 里递）。
+    """
+    sandboxed = sum(1 for r in results
+                    if r.get("trust") == "controller_scored_os_sandbox")
+    trusted = sum(1 for r in results
+                  if r.get("trust") == "controller_scored_trusted_local")
+    parts = []
+    if sandboxed:
+        parts.append(f"OS 沙箱 {sandboxed} 次（写作用域限定运行工作区，机制见 "
+                     f"`popper experiment isolation`）")
+    if trusted:
+        parts.append(f"可信本地代码 {trusted} 次（无文件写作用域）")
+    if not parts:
+        parts.append("尚无执行记录")
+    return ("执行模式：" + "；".join(parts) +
+            "；控制器独立计分；两条路径都不把容器作为隔离手段。")
+
+
 class Experiment:
     def __init__(self, root):
         self.root = Path(root).resolve()
@@ -899,7 +924,7 @@ class Experiment:
         verified = self.replay()
         state = self.state()
         lines = [f"# Popper · {state['spec']['name']}", "", f"阶段：{state['phase']}", "",
-                 "执行模式：可信本地代码；控制器独立计分；尚未提供容器安全隔离。", "",
+                 execution_mode_line(self.results()), "",
                  "## 实验记录", ""]
         for result in self.results():
             lines.extend([f"- {result['split']} · {canonical(result['config'])} · {result['metric']['name']}={result['mean']:.8g}",

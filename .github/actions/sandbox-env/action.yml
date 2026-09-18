@@ -1,0 +1,52 @@
+name: 准备 Linux bubblewrap 沙箱环境
+description: |
+  安装 bubblewrap、给 /usr/bin/bwrap 开 AppArmor 的非特权用户命名空间例外、按真实形状探活。
+
+  为什么是一个 action 而不是每个 job 各抄一份：Ubuntu 23.10+/24.04+ 默认由 AppArmor 拒绝
+  非特权用户命名空间，此时 `bwrap` **装了且 `--version` 返回 0，但任何沙箱都建不起来**。
+  单测 job 与端到端 job 都建在同一前提上，两份抄本迟早会漂成「一个 job 修了、另一个还红着
+  （或更糟：还绿着）」；同一条准备序列只有一个出处，漂移就只能是显式改动。
+
+  三步全部 `continue-on-error: true`：环境准备/诊断类步骤一硬，GitHub 会把后面的真正门禁
+  整步 skip（run 35300378254 就这么遮掉过 Ubuntu 一整轮的修复信号）。门禁在测试本身
+  （`POPPER_REQUIRE_SANDBOX=1`）与端到端脚本（无可用后端即红），它们红的时候才会把原因递出来。
+
+runs:
+  using: composite
+  steps:
+    - name: 安装 bubblewrap
+      # 显式安装，不依赖 runner 镜像「恰好带」——镜像会变，而主张「Linux 有沙箱后端」不能
+      # 建在某个镜像版本的巧合上。
+      continue-on-error: true
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y bubblewrap
+        bwrap --version
+    - name: 允许 bwrap 使用非特权用户命名空间
+      # 只在系统真的有该限制时动策略；用 profile 级 userns 例外而不是全局
+      # sysctl=0，免得把 runner 上其它主体的 userns 限制一并关掉。
+      # 失败不阻断测试：命名空间真不可用时，由下面的探活与测试层的硬门禁报红，
+      # 而不是把后面的步骤整步 skip 掉。
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -uo pipefail
+        key=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+        if [ ! -e "$key" ]; then echo "无 apparmor userns 限制，跳过"; exit 0; fi
+        echo "限制当前值：$(cat $key)"
+        if [ "$(cat $key)" = "0" ]; then exit 0; fi
+        if ! command -v apparmor_parser >/dev/null 2>&1; then
+          echo "apparmor_parser 不可用，退回全局 sysctl"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          exit 0
+        fi
+        printf '#include <tunables/global>\n\nprofile bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n\n  include if exists <local/bwrap>\n}\n' | sudo tee /etc/apparmor.d/bwrap >/dev/null
+        sudo apparmor_parser -r /etc/apparmor.d/bwrap
+    - name: 沙箱探活（真建一次命名空间，不看版本号）
+      # 只报告原因，不充当门禁（理由同上面两步）。`available()` 现在跑的是与 launch 同形状的
+      # 最小沙箱，所以这一步红就说明「装了 bwrap 也没用」，测试层跟着会红。
+      continue-on-error: true
+      shell: bash
+      run: |
+        python -c "from popper import sandbox; from popper.sandbox import linux_bwrap; ok = linux_bwrap.available(); print('linux_bwrap available:', ok); print('probe detail:', linux_bwrap.probe_detail() or '-'); print('selected backend:', sandbox.selected_backend_name()); print('hint:', linux_bwrap.APPARMOR_HINT); raise SystemExit(0 if ok else 1)"
