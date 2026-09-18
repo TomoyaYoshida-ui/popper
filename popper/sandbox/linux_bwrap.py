@@ -8,13 +8,16 @@
 - 运行工作区经 `label_write_scope` 记录路径，launch 时构造对应 `--bind`；本身不
   修改宿主权限位（与 Windows Low IL 的 icacls 不同，Linux 无对应内核标签语义）。
 - 诚实边界：本模块约束"写"（mount namespace 只挂载 scope 为 rw）、对显式
-  `seal_read` 的对象用 `--ro-bind /dev/null <path>` 屏蔽（候选读得空字符串，内核
-  强制、无法绕过读到真实数据）、`--unshare-net` 内核级断网（空 netns）、POSIX
+  `seal_read` 的对象用 `--ro-bind /dev/null <path>` 屏蔽（候选读不到真实数据：
+  简单挂载形状下读得空串 EOF，多挂载叠放的真实端到端在 GitHub runner 上实测为
+  PermissionError/EACCES；两种形状都内核强制、绕不过，实施记录 run 35335109099
+  有原始观察表）、`--unshare-net` 内核级断网（空 netns）、POSIX
   RLIMIT_AS / RLIMIT_CPU 内核强制的资源限额；RLIMIT_NPROC 按真实 UID 计数而不是
   按进程树，因此只能给天花板兜底，不是 Windows Job Object 那种按作业精确计数。
 - 平台差异：Windows 候选读保留集得 PermissionError（MIC 强制标签 NO_READ_UP）；
-  Linux 候选读保留集得空字符串（/dev/null 屏蔽）。两者都是「内核强制、候选无法
-  读出真实数据」，测试拆 Windows/Linux 路径分别断言对应错误名。
+  Linux 候选读保留集得空串或 EACCES（/dev/null 屏蔽，具体形状随挂载叠放变化）。
+  两者都是「内核强制、候选无法读出真实数据」，门禁按 BLOCKED 前缀两种都收，单测
+  对简单形状断言空串、端到端对真实形状断言 BLOCKED*。
 - 只支持 Linux + bwrap 真的能建命名空间：`available()` 用**真实沙箱形状探活**，不只看
   版本号——Ubuntu 24.04+ 的 AppArmor 策略会在 bwrap 已安装时仍拒绝非特权用户命名空间。
   探活失败时 `--sandbox` 显式失败并给出修复指引，而不是跑到一半才炸。
@@ -181,8 +184,10 @@ def seal_read(path):
     的状态记录：bubblewrap 的 mount namespace 在 launch 时固定，无法运行时改；
     因此 seal_read 只标记，launch 时按集合构造 bwrap argv。
 
-    候选读到的是 /dev/null 的 EOF（空字符串），不是 PermissionError —— 但内核强制
-    等价：候选无法绕过 mount namespace 读到真实数据。
+    候选读不到真实数据：简单挂载形状下读到 /dev/null 的 EOF（空字符串）；多挂载
+    叠放的真实端到端在 GitHub runner 上实测也会是 PermissionError/EACCES（见实施
+    记录 run 35335109099 的观察表）。两种形状都内核强制、候选无法绕过；调用方
+    判断封读是否成立应按「读不到真值」而不是按具体错误名。
     """
     if not _is_linux_platform():
         raise OSError("本函数只实现 Linux mount namespace 屏蔽禁读"
@@ -420,11 +425,12 @@ CAPABILITY_NOTES = {
         "另用 `start_new_session` + killpg(SIGKILL) 与 `--die-with-parent` 兜底",
     "heldout_sealed_channel":
         "mount namespace 屏蔽：消费测试集期间对已登记的测试数据文件 `--ro-bind /dev/null "
-        "<path>`，候选读到的是空内容（EOF）而不是真实数据，控制器与用户（namespace 外）不受"
-        "影响。与 Windows 的 NO_READ_UP（读它得 EACCES）不同：两个平台都是内核强制、候选都读"
-        "不出真实数据，但错误形状不一致，测试分别断言。屏蔽在 launch 时固定，无法运行时切换，"
-        "因此只在 `sealed_reads` 包住 launch 的用法下成立；需要账户级/主机级隔离的正式确认仍应"
-        "用外部评估服务",
+        "<path>`，候选读不到真实数据（简单形状下读到空内容 EOF；多挂载叠放的真实端到端"
+        "实测也可能直接得 EACCES，run 35335109099 观察表为证），控制器与用户（namespace 外）"
+        "不受影响。与 Windows 的 NO_READ_UP（读它得 EACCES）不同：两个平台都是内核强制、候选"
+        "都读不出真实数据，Linux 侧错误形状随挂载叠放变化。屏蔽在 launch 时固定，无法运行时"
+        "切换，因此只在 `sealed_reads` 包住 launch 的用法下成立；需要账户级/主机级隔离的正式"
+        "确认仍应用外部评估服务",
 }
 
 

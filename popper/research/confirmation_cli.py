@@ -68,7 +68,8 @@ def main(argv=None):
             runner_key = load_private_key(args.runner_key)
             # 签名密钥文件是 runner 侧唯一的机密：候选代码在 worker 里跑于 OS 沙箱，
             # 执行窗口内把密钥文件对该进程封读（Windows 强制完整性 NO_READ_UP；
-            # Linux bubblewrap 用 mount namespace 屏蔽，候选读到空内容）。
+            # Linux bubblewrap 用 mount namespace 屏蔽，候选读不到真值——空内容
+            # EOF 或 EACCES，随挂载叠放形状变化）。
             # 无内核级禁读能力的平台封读为空操作，但那里的 worker 沙箱也不可用，会直接失败，
             # 因此不存在「以为隔离了、其实没有」的成功路径。
             with sandbox.sealed_reads([args.runner_key]):

@@ -562,8 +562,9 @@ def seal_read(path):
     沙箱候选进程以 Low 完整性运行，而它是 Medium 对象；默认 MIC 只拦写不拦读，所以
     「读隔离」必须靠标签掩码里的 NO_READ_UP：低完整性主体读它会直接得到 EACCES，
     而用户本人与控制器（同为 Medium）不受影响。本实现只走 Windows 强制完整性标签；
-    Linux 上的等价能力由 bubblewrap mount namespace 遮蔽提供（机制不同，候选读到的是
-    空内容而不是 EACCES）。
+    Linux 上的等价能力由 bubblewrap mount namespace 遮蔽提供（机制不同：候选读到
+    空内容 EOF，而在多挂载叠放的真实端到端上实测也可能直接得 EACCES——两种形状
+    都读不到真值，见 linux_bwrap 模块说明与实施记录 run 35335109099）。
     """
     if os.name != "nt":
         raise OSError("本函数只实现 Windows 强制完整性标签禁读"
