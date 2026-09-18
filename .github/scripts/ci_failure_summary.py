@@ -42,6 +42,22 @@ def failure_lines(text: str) -> list[str]:
     return [line for line in text.splitlines() if line.startswith(("FAILED", "ERROR"))]
 
 
+def exit_status(output_path: Path) -> str:
+    """测试步骤单独落盘的 pytest 退出码（拿不到则 "?"）。
+
+    为什么需要它：输出里没 FAILED/ERROR 行却非零退出（崩在采集前、被子进程带崩、
+    被 kill）与「测试真红」是两回事，而 GitHub 只会告诉我们「exit code 1」。
+    """
+    candidate = output_path.with_name("pytest-status.txt")
+    if not candidate.is_file():
+        return "?"
+    return candidate.read_text(encoding="utf-8", errors="replace").strip() or "?"
+
+
+def tail_lines(text: str, count: int = 4) -> list[str]:
+    return [line for line in text.splitlines() if line.strip()][-count:]
+
+
 def test_id(line: str) -> str:
     """`FAILED tests/x.py::K::t - 详情` -> `tests/x.py::K::t`。"""
     return line.split(" - ", 1)[0].split(" ", 1)[-1]
@@ -74,11 +90,12 @@ def summary_lines(text: str) -> list[str]:
     return [line for line in lines[-3:] if "passed" in line or "failed" in line or "error" in line]
 
 
-def build_markdown(payload: str, missing: bool) -> str:
+def build_markdown(payload: str, missing: bool, status: str = "?") -> str:
     label = os.environ.get("GITHUB_JOB", "job")
     runner = os.environ.get("RUNNER_OS", "?")
     python = os.environ.get("pythonLocation") or sys.executable
-    parts = [f"### CI 失败清单 · `{label}` · {runner}", "", f"解释器：`{python}`", ""]
+    parts = [f"### CI 失败清单 · `{label}` · {runner}", "",
+             f"解释器：`{python}`  pytest 退出码：`{status}`", ""]
     if missing:
         parts += [
             "没有 `pytest-output.txt`——失败发生在**测试步骤之前**"
@@ -95,7 +112,8 @@ def build_markdown(payload: str, missing: bool) -> str:
     if tail:
         parts += ["", "末尾汇总：", "", "```text", *tail, "```"]
     if not fails:
-        parts += ["", "完整输出（可能是采集错误或超时）：", "", "```text",
+        parts += ["", f"没有 FAILED/ERROR 行（pytest 退出码 `{status}`）——常见于崩在采集前或"
+                      "进程被带崩。末尾输出：", "", "```text",
                   *payload.splitlines()[-60:], "```"]
     return "\n".join(parts) + "\n"
 
@@ -108,7 +126,8 @@ def main() -> int:
         return 0
     missing = not output_path.is_file()
     payload = "" if missing else output_path.read_text(encoding="utf-8", errors="replace")
-    markdown = build_markdown(payload, missing=missing)
+    status = "?" if missing else exit_status(output_path)
+    markdown = build_markdown(payload, missing=missing, status=status)
     try:
         with open(target, "a", encoding="utf-8") as stream:
             stream.write(markdown)
@@ -118,21 +137,30 @@ def main() -> int:
     # stdout 只放两类东西：ASCII 状态行 + 带中文的 ::error:: annotation（已钉 UTF-8）；
     # 中文 Markdown 正文只进摘要文件，不往管道里刷。
     print(f"[ci_failure_summary] ok: wrote {len(markdown)} chars to job summary; "
-          f"missing_output={int(missing)} failure_lines={len(failure_lines(payload))}")
-    emit_annotations(payload)
+          f"missing_output={int(missing)} failure_lines={len(failure_lines(payload))} "
+          f"exit={status}")
+    emit_annotations(payload, status)
     if missing:
         print(workflow_error("no pytest-output.txt: the failure happened BEFORE the test step"))
     return 0
 
 
-def emit_annotations(payload: str) -> None:
+def emit_annotations(payload: str, status: str = "?") -> None:
     """在 8 条预算内把失败信息压出去；最重要的结论放最后一条（被挤掉时先没的是细节）。
 
     job summary 里的完整清单照旧写（浏览器里看得全），但本仓库的作者常常只能拿到
     免登录的静态页面，所以 annotation 必须自己就能回答「哪几个用例、几类根因」。
+
+    **永不沉默**：没有 FAILED/ERROR 行时也必须报一条。run 35303020780 的 ubuntu job 就是
+    倒在这里——测试步骤非零退出、汇总步骤跑成功，但 annotation 一条没发，免登录能看到的
+    就只剩「exit code 1」，等于仪表在最需要它的分支上罢工。
     """
     fails = failure_lines(payload)
     if not fails:
+        tail = " \u23ce ".join(line[:120] for line in tail_lines(payload))
+        print(workflow_error(
+            f"no FAILED/ERROR line but pytest exited {status} "
+            f"(bytes={len(payload.encode('utf-8', 'replace'))}); tail: {tail[:700]}"[:1200]))
         return
     budget = MAX_ANNOTATIONS
     messages: list[str] = []
