@@ -49,10 +49,14 @@ GREEN_SAMPLE = "\n".join([
     "647 passed, 5 skipped in 284.35s"])
 # 汇总行说跳过了、短汇总里却没有 `SKIPPED` 行：测试步骤忘了 `-rs`。
 NO_RS_SAMPLE = "\n".join(["...." * 20, "642 passed, 5 skipped in 280.00s"])
+# 跳过的原因多于 notice 上限（5 类）：名单不完整时必须自己说「还差多少」。
+MANY_REASONS_SAMPLE = "\n".join(
+    [f"SKIPPED [1] tests/test_x.py:{i + 10}: 原因编号 {i}" for i in range(7)]
+    + ["640 passed, 7 skipped in 300.00s"])
 
 
 def run_helper(root, output_text=None, status=None, summary=None, summary_env=True,
-               outcome=None):
+               outcome=None, extra_env=None):
     """在临时目录里跑一次上报脚本，返回 (returncode, stdout, 摘要文件内容)。"""
     target = Path(summary) if summary is not None else root / "summary.md"
     if output_text is not None:
@@ -68,6 +72,8 @@ def run_helper(root, output_text=None, status=None, summary=None, summary_env=Tr
         env.pop("TEST_STEP_OUTCOME", None)
     else:
         env["TEST_STEP_OUTCOME"] = outcome
+    if extra_env:
+        env.update(extra_env)
     proc = subprocess.run(
         [sys.executable, "-X", "utf8", str(SCRIPT), "pytest-output.txt"],
         cwd=str(root), capture_output=True, env=env)
@@ -199,6 +205,33 @@ class CiFailureSummaryTests(unittest.TestCase):
         self.assertIn("-rs", rows[0])
         self.assertIn("skip 名单不可读", rows[0])
         self.assertIn("测试步骤没带 `-rs`", summary)
+
+    def test_partial_skip_list_declares_what_is_missing(self):
+        """只报「前 N 类」而不说还差多少，就是仪表自己的漏报。
+
+        不是假想：run `35312360291` 的 ubuntu 实到 `SKIP total=27`，旧写法的前 4 类只能
+        对上 24 次，剩下 3 次归不入任何一类——读的人无从知道名单不完整。
+        """
+        code, out, summary = run_helper(self.root, MANY_REASONS_SAMPLE, status=0,
+                                        outcome="success")
+        self.assertEqual(0, code)
+        rows = notices(out)
+        self.assertEqual(1, len(rows))
+        self.assertIn("SKIP total=7", rows[0])
+        self.assertIn("前 5 类", rows[0])
+        self.assertIn("另有 2 类 / 2 次未列出", rows[0],
+                      "未列出的量必须自己报出来，不然「前 N 类」会被当成全量")
+        self.assertIn("job summary", rows[0], "得指出去哪看逐条名单")
+
+    def test_truncated_skip_list_says_it_was_truncated(self):
+        """逐条清单被上限切断时，摘要里得写明“共 N 行、列了前 M 行”。"""
+        code, _, summary = run_helper(self.root, MANY_REASONS_SAMPLE, status=0,
+                                       outcome="success",
+                                       extra_env={"CI_SUMMARY_MAX_SKIP_LINES": "3"})
+        self.assertEqual(0, code)
+        self.assertIn("最多显示 3 行", summary)
+        self.assertIn("另有 4 行未列出", summary)
+        self.assertIn("共 7 行", summary)
 
     def test_green_but_inconsistent_output_is_reported(self):
         """outcome=success 与失败行/非零退出码不能共存：共存说明上报链路坏了。"""

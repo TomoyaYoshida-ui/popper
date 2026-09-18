@@ -173,24 +173,42 @@ def declared_skips(text: str) -> int:
     return int(matches[-1]) if matches else 0
 
 
-def skip_signatures(entries: list[tuple[int, str, str]], limit: int = 4) -> list[str]:
+def skip_clustered(entries: list[tuple[int, str, str]]) -> list[tuple[str, int]]:
+    """按原因聚合（次数相加，不是行数的），保留「多→少 + 字典序」的稳定序。"""
     counts: dict[str, int] = {}
     for count, _, reason in entries:
         key = (reason or "（无原因）")[:SKIP_SIGNATURE_CHARS]
         counts[key] = counts.get(key, 0) + count
-    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-    return [f"{total}x {reason}" for reason, total in ranked[:limit]]
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
 
 
-def skip_notice(entries: list[tuple[int, str, str]]) -> str:
+def skip_notice(entries: list[tuple[int, str, str]], limit: int = 5) -> str:
+    """单条 notice 文本：前 N 类原因 + **明确的未列出量**。
+
+    只给前 N 类而不说「还差多少」，就是仪表自己的漏报：run 35312360291 的 ubuntu 实到
+    `SKIP total=27`，前 4 类只能对上 24 次，剩下 3 次归不入任何一类——读的人无从知道
+    名单不完整。现在把「另 K 类 / M 次」一并报出来，并指向逐条名单的位置。
+    """
     total = skip_total(entries)
-    clusters = skip_signatures(entries)
-    return (f"SKIP total={total} 按原因聚合（前 {len(clusters)} 类）: " + " || ".join(clusters))
+    ranked = skip_clustered(entries)
+    shown, hidden = ranked[:limit], ranked[limit:]
+    message = (f"SKIP total={total} 按原因聚合（前 {len(shown)} 类）: "
+               + " || ".join(f"{count}x {reason}" for reason, count in shown))
+    if hidden:
+        rest = sum(count for _, count in hidden)
+        message += (f" || 另有 {len(hidden)} 类 / {rest} 次未列出（逐条名单在 job summary）")
+    return message
 
 
 def skip_markdown(entries: list[tuple[int, str, str]], declared: int) -> list[str]:
+    # 测试/排障时可缩小逐条清单上限，以便验证「截断必须自己说」这条行为。
+    cap = MAX_SKIP_LINES
+    try:
+        cap = int(os.environ.get("CI_SUMMARY_MAX_SKIP_LINES") or MAX_SKIP_LINES)
+    except ValueError:
+        pass
     parts = ["", f"跳过（skip）条目：汇总行 `{declared} skipped`，短汇总里按位置列出 "
-                f"{len(entries)} 行 / 合计 {skip_total(entries)} 次（最多显示 {MAX_SKIP_LINES} 行）："]
+                f"{len(entries)} 行 / 合计 {skip_total(entries)} 次（最多显示 {cap} 行）："]
     if not entries:
         parts += ["", "短汇总里没有 `SKIPPED` 行。" + (
             "汇总行说跳过了 " + str(declared) + " 项，那就是测试步骤没带 `-rs`——skip 名单丢失。"
@@ -199,9 +217,18 @@ def skip_markdown(entries: list[tuple[int, str, str]], declared: int) -> list[st
     parts.append("")
     parts.append("```text")
     parts += [f"SKIPPED [{count}] {location}: {reason or '（无原因）'}"
-              for count, location, reason in entries[:MAX_SKIP_LINES]]
+              for count, location, reason in entries[:cap]]
+    if len(entries) > cap:
+        parts.append(f"……另有 {len(entries) - cap} 行未列出（逐条清单被截断，"
+                     f"共 {len(entries)} 行）")
     parts.append("```")
-    parts += ["", "按原因聚合：", "", "```text", *skip_signatures(entries, limit=8), "```"]
+    ranked = skip_clustered(entries)
+    shown = [f"{count}x {reason}" for reason, count in ranked[:8]]
+    hidden = ranked[8:]
+    if hidden:
+        shown.append(f"另有 {len(hidden)} 类 / {sum(count for _, count in hidden)} 次未列出"
+                     f"（逐条清单见上，未被截断时它就是全量）")
+    parts += ["", "按原因聚合：", "", "```text", *shown, "```"]
     return parts
 
 
