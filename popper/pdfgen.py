@@ -21,12 +21,18 @@ SIZES = {"title": 18, "label": 14, "section": 14, "body": 11, "note": 10}
 
 # ---- TrueType 解析 ---------------------------------------------------------
 class _TTFont:
-    def __init__(self, raw: bytes):
+    def __init__(self, raw: bytes, sfnt_at: int = 0):
+        """`sfnt_at` 是 sfnt 头（scaler 版本 + 表目录）在 `raw` 中的位置。
+
+        表目录里各表的 offset 始终以**整块缓冲区的开头**为基准，不随 `sfnt_at` 平移：
+        TTC 集合内多个子字体共用同一批表，正是靠文件级绝对 offset 实现的。所以解析
+        集合时只能移动表目录的读取起点，不能把缓冲区切到子字体头再按原 offset 取表。
+        """
         self.data = raw
-        if len(raw) < 12 or struct.unpack_from(">I", raw, 0)[0] != 0x00010000:
+        if len(raw) < sfnt_at + 12 or struct.unpack_from(">I", raw, sfnt_at)[0] != 0x00010000:
             raise ProtocolError("非 TrueType 字体（缺少 0x00010000 scaler），请提供 .ttf 文件")
-        num_tables = struct.unpack_from(">H", raw, 4)[0]
-        dir_off = 12
+        num_tables = struct.unpack_from(">H", raw, sfnt_at + 4)[0]
+        dir_off = sfnt_at + 12
         self.tables: dict[str, tuple[int, int]] = {}
         for _ in range(num_tables):
             tag = raw[dir_off:dir_off + 4].decode("latin1")
@@ -143,12 +149,20 @@ class _TTFont:
 
 
 def load_font(font_path: str | Path) -> _TTFont:
-    """读取字体文件；自动剥离 TTC 集合头取首个字体子集。"""
+    """读取字体文件；TTC 集合取第一个子字体，但整块缓冲区原样保留。
+
+    以前写成 `data = data[off:]`（重定位到子字体头），而表目录里的 offset 是以文件
+    开头为基准的，这一刀让所有偏移整体错位：实测 msyh.ttc / simsun.ttc / mingliub.ttc
+    全部因此报错（一个 cmap 找不到、一个 struct.error），而报错文案却声称支持 .ttc。
+    Linux 上的 fonts-wqy-*.ttc 同样是集合，不修就会在装完字体后继续红。
+    """
     data = Path(font_path).read_bytes()
+    sfnt_at = 0
     if data[:4] == b"ttcf":
-        off = struct.unpack_from(">I", data, 12)[0]
-        data = data[off:]
-    return _TTFont(data)
+        if len(data) < 16:
+            raise ProtocolError("TTC 集合头不完整")
+        sfnt_at = struct.unpack_from(">I", data, 12)[0]
+    return _TTFont(data, sfnt_at)
 
 
 def discover_font() -> str | None:

@@ -95,6 +95,9 @@ jobs:
           python -m pip install pytest
           python -m pip install -e ".[ml,research,orchestration,confirmation]"
       - name: 安装 bubblewrap
+        # 环境准备步骤不当门禁：装不上就会由需要沙箱的用例在测试里真红（见下面的
+        # POPPER_REQUIRE_SANDBOX），但测试本身仍会跑完，信号不被遮。
+        continue-on-error: true
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap
@@ -104,12 +107,25 @@ jobs:
         # 渲染显式报 ProtocolError——这是产品的 fail-closed，不是测试的锅。
         # 刻意装 WQY（TrueType 轮廓）而不是 fonts-noto-cjk：后者 .ttc 里是 CFF 轮廓，
         # 而我们的子集化器按字节读 glyf/loca，只支持 TrueType（discover_font 已钉住这点）。
+        # continue-on-error：诊断/装环境的一步不能当门禁。run 35300378254 里这一步红以
+        # 后 GitHub 直接 skip 了后面的全量测试，Linux 侧一整轮的修复信号就这么被遮掉了；
+        # 真正的门禁是 test_manuscript_pdf_is_valid_single_embedded_font，它一定会红。
+        continue-on-error: true
         run: |
-          sudo apt-get install -y fonts-wqy-microhei fonts-wqy-zenhei
-          python -c "from popper.pdfgen import discover_font; f = discover_font(); print('font:', f); raise SystemExit(0 if f else 1)"
+          sudo apt-get install -y fonts-wqy-microhei fonts-wqy-zenhei \
+            || echo "::warning::apt 装不上 wqy 字体，后面的 PDF 用例会真红"
+      - name: 自证中文字体可被 popper 探测（只报告，不充当门禁）
+        # 把「没装字体」与「装了但 popper 探测不认」分开：前者看上一行，后者由这个脚本
+        # 逐个打印候选字体的轮廓类型与 cmap 命中情况（Actions 日志要登录，所以关键结论
+        # 同时打成 annotation）。
+        continue-on-error: true
+        run: python -X utf8 .github/scripts/check_cjk_font.py
       - name: 允许 bwrap 使用非特权用户命名空间
         # 只在系统真的有该限制时动策略；用 profile 级 userns 例外而不是全局
         # sysctl=0，免得把 runner 上其它主体的 userns 限制一并关掉。
+        # 失败不阻断测试：命名空间真不可用时，由下面的探活与 POPPER_REQUIRE_SANDBOX
+        # 在用例层报红，而不是把整个测试步骤 skip 掉。
+        continue-on-error: true
         run: |
           set -uo pipefail
           key=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
@@ -124,7 +140,9 @@ jobs:
           printf '#include <tunables/global>\n\nprofile bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n\n  include if exists <local/bwrap>\n}\n' | sudo tee /etc/apparmor.d/bwrap >/dev/null
           sudo apparmor_parser -r /etc/apparmor.d/bwrap
       - name: 沙箱探活（真建一次命名空间，不看版本号）
-        # 失败即红：让「bwrap 装了但不能用」在这一步就报出原因，而不是拖到测试里 skip。
+        # 只报告原因，不充当门禁：命名空间不可用时，需要沙箱的用例会在 POPPER_REQUIRE_SANDBOX=1
+        # 下自己红——那才是带完整失败清单的信号（这一步一硬，后面的全量测试会被整步 skip）。
+        continue-on-error: true
         run: |
           python -c "from popper import sandbox; from popper.sandbox import linux_bwrap; ok = linux_bwrap.available(); print('linux_bwrap available:', ok); print('probe detail:', linux_bwrap.probe_detail() or '-'); print('selected backend:', sandbox.selected_backend_name()); print('hint:', linux_bwrap.APPARMOR_HINT); raise SystemExit(0 if ok else 1)"
       - name: 全量测试（POPPER_REQUIRE_SANDBOX=1：沙箱用例不许静默 skip）

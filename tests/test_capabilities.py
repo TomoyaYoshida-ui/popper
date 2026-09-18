@@ -90,5 +90,60 @@ class ExtraDeclarationConsistencyTests(unittest.TestCase):
             self.assertIn(f"[{extra}]", install_hint(extra))
 
 
+STEP = re.compile(r"(?ms)^      - name: (?P<name>.+?)\n(?P<body>.*?)(?=^      - |\Z)")
+# 装依赖的那一步是例外：它挂了什么都跑不了，再跑下去也只会有噪声。匹的是原名（带括号），
+# 因为下面的展示名为了可读会把“（”后的修饰剪掉。
+DEPENDENCY_STEP = re.compile(r"^安装（")
+TEST_STEP = re.compile(r"全量测试")
+
+
+def run_steps_before_tests(block):
+    """返回测试步骤之前所有带 `run:` 的 (展示名, 原名, 是否 continue-on-error)。"""
+    steps = []
+    for match in STEP.finditer(block):
+        body = match.group("body")
+        if "run:" not in body:
+            continue
+        raw = match.group("name").strip()
+        name = raw.split("（")[0].strip()
+        if TEST_STEP.search(name):
+            break
+        steps.append((name, raw, "continue-on-error: true" in body))
+    return steps
+
+
+def hard_pre_test_steps(block):
+    """测试前那些「一红就把全量测试整步 skip」的硬门禁步骤（装依赖那步除外）。"""
+    return [name for name, raw, tolerant in run_steps_before_tests(block)
+            if not tolerant and not DEPENDENCY_STEP.match(raw)]
+
+
+class PreTestStepIsolationTests(unittest.TestCase):
+    """环境准备/诊断类步骤不得成为门禁。
+
+    真实事故（run 35300378254）：新加的「安装中文字体」步骤里那句自证退出 1，GitHub
+    就把后面的全量测试整步 skip——Ubuntu job 一个用例都没跑，Linux 侧五处修复的信号
+    被一个诊断步骤遮掉了。门禁必须是测试本身（沙箱类用例由 POPPER_REQUIRE_SANDBOX=1
+    保证该红就红），而不是一步环境脚本。
+    """
+
+    def test_environment_steps_cannot_mask_the_test_signal(self):
+        block = job_block("linux")
+        assert block, "ci.yml 里没有 linux job，无从校验步骤隔离"
+        self.assertEqual([], hard_pre_test_steps(block),
+                         "这些环境/诊断步骤会把全量测试遮掉，必须改 continue-on-error："
+                         "实际门禁在测试本身")
+
+    def test_the_isolation_check_itself_bites(self):
+        """反向验证：抽掉一个 continue-on-error，上面那条门禁必须能拦住。"""
+        block = job_block("linux")
+        assert block, "ci.yml 里没有 linux job，无从校验步骤隔离"
+        broken = re.sub(r"(安装 bubblewrap\n)(?:        # [^\n]*\n)*        continue-on-error: true\n",
+                        r"\1", block, count=1)
+        self.assertNotEqual(block, broken, "反向验证的样本没改动任何东西")
+        self.assertIn("安装 bubblewrap", hard_pre_test_steps(broken),
+                      "抽掉 continue-on-error 后仍未被识别为硬门禁，说明这份门禁不拦东西")
+
+
 if __name__ == "__main__":
     unittest.main()
