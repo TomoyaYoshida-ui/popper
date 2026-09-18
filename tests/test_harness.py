@@ -73,7 +73,11 @@ class RevisionProposalParsingTests(unittest.TestCase):
         cases = (
             ({"path": "../escape.py", "original_sha256": None, "replacement": "x = 1\n"},
              "相对 Python 路径"),
+            # 两种宿主各自的「绝对路径」写法都必须被拒：只按当前平台判会一侧放行
+            # （见 tests/test_path_portability.py）。
             ({"path": "C:/abs.py", "original_sha256": None, "replacement": "x = 1\n"},
+             "相对 Python 路径"),
+            ({"path": "/tmp/abs.py", "original_sha256": None, "replacement": "x = 1\n"},
              "相对 Python 路径"),
             ({"path": "notes.txt", "original_sha256": None, "replacement": "x = 1\n"},
              "相对 Python 路径"),

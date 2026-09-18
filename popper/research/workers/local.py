@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from ... import sandbox
-from ...core import ProtocolError, file_hash, read_json, write_json
+from ...core import ProtocolError, file_hash, portable_path, read_json, write_json
 from ..revisions import RevisionStore
 from ..execution import PROBE_SOURCE, assess_execution
 from .base import TERMINAL_JOB_STATUSES, JobSpec, WorkerReceipt
@@ -230,14 +230,14 @@ class LocalWorker:
 
     def read_workspace_file(self, job_id, name):
         """返回 workspace 内任意相对路径的原始字节（路径受限，不做制品摘要校验）。"""
-        relative = Path(name)
-        if not name or relative.is_absolute() or ".." in relative.parts:
+        normalized = portable_path(name)
+        if normalized is None:
             raise ProtocolError("workspace 相对路径不合法")
         job_dir = (self.root / job_id).resolve()
         if not job_dir.is_relative_to(self.root):
             raise ProtocolError("job_id 越界")
         workspace = (job_dir / "workspace").resolve()
-        path = (workspace / relative).resolve()
+        path = (workspace / normalized).resolve()
         if not path.is_relative_to(workspace) or not path.is_file():
             raise ProtocolError("workspace 文件缺失或路径越界")
         return path.read_bytes()

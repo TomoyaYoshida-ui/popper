@@ -7,8 +7,8 @@ import shutil
 import uuid
 from pathlib import Path, PurePosixPath
 
-from ..core import (ProtocolError, dataset, digest, evaluator_pack, file_hash, model_inputs,
-                    read_json, write_json)
+from ..core import (ProtocolError, dataset, digest, evaluator_pack, file_hash, is_safe_relative,
+                    model_inputs, read_json, write_json)
 from .confirmation_contracts import validate_contract, validate_submission
 from .evaluation_service import _validate_response, scoring_code_hash
 from .execution import assess_execution
@@ -30,9 +30,9 @@ def _plain_ancestors(path):
 
 
 def _relative(name):
-    if (not isinstance(name, str) or not name or "\\" in name or ":" in name
-            or PurePosixPath(name).is_absolute() or ".." in PurePosixPath(name).parts
-            or PurePosixPath(name).as_posix() != name):
+    # 确认包把路径直接当作 zip 内的 entry 名，所以上游写 `nested\\helper.py` 时不得
+    # 被「好心归一」：这里比通用判据更严，反斜杠一律拒。
+    if not isinstance(name, str) or "\\" in name or not is_safe_relative(name):
         raise ProtocolError("确认包文件路径必须是规范安全相对路径")
     return name
 

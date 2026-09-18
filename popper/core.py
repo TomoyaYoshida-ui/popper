@@ -17,7 +17,7 @@ import time
 import uuid
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import sandbox
 
@@ -140,10 +140,42 @@ def evaluator_for_metric(metric):
     raise ProtocolError(f"未支持的指标契约: {canonical(metric)}")
 
 
+def portable_path(name):
+    """把提案里的路径写法归一成规范的 POSIX 相对形式；不合规则返回 ``None``。
+
+    不能用 `Path(x).is_absolute()` 判绝对：它按**宿主**规则解释，于是同一份模型提案在
+    Windows 上被收下（`/tmp/a.py` 不算绝对）、在 Linux 上被收下（`C:/a.py` 不算绝对），
+    而两侧各自拼到 root 上都会落到 root 之外（Windows 的 `/` 前缀是盘根锚定，`root /
+    "/tmp/a.py"` 直接丢弃 base）。这里改成「按两台宿主**所有**读法都不允许越界」：
+
+    * 冒号一律拒（覆盖 `C:\\x`、`C:/x` 这类盘符写法）；
+    * 反斜杠**两侧统一按分隔符归一**，而不是某一侧归一、另一侧当成普通字符——
+      Windows 作者写 `nested\\helper.py` 的可用性保住，Linux 上也不会多出一个含反斜杠的
+      怪文件名；归一后再判绝对/越界，所以 `\\\\server\\share\\x.py` 变成 `//server/...`
+      → 仍然被拒；
+    * 只接受规范形式：`a//b.py`、`./a.py`、`sub/../a.py` 一律拒（不静默改写语义）。
+    """
+    if not isinstance(name, str) or ":" in name:
+        return None
+    value = name.replace("\\", "/")
+    if not value or value.startswith("/"):
+        return None
+    path = PurePosixPath(value)
+    if ".." in path.parts or path.as_posix() != value:
+        return None
+    return path.as_posix()
+
+
+def is_safe_relative(name):
+    """`portable_path` 的布尔视图：只做判定，不改写。"""
+    return portable_path(name) is not None
+
+
 def inside(root, relative):
-    if not isinstance(relative, str) or Path(relative).is_absolute():
+    normalized = portable_path(relative)
+    if normalized is None:
         raise ProtocolError("项目路径必须是相对路径")
-    path = (root / relative).resolve()
+    path = (root / normalized).resolve()
     if not path.is_relative_to(root.resolve()) or not path.is_file():
         raise ProtocolError(f"文件缺失或路径越界: {relative}")
     return path

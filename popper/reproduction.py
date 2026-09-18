@@ -10,7 +10,8 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-from .core import ProtocolError, canonical, file_hash, number, read_json, write_json
+from .core import (ProtocolError, canonical, file_hash, number, portable_path, read_json,
+                   write_json)
 
 
 MANIFEST = "reproduction.json"
@@ -132,9 +133,10 @@ def validate_manifest(manifest):
 
 
 def _relative(root, relative, must_exist=True):
-    if not isinstance(relative, str) or Path(relative).is_absolute():
+    normalized = portable_path(relative)
+    if normalized is None:
         raise ProtocolError("复现任务路径必须是相对路径")
-    path = (root / relative).resolve()
+    path = (root / normalized).resolve()
     if not path.is_relative_to(root.resolve()):
         raise ProtocolError(f"复现任务路径越界: {relative}")
     if must_exist and not path.is_file():

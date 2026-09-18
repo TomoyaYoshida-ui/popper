@@ -10,7 +10,8 @@ import math
 import re
 from pathlib import Path, PurePosixPath
 
-from ..core import EVALUATORS, ProtocolError, digest, evaluator_metric, file_hash
+from ..core import (EVALUATORS, ProtocolError, digest, evaluator_metric, file_hash,
+                    is_safe_relative)
 
 
 def _crypto():
@@ -136,7 +137,7 @@ def safe_code_path(value):
     if not isinstance(value, str) or '\\' in value or ':' in value:
         raise ProtocolError('Code paths must be portable relative POSIX paths')
     path = PurePosixPath(value)
-    if (not value or path.is_absolute() or '..' in path.parts or path.as_posix() != value
+    if (not is_safe_relative(value)
             or path.suffix != '.py' or len(value) > 240
             or any(not re.fullmatch(r'[A-Za-z0-9_.-]+', part) or part.endswith('.')
                    or part.split('.')[0].upper() in {'CON', 'PRN', 'AUX', 'NUL',

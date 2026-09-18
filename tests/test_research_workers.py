@@ -109,8 +109,12 @@ class ResearchWorkerTests(unittest.TestCase):
         self.assertEqual("succeeded", receipt["status"])
         self.assertTrue(receipt["execution_gate"]["passed"])
 
-    @unittest.skipUnless(__import__('os').name == 'nt', 'Windows path normalization')
     def test_windows_code_edit_paths_are_normalized(self):
+        """两侧都必须把 `nested\\helper.py` 归一成同一个 POSIX 形式。
+
+        这条原先挂在 `skipUnless(os.name == 'nt')` 上，而 Linux 上同一份提案会被当成
+        一个含反斜杠的文件名——正是「换台机器跑出不同产物」的形状，所以守卫拿掉。
+        """
         edit = CodeEdit("nested\\helper.py", "value = 1\n")
         self.assertEqual("nested/helper.py", edit.path)
 

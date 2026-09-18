@@ -213,13 +213,15 @@ class MaterializeTests(unittest.TestCase):
         # experiment.json 是项目自带的输入，它声明的相对路径却可以写 `../`。
         # 原先的越界检查拿未 resolve 的拼接路径判前缀，`..` 不折叠因而恒不拦，
         # 项目外的文件会被打进 reproducibility.zip（arcname 还带着 `../`）。
+        # 现在平台中立的形状守卫会先一步拦下 `..`，两条消息都是「拦下」，
+        # 真正的判据是下面的 zip 不得存盘。
         import json
         secret = self.root / "outside-secret.json"
         secret.write_text(json.dumps([{"id": "leak", "x": 0, "y": 0}]), encoding="utf-8")
         spec = json.loads((self.project / "experiment.json").read_text(encoding="utf-8"))
         spec["test"] = "../outside-secret.json"
         write_json(self.project / "experiment.json", spec)
-        with self.assertRaisesRegex(ProtocolError, "越界"):
+        with self.assertRaisesRegex(ProtocolError, "越界|必须是相对路径"):
             Materializer(self.project).build_repro_package(self.out)
         self.assertFalse((self.out / "reproducibility.zip").exists())
 

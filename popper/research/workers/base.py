@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Protocol, runtime_checkable
 
-from ...core import ProtocolError, digest
+from ...core import ProtocolError, digest, portable_path
 
 
 # Job manifest 终态集合；任一终态都可被 collect() 校验（无需再执行）。
@@ -87,9 +87,11 @@ class InputArtifact:
     role: str
 
     def __post_init__(self):
-        target = Path(self.target)
-        if target.is_absolute() or ".." in target.parts or not self.target:
+        normalized = portable_path(self.target)
+        if normalized is None:
             raise ProtocolError("InputArtifact target 必须是安全相对路径")
+        # 存归一后的形式：worker 拿它拼 workspace，两侧必须是同一个位置
+        object.__setattr__(self, "target", normalized)
         if len(self.sha256) != 64 or not self.role:
             raise ProtocolError("InputArtifact 必须绑定 SHA-256 与 role")
 
@@ -117,10 +119,11 @@ class JobSpec:
             raise ProtocolError("require_edit_coverage 必须为布尔值")
         if type(self.sandboxed) is not bool:
             raise ProtocolError("JobSpec sandboxed 必须为布尔值")
-        entry = Path(self.entrypoint)
+        entry = portable_path(self.entrypoint)
         if (not self.idempotency_key or not self.revision_id or not self.design_id
-                or entry.is_absolute() or ".." in entry.parts or entry.suffix != ".py"):
+                or entry is None or PurePosixPath(entry).suffix != ".py"):
             raise ProtocolError("JobSpec 身份或 entrypoint 不合法")
+        object.__setattr__(self, "entrypoint", entry)
         if len(self.revision_manifest_sha256) != 64:
             raise ProtocolError("JobSpec 必须绑定 revision manifest SHA-256")
         if (isinstance(self.timeout_seconds, bool)
@@ -132,15 +135,17 @@ class JobSpec:
             raise ProtocolError("JobSpec args 必须是字符串 tuple")
         if not all(isinstance(item, InputArtifact) for item in self.inputs):
             raise ProtocolError("JobSpec inputs 必须是 InputArtifact tuple")
+        outputs = []
         for output in self.outputs:
-            path = Path(output)
-            if not output or path.is_absolute() or ".." in path.parts:
+            normalized = portable_path(output)
+            if normalized is None:
                 raise ProtocolError("JobSpec output 必须是安全相对路径")
+            outputs.append(normalized)
+        object.__setattr__(self, "outputs", tuple(outputs))
         if len(set(self.outputs)) != len(self.outputs):
             raise ProtocolError("JobSpec outputs 不能重复")
         if self.require_edit_coverage and any(
-                Path(output).as_posix() == "outputs/_popper_execution.json"
-                for output in self.outputs):
+                output == "outputs/_popper_execution.json" for output in self.outputs):
             raise ProtocolError("JobSpec outputs 不能占用执行轨迹保留路径")
         if (type(self.max_processes) is not int or self.max_processes < 1
                 or type(self.gpu_count) is not int or self.gpu_count < 0):

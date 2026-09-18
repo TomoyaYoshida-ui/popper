@@ -4,9 +4,10 @@ from __future__ import annotations
 import hashlib
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from ..core import Experiment, ProtocolError, digest, file_hash, read_json, write_json
+from ..core import (Experiment, ProtocolError, digest, file_hash, portable_path,
+                    read_json, write_json)
 from .execution import changed_statement_lines
 
 
@@ -17,11 +18,12 @@ class CodeEdit:
     original_sha256: str | None = None
 
     def __post_init__(self):
-        path = Path(self.path)
-        if (not self.path or path.is_absolute() or ".." in path.parts
-                or path.suffix.lower() != ".py"):
+        normalized = portable_path(self.path)
+        if normalized is None or PurePosixPath(normalized).suffix.lower() != ".py":
             raise ProtocolError("CodeEdit path 必须是 revision 内的相对 Python 路径")
-        object.__setattr__(self, "path", path.as_posix())
+        # 存归一后的形式：两侧对同一份提案必须算出同一个 revision_id，且后续
+        # `code_dir / edit.path` 拼的也必须是已经判定过的那个形式。
+        object.__setattr__(self, "path", normalized)
         if not isinstance(self.replacement, str) or not self.replacement.strip():
             raise ProtocolError("CodeEdit replacement 不能为空")
         if len(self.replacement.encode("utf-8")) > 300_000:
@@ -186,9 +188,9 @@ class RevisionStore:
         if set(code_bytes) != set(expected_files):
             raise ProtocolError("materialize 代码文件集合与 manifest 不一致")
         for name, content in code_bytes.items():
-            relative = Path(name)
-            if (not name or relative.is_absolute() or ".." in relative.parts
-                    or relative.suffix.lower() != ".py"):
+            # manifest 里的 key 是 create() 已经归一过的形式，这里不再接受第
+            # 二次归一（否则同一文件在两侧会被拼成不同形状）。
+            if portable_path(name) != name or PurePosixPath(name).suffix.lower() != ".py":
                 raise ProtocolError("materialize 代码路径不合法")
             if hashlib.sha256(content).hexdigest() != expected_files[name]:
                 raise ProtocolError("materialize 代码文件 SHA-256 不匹配")
