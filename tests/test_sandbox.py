@@ -250,7 +250,11 @@ class SandboxWriteScopeTests(unittest.TestCase):
                   "    out.append('python:BLOCKED')\n"
                   "sys.stdout.write('|'.join(out))\n")
         root = Path(tempfile.mkdtemp(prefix="popper-sbx-"))
-        before = set(glob.glob(os.path.join(tempfile.gettempdir(), "popper-cmdshim-*")))
+        # shim 名嵌创建者 PID；断言收窄到本进程，避免同机并发跑的其他 popper
+        # 进程创建/清理它们的 shim 时污染这个共享 %TEMP% 的集合对比（本机全量
+        # 并发跑时实测被另一 pytest 进程的 shim 打红过）。
+        before = set(glob.glob(os.path.join(tempfile.gettempdir(),
+                                            f"popper-cmdshim-{os.getpid()}-*")))
         try:
             scope = root / "scope"
             scope.mkdir()
@@ -264,8 +268,9 @@ class SandboxWriteScopeTests(unittest.TestCase):
                                       timeout_seconds=30)
             out = (scope / "stdout.log").read_text(encoding="utf-8")
             self.assertEqual("curl:BLOCKED|python:ALLOWED", out)
-            # 拦截注入目录在运行后被清理
-            leftover = set(glob.glob(os.path.join(tempfile.gettempdir(), "popper-cmdshim-*")))
+            # 拦截注入目录在运行后被清理（仅看本进程的 shim，见 before 处注释）
+            leftover = set(glob.glob(os.path.join(tempfile.gettempdir(),
+                                                  f"popper-cmdshim-{os.getpid()}-*")))
             self.assertEqual(before, leftover)
         finally:
             try:
