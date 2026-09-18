@@ -27,19 +27,30 @@ jobs:
       - name: 全量测试
         # 含 tests/test_doc_consistency.py：文档口径与实现的漂移门禁
         # 输出落盘后再原样 cat，并用 $status 显式退出——不用管道，消除「退出码被管道洗白」这类风险。
+        # -rs：把 skip 名单（带原因）写进输出，否则「job 绿」与「关键用例全被 skip」在外部一样。
+        # PYTHONIOENCODING：跳过原因与断言消息都是中文，重定向到文件时默认按宿主 locale 编码，
+        # 不钉 UTF-8 则递出来的名单是一堆问号。
+        id: pytest
+        env:
+          PYTHONIOENCODING: utf-8
         shell: bash
         run: |
           status=0
           # GitHub 的 bash 带 -e：写成 `cmd` + 下一行 `status=$?` 时，非零退出直接终止
           # 本步骤（红绿仍对，但后面的 cat 与落盘都不会执行）。|| 取回状态才拿得到它。
-          python -m pytest -q -rfE --tb=short > pytest-output.txt 2>&1 || status=$?
+          python -m pytest -q -rfEs --tb=short > pytest-output.txt 2>&1 || status=$?
           echo "$status" > pytest-status.txt
           cat pytest-output.txt
           exit $status
-      - name: 失败清单写进 job summary
+      - name: 失败清单与 skip 名单写进 job summary
         # Actions 日志页需登录才能看，run 页面的 job summary 对公开仓库免登录可读：
         # 红的时候让 CI 自己把 FAILED/ERROR 清单递出来，而不是剩个 exit code 1 给人猜。
-        if: failure()
+        # always()（不是 failure()）：绿跑也要递 skip 名单——带原因的 skip 在外部与「真跑了」
+        # 不可区分，只报失败等于仪表在自己最该看的分支上沉默。脚本靠 TEST_STEP_OUTCOME
+        # 分辨绿/红分支，绿时只发 notice、不误发 error。
+        if: always()
+        env:
+          TEST_STEP_OUTCOME: ${{ steps.pytest.outcome }}
         run: python -X utf8 .github/scripts/ci_failure_summary.py pytest-output.txt
 
   test-optional-extras:
@@ -58,17 +69,25 @@ jobs:
           python -m pip install pytest
           python -m pip install -e ".[ml,research,orchestration,confirmation]"
       - name: 全量测试（覆盖需要可选依赖的分支）
+        # -rs 与 PYTHONIOENCODING 的理由同 test job：skip 名单要能递出来、递出来要读得懂。
+        id: pytest
+        env:
+          PYTHONIOENCODING: utf-8
         shell: bash
         run: |
           status=0
           # GitHub 的 bash 带 -e：写成 `cmd` + 下一行 `status=$?` 时，非零退出直接终止
           # 本步骤（红绿仍对，但后面的 cat 与落盘都不会执行）。|| 取回状态才拿得到它。
-          python -m pytest -q -rfE --tb=short > pytest-output.txt 2>&1 || status=$?
+          python -m pytest -q -rfEs --tb=short > pytest-output.txt 2>&1 || status=$?
           echo "$status" > pytest-status.txt
           cat pytest-output.txt
           exit $status
-      - name: 失败清单写进 job summary
-        if: failure()
+      - name: 失败清单与 skip 名单写进 job summary
+        # 绿跑也递 skip 名单：extras 少装一个就会表现成「一大片带原因的 skip」，
+        # 只看失败清单的仪表会把这种空转读成「该 job 什么都没发生」。
+        if: always()
+        env:
+          TEST_STEP_OUTCOME: ${{ steps.pytest.outcome }}
         run: python -X utf8 .github/scripts/ci_failure_summary.py pytest-output.txt
 
   linux:
@@ -153,17 +172,26 @@ jobs:
           python -c "from popper import sandbox; from popper.sandbox import linux_bwrap; ok = linux_bwrap.available(); print('linux_bwrap available:', ok); print('probe detail:', linux_bwrap.probe_detail() or '-'); print('selected backend:', sandbox.selected_backend_name()); print('hint:', linux_bwrap.APPARMOR_HINT); raise SystemExit(0 if ok else 1)"
       - name: 全量测试（POPPER_REQUIRE_SANDBOX=1：沙箱用例不许静默 skip）
         # 含 tests/test_doc_consistency.py：文档口径与实现的漂移门禁
+        # -rs 在本 job 尤其重要：硬门禁只能保证「该跑的不跑就红」，保证不了「没红的
+        # 那些到底跑了还是被 skip」，后者只能靠 skip 名单递出来。
+        id: pytest
+        env:
+          PYTHONIOENCODING: utf-8
         shell: bash
         run: |
           status=0
           # GitHub 的 bash 带 -e：写成 `cmd` + 下一行 `status=$?` 时，非零退出直接终止
           # 本步骤（红绿仍对，但后面的 cat 与落盘都不会执行）。|| 取回状态才拿得到它。
-          python -m pytest -q -rfE --tb=short > pytest-output.txt 2>&1 || status=$?
+          python -m pytest -q -rfEs --tb=short > pytest-output.txt 2>&1 || status=$?
           echo "$status" > pytest-status.txt
           cat pytest-output.txt
           exit $status
-      - name: 失败清单写进 job summary
+      - name: 失败清单与 skip 名单写进 job summary
         # 本 job 在测试步骤之前还有 apt/ bubblewrap / 沙箱探活三道门槛，哪一步红都会
         # 在这里写明「没拿到 pytest 输出」，避免被误读成「测试挂了」。
-        if: failure()
+        # always()：绿跑时要递出沙箱/字体相关用例的 skip 名单（否则无法从免登录侧
+        # 区分「真跑了」与「带原因 skip」）。
+        if: always()
+        env:
+          TEST_STEP_OUTCOME: ${{ steps.pytest.outcome }}
         run: python -X utf8 .github/scripts/ci_failure_summary.py pytest-output.txt

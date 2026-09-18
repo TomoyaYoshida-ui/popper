@@ -5,13 +5,20 @@
 只能靠猜。job summary 渲染在 run 页面上，公开仓库免登录可读，所以把「哪些用例红了」
 写进摘要，就等于让 CI 自己把证据递出来。
 
-只做一件事：读测试步骤落盘的 pytest 输出（`> pytest-output.txt 2>&1`），抽取失败行
-（`FAILED`/`ERROR` 以及子测试的 `SUBFAILED`/`SUBERROR`）与末尾汇总行，以 UTF-8 追加到
-`$GITHUB_STEP_SUMMARY`，并把关键结论同时打成 `::error::` annotation。所有文件读写都
-显式指定 encoding，不随宿主 locale 变（这是 verify_claims.py 刚踩过的同一个坑）。
+只做两件事：读测试步骤落盘的 pytest 输出（`> pytest-output.txt 2>&1`），抽取失败行
+（`FAILED`/`ERROR` 以及子测试的 `SUBFAILED`/`SUBERROR`）与跳过行（`SKIPPED [N] 位置: 原因`，
+需要测试步骤带 `-rs`），以 UTF-8 追加到 `$GITHUB_STEP_SUMMARY`，并把关键结论同时打成
+`::error::` / `::notice::` annotation。所有文件读写都显式指定 encoding，不随宿主 locale 变
+（这是 verify_claims.py 刚踩过的同一个坑）。
 
 两条通道彼此独立：摘要写失败、没有 `GITHUB_STEP_SUMMARY`、输出里没有失败行——都不能
 让 annotation 闭嘴（它常常是免登录时唯一能拿到信息的那一条）。
+
+为什么 skip 名单也要报：带原因的 skip 在外部与「真跑了」完全不可区分，所以「job 绿」
+并不证明那些用例跑过（例：沙箱硬门禁 `POPPER_REQUIRE_SANDBOX=1` 的价值，恰恰取决于
+真实沙箱用例到底跑了没有）。本脚本因此要在**无论成败**时被调用（工作流侧 `if: always()`），
+并用 `TEST_STEP_OUTCOME` 分辨该走「绿：只报 skip」还是「红：报失败清单」——缺了这根
+判据，绿跑会被「永不沉默」那条分支误报成 error。
 
 本脚本自身**永不以非零退出**：它是失败后的诊断步骤，不该再把 job 变成第二个红点。
 """
@@ -35,6 +42,13 @@ SIGNATURE_CHARS = 180
 FAILURE_PREFIXES = ("FAILED", "ERROR", "SUBFAILED", "SUBERROR")
 FAILURE_LABEL = "FAILED/ERROR/SUBFAILED/SUBERROR"
 SUB_DETAIL = re.compile(r"^SUB(?:FAILED|ERROR)\((.*)\)\s")
+# `pytest -rs` 的短汇总行：`SKIPPED [次数] 位置: 原因`。位置不含空格（`a/b.py:12`
+# 或 `a/b.py::K::t`），所以用 \S+ 掐到第一个「冒号+空格」为止，剩下的整段都是原因。
+SKIP_LINE = re.compile(r"^SKIPPED(?: \[(\d+)\])? (\S+): (.*)$")
+SKIP_LOOSE = re.compile(r"^SKIPPED(?: \[(\d+)\])? (.*)$")
+DECLARED_SKIPPED = re.compile(r"(\d+) skipped")
+MAX_SKIP_LINES = 200
+SKIP_SIGNATURE_CHARS = 160
 
 # pytest 的断言消息本身就是中文，所以 ::error:: 行会带中文：stdout 必须自己钉在 UTF-8，
 # 不能靠宿主 locale（runner 把 stdout 当管道收，中文 Windows 上不钉就是 cp936）。
@@ -46,6 +60,16 @@ def workflow_error(message: str) -> str:
     """拼 GitHub Actions 工作流命令；按文档预转义 % / CR / LF，否则会被截断或误解析。"""
     escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     return f"::error::{escaped}"
+
+
+def workflow_warning(message: str) -> str:
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::warning::{escaped}"
+
+
+def workflow_notice(message: str) -> str:
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return f"::notice::{escaped}"
 
 
 def failure_lines(text: str) -> list[str]:
@@ -66,6 +90,15 @@ def exit_status(output_path: Path) -> str:
 
 def tail_lines(text: str, count: int = 4) -> list[str]:
     return [line for line in text.splitlines() if line.strip()][-count:]
+
+
+def test_step_outcome() -> str:
+    """测试步骤的 outcome（工作流侧传入）；空串表示调用方没给，只能按「非绿」处理。
+
+    为何不能靠猜：本脚本现在无论成败都会跑，而「没有失败行」在绿跑里是常态、在红跑里
+    是事故。没这根判据时，绿跑会被误报成 `::error::`（一个不存在的故障）。
+    """
+    return os.environ.get("TEST_STEP_OUTCOME", "").strip().lower()
 
 
 def test_id(line: str) -> str:
@@ -111,12 +144,74 @@ def summary_lines(text: str) -> list[str]:
     return [line for line in lines[-3:] if "passed" in line or "failed" in line or "error" in line]
 
 
-def build_markdown(payload: str, missing: bool, status: str = "?") -> str:
+def skip_entries(text: str) -> list[tuple[int, str, str]]:
+    """`SKIPPED [N] 位置: 原因` -> [(N, 位置, 原因)]；不带 `-rs` 时返回空。
+
+    N 是 pytest 对同一（位置, 原因）的聚合次数，所以下面的总数取 sum(N) 而不是行数。
+    """
+    entries: list[tuple[int, str, str]] = []
+    for line in text.splitlines():
+        if not line.startswith("SKIPPED"):
+            continue
+        match = SKIP_LINE.match(line)
+        if match:
+            entries.append((int(match.group(1) or 1), match.group(2), match.group(3).strip()))
+            continue
+        loose = SKIP_LOOSE.match(line)
+        if loose:
+            entries.append((int(loose.group(1) or 1), loose.group(2).strip(), ""))
+    return entries
+
+
+def skip_total(entries: list[tuple[int, str, str]]) -> int:
+    return sum(count for count, _, _ in entries)
+
+
+def declared_skips(text: str) -> int:
+    """末尾汇总行里写的 `N skipped`——用来分辨「真的 0 跳过」与「测试步骤忘了 `-rs`」。"""
+    matches = DECLARED_SKIPPED.findall(text)
+    return int(matches[-1]) if matches else 0
+
+
+def skip_signatures(entries: list[tuple[int, str, str]], limit: int = 4) -> list[str]:
+    counts: dict[str, int] = {}
+    for count, _, reason in entries:
+        key = (reason or "（无原因）")[:SKIP_SIGNATURE_CHARS]
+        counts[key] = counts.get(key, 0) + count
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [f"{total}x {reason}" for reason, total in ranked[:limit]]
+
+
+def skip_notice(entries: list[tuple[int, str, str]]) -> str:
+    total = skip_total(entries)
+    clusters = skip_signatures(entries)
+    return (f"SKIP total={total} 按原因聚合（前 {len(clusters)} 类）: " + " || ".join(clusters))
+
+
+def skip_markdown(entries: list[tuple[int, str, str]], declared: int) -> list[str]:
+    parts = ["", f"跳过（skip）条目：汇总行 `{declared} skipped`，短汇总里按位置列出 "
+                f"{len(entries)} 行 / 合计 {skip_total(entries)} 次（最多显示 {MAX_SKIP_LINES} 行）："]
+    if not entries:
+        parts += ["", "短汇总里没有 `SKIPPED` 行。" + (
+            "汇总行说跳过了 " + str(declared) + " 项，那就是测试步骤没带 `-rs`——skip 名单丢失。"
+            if declared else "汇总行也是 0 skipped，即本 job 确实一项未跳。")]
+        return parts
+    parts.append("")
+    parts.append("```text")
+    parts += [f"SKIPPED [{count}] {location}: {reason or '（无原因）'}"
+              for count, location, reason in entries[:MAX_SKIP_LINES]]
+    parts.append("```")
+    parts += ["", "按原因聚合：", "", "```text", *skip_signatures(entries, limit=8), "```"]
+    return parts
+
+
+def build_markdown(payload: str, missing: bool, status: str = "?", green: bool = False) -> str:
     label = os.environ.get("GITHUB_JOB", "job")
     runner = os.environ.get("RUNNER_OS", "?")
     python = os.environ.get("pythonLocation") or sys.executable
-    parts = [f"### CI 失败清单 · `{label}` · {runner}", "",
-             f"解释器：`{python}`  pytest 退出码：`{status}`", ""]
+    title = "CI 结果与 skip 名单" if green else "CI 失败清单"
+    parts = [f"### {title} · `{label}` · {runner}", "",
+             f"解释器：`{python}`  pytest 退出码：`{status}`  测试步骤结论：`{test_step_outcome() or '未知'}`", ""]
     if missing:
         parts += [
             "没有 `pytest-output.txt`——失败发生在**测试步骤之前**"
@@ -124,15 +219,19 @@ def build_markdown(payload: str, missing: bool, status: str = "?") -> str:
         ]
         return "\n".join(parts) + "\n"
     fails = failure_lines(payload)
-    parts.append(f"失败/错误条目 {len(fails)} 项（最多显示 {MAX_FAILURE_LINES} 项）：")
-    parts.append("")
-    parts.append("```text")
-    parts += fails[:MAX_FAILURE_LINES] or [f"（没有 {FAILURE_LABEL} 行，见末尾汇总）"]
-    parts.append("```")
+    if green:
+        parts.append(f"测试步骤结论为 success：失败/错误条目 {len(fails)} 项。")
+    else:
+        parts.append(f"失败/错误条目 {len(fails)} 项（最多显示 {MAX_FAILURE_LINES} 项）：")
+        parts.append("")
+        parts.append("```text")
+        parts += fails[:MAX_FAILURE_LINES] or [f"（没有 {FAILURE_LABEL} 行，见末尾汇总）"]
+        parts.append("```")
     tail = summary_lines(payload)
     if tail:
         parts += ["", "末尾汇总：", "", "```text", *tail, "```"]
-    if not fails:
+    parts += skip_markdown(skip_entries(payload), declared_skips(payload))
+    if not fails and not green:
         parts += ["", f"没有 {FAILURE_LABEL} 行（pytest 退出码 `{status}`）——常见于崩在采集前或"
                       "进程被带崩。末尾输出：", "", "```text",
                   *payload.splitlines()[-60:], "```"]
@@ -144,32 +243,73 @@ def main() -> int:
     missing = not output_path.is_file()
     payload = "" if missing else output_path.read_text(encoding="utf-8", errors="replace")
     status = "?" if missing else exit_status(output_path)
+    outcome = test_step_outcome()
+    green = outcome == "success"
     fails = failure_lines(payload)
+    entries = skip_entries(payload)
     # 顺序很重要：annotation 先走。它是免登录时唯一可靠的通道，不能因为
     # 「写 job summary 失败」或「没有 GITHUB_STEP_SUMMARY」而被连带沉默——那两条早退
     # 路径与上面那个「无 FAILED 行」一起，构成同一个缺陷的四个子形：仪表只在
     # 一切顺利时开口，而失败时不顺利的恰恰就是这些前置条件。
+    # skip 的 notice 放最前：GitHub 只留最近 10 条，红跑时要保的是失败详情，
+    # 被顶掉的应该是这条（绿跑时本来就只有系统那 2 条，notice 肯定能留下）。
+    if green and entries:
+        print(workflow_notice(skip_notice(entries)))
     if missing:
-        print(workflow_error("no pytest-output.txt: the failure happened BEFORE the test step"))
+        if green:
+            print(workflow_error(
+                "test step reported success but pytest-output.txt is missing"))
+        else:
+            print(workflow_error("no pytest-output.txt: the failure happened BEFORE the test step"))
+    elif green:
+        emit_green(payload, status, entries, fails)
     else:
+        if entries:
+            print(workflow_notice(skip_notice(entries)))
         emit_annotations(payload, status)
     target = os.environ.get("GITHUB_STEP_SUMMARY")
     if not target:
         print(f"[ci_failure_summary] no GITHUB_STEP_SUMMARY, summary skipped "
-              f"(output file: {output_path}, failure_lines={len(fails)})")
+              f"(output file: {output_path}, failure_lines={len(fails)}, "
+              f"skip_lines={len(entries)})")
         return 0
-    markdown = build_markdown(payload, missing=missing, status=status)
+    markdown = build_markdown(payload, missing=missing, status=status, green=green)
     try:
         with open(target, "a", encoding="utf-8") as stream:
             stream.write(markdown)
     except OSError as error:  # 诊断步骤不得让 job 再红一次
         print(f"[ci_failure_summary] cannot write summary: {error}")
         return 0
-    # stdout 只放两类东西：ASCII 状态行 + 带中文的 ::error:: annotation（已钉 UTF-8）；
+    # stdout 只放两类东西：ASCII 状态行 + 带中文的 annotation（已钉 UTF-8）；
     # 中文 Markdown 正文只进摘要文件，不往管道里刷。
     print(f"[ci_failure_summary] ok: wrote {len(markdown)} chars to job summary; "
-          f"missing_output={int(missing)} failure_lines={len(fails)} exit={status}")
+          f"missing_output={int(missing)} failure_lines={len(fails)} skip_lines={len(entries)} "
+          f"exit={status} outcome={outcome or 'unknown'}")
     return 0
+
+
+def emit_green(payload: str, status: str, entries: list[tuple[int, str, str]],
+               fails: list[str]) -> None:
+    """绿跑不得发 `::error::`（无事不报），但也不能沉默：skip 名单就是它的正文。
+
+    两个不自洽的例外必须报：绿却带失败行/非零退出码（上报链路或工作流坏了）；
+    汇总行说跳过了 N 项却没有 `SKIPPED` 行（测试步骤少了 `-rs`，名单正在静默丢失）。
+    后者用 warning：job 确实绿，把它报成 error 是另一种漏报。
+    """
+    if fails or status not in ("0", "?"):
+        print(workflow_error(
+            f"测试步骤结论为 success 但输出不自洽：{FAILURE_LABEL} 行 {len(fails)} 条，"
+            f"pytest 退出码 {status}"))
+        return
+    declared = declared_skips(payload)
+    listed = skip_total(entries)
+    if declared and not entries:
+        print(workflow_warning(
+            f"汇总行有 {declared} 项 skipped，但短汇总里没有 SKIPPED 行——"
+            f"测试步骤未带 `-rs`，skip 名单不可读"))
+    elif declared != listed:
+        print(workflow_warning(
+            f"skip 名单与汇总行不一致：汇总 {declared}，逐条合计 {listed}"))
 
 
 def emit_annotations(payload: str, status: str = "?") -> None:
