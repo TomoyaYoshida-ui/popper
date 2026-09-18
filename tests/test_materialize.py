@@ -139,6 +139,10 @@ class MaterializeTests(unittest.TestCase):
         result = Materializer(self.project).materialize(manuscript, self.out, "pdf")
         self.assertEqual("pdf", result["template"])
         raw = Path(result["manuscript"]).read_bytes()
+        self._assert_valid_subset_pdf(raw)
+
+    def _assert_valid_subset_pdf(self, raw):
+        """一份合法且只内嵌子集字体的 PDF——两种字体源共用同一套判据。"""
         # 是合法 PDF（文件头/尾、字体对象、Identity-H 编码、分页对象）。
         self.assertTrue(raw.startswith(b"%PDF-1.4"))
         self.assertTrue(raw.rstrip().endswith(b"%%EOF"))
@@ -159,6 +163,29 @@ class MaterializeTests(unittest.TestCase):
         self.assertLess(font.num_glyphs, 500)  # 子集只保留用到的字形
         self.assertTrue(font.glyph_map.get(ord("假")))   # 标题汉字
         self.assertTrue(font.glyph_map.get(ord("δ")))    # 正文希腊字母
+
+    def test_manuscript_pdf_renders_from_a_collection_font(self):
+        """字体源是 TTC 集合体时的全链渲染（只有装了 wqy 的 Linux job 能真跑）。
+
+        本机 `discover_font()` 选中 simhei.ttf（独立 sfnt），走不到集合分支；而
+        `pdfgen.load_font()` 曾在 `data = data[off:]` 上把 TTC 的表偏移整体切错——
+        合成 fixture 钉住了偏移基准（见 `test_pdfgen_font.py`），但「能过探测」与
+        「能出合法 PDF」是两件事，这一条补的正是后者。没有集合字体可用时如实 skip
+        并写明原因，不静默降级。
+        """
+        from popper.pdfgen import discover_font
+        font = discover_font()
+        if font is None or Path(font).suffix.lower() != ".ttc":
+            self.skipTest(f"当前环境未发现 TTC 集合字体（discover_font→{font}）；"
+                          "该分支由 Linux CI 的 fonts-wqy-*.ttc 真跑")
+        manuscript = {"title": "假设与统计口径",
+                      "abstract": "评估协议采用预注册阈值与固定数据划分。",
+                      "sections": [{"heading": "方法", "body": "δ 改善阈值达成。"}]}
+        from unittest import mock
+        with mock.patch("popper.pdfgen.discover_font", return_value=font):
+            result = Materializer(self.project).materialize(manuscript, self.out, "pdf")
+        self.assertEqual("pdf", result["template"])
+        self._assert_valid_subset_pdf(Path(result["manuscript"]).read_bytes())
 
     def test_build_repro_package_contains_controlled_deliverables(self):
         result = Materializer(self.project).build_repro_package(self.out)
