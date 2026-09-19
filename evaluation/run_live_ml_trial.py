@@ -75,11 +75,19 @@ def main():
         (p.parent / "code" / read_json(p)["entrypoint"]).read_text(encoding="utf-8")
         != (project / read_json(p)["entrypoint"]).read_text(encoding="utf-8")
         for p in revisions)
+    # 冻结基线也经 `_evaluate_registered_via_worker` 逐 seed 跑（identity 是
+    # registered_implementation_dev），其回执按设计不带 execution_gate——只有真正改过代码的
+    # 候选才 require_edit_coverage。所以「改动语句真的执行了」这条主张只对带 gate 的那批回执
+    # 成立：按项目的 seeds 数逐条要求，而不是对全部 succeeded 回执一刀切。原先的
+    # `sum(succeeded) == 3` 是基线还不走 worker 时留下的期望值，会把正常的 6 条回执判失败。
+    seeds = read_json(project / "experiment.json")["seeds"]
+    generated = [r for r in receipts if "execution_gate" in r]
     ok = bool(error_type is None and result and result["integrity"]["ok"]
               and len(result["observations"]) >= 2 and receipts
-              and sum(r["status"] == "succeeded" for r in receipts) == 3
-              and all(r.get("execution_gate", {}).get("coverage") in EXECUTED_COVERAGE
-                      for r in receipts if r["status"] == "succeeded"))
+              and all(r["status"] == "succeeded" for r in receipts)
+              and len(generated) == len(seeds)
+              and all(r["execution_gate"]["coverage"] in EXECUTED_COVERAGE
+                      for r in generated))
     summary = {"classification": "model_driven_registered_ml_development_trial",
                "task_setup": "baseline_only_scaffold_before_initialization",
                "claim_limit": "模型生成假设、选择登记候选并修改代码；计分及实验后阈值决策为确定性内核。单轮公开数据开发验证，不证明创新或通用自主科研能力。",
