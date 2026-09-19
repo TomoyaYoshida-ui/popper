@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchArbor, type ArborTree, type ResearchRunState, type ResearchState } from '../api'
+import { MetricBars, BudgetBar, LegendDot, type BarPoint } from './charts'
 
 /** 单个研究 run 的只读投影卡（/api/research，真实 research.sqlite）。 */
 function ResearchRunCard({ run, labels }: { run: ResearchRunState; labels: ResearchState['status_labels'] }) {
@@ -38,6 +39,16 @@ function ResearchRunCard({ run, labels }: { run: ResearchRunState; labels: Resea
           {budget ? ` · 可用 ${budget.available.toPrecision(3)}` : ''}
         </span>
       </div>
+      {budget && (
+        <>
+          <BudgetBar cap={budget.cap} spent={budget.spent} reserved={budget.reserved} available={budget.available} />
+          <div style={{ display: 'flex', gap: 12 }}>
+            <LegendDot color="var(--accent)">已花费 {budget.spent.toPrecision(3)}</LegendDot>
+            <LegendDot color="var(--warn)">预留 {budget.reserved.toPrecision(3)}</LegendDot>
+            <LegendDot color="var(--card-2)">可用 {budget.available.toPrecision(3)}</LegendDot>
+          </div>
+        </>
+      )}
 
       <h2 style={{ fontSize: 14, marginTop: 10 }}>假设（{hypotheses.length}）</h2>
       {hypotheses.length === 0 && <div className="notice">研究库中还没有假设。</div>}
@@ -69,6 +80,18 @@ function ResearchRunCard({ run, labels }: { run: ResearchRunState; labels: Resea
 
       <h2 style={{ fontSize: 14, marginTop: 10 }}>观察（{observations.length}）</h2>
       {observations.length === 0 && <div className="muted" style={{ fontSize: 12 }}>尚无开发集观察；运行 popper research run 后出现。</div>}
+      {observations.length > 0 && (
+        <div style={{ marginBottom: 6 }}>
+          <MetricBars
+            points={observations.map((o): BarPoint => ({
+              label: `${o.hypothesis_id} · ${o.scope}`,
+              mean: o.value,
+              std: o.uncertainty,
+            }))}
+          />
+          <div className="muted" style={{ fontSize: 11 }}>条 = 观察值，须线 = ±不确定度（{observations[0]?.unit ?? ''}）。</div>
+        </div>
+      )}
       {observations.map((o) => (
         <div className="row" key={o.entity_id}>
           <div>

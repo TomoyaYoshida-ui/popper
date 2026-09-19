@@ -16,6 +16,7 @@ import { Dock } from './components/Dock'
 import { SettingsMenu } from './components/SettingsMenu'
 import { QuestsSidebar } from './components/QuestsSidebar'
 import { MaterializeDialog } from './components/MaterializeDialog'
+import { MetricBars, type BarPoint } from './components/charts'
 
 /* 侧栏图标 */
 const ICONS: Record<string, React.ReactNode> = {
@@ -494,6 +495,43 @@ function RunsView({ data, exp, phase, pending, questTitle, onAction, onBack }: {
       </div>
       <div className="section">
         {results.length === 0 && <div className="notice">协议已登记。运行开发集实验后，这里显示真实运行记录。</div>}
+        {/* 开发集指标对比图：mean±std 误差条 + per-seed 散点 + 预注册改善阈值线 */}
+        {(() => {
+          const spec = exp?.spec
+          const dev = results.filter((r) => r.split === 'dev')
+          const baselineDev = spec
+            ? dev.find((r) => JSON.stringify(r.config) === JSON.stringify(spec.baseline))
+            : undefined
+          const threshold = baselineDev && spec
+            ? (spec.metric.direction === 'min'
+                ? baselineDev.mean - spec.min_improvement
+                : baselineDev.mean + spec.min_improvement)
+            : null
+          const points: BarPoint[] = dev.map((r) => ({
+            label: JSON.stringify(r.config) === '{}' ? '(基线默认配置)' : JSON.stringify(r.config),
+            mean: r.mean,
+            std: r.std,
+            seeds: r.per_seed,
+            highlight: r === baselineDev,
+          }))
+          if (points.length === 0) return null
+          return (
+            <div className="box" style={{ padding: '10px 14px', marginBottom: 10 }}>
+              <h2 style={{ fontSize: 14, marginBottom: 4 }}>
+                开发集指标对比（{spec?.metric.name ?? '—'}）
+              </h2>
+              <MetricBars
+                points={points}
+                direction={spec?.metric.direction}
+                threshold={threshold}
+                thresholdLabel={baselineDev ? '预注册改善阈值' : undefined}
+              />
+              <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                条 = mean，须线 = ±std，蓝点 = 各种子；灰条为基线复跑。
+              </div>
+            </div>
+          )
+        })()}
         {results.map((r) => (
           <div className="row" key={r.run_id}>
             <div>
