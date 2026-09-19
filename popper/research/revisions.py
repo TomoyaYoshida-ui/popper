@@ -56,7 +56,10 @@ class RevisionStore:
             state = exp.verify_inputs()
             if state["phase"] != "searching":
                 raise ProtocolError("只能从 searching 实验创建 CodeRevision")
-            registered = {Path(name).as_posix() for name in state["spec"]["code_files"]}
+            # 走共享判据而不是 `Path(name).as_posix()`：后者按宿主折叠分隔符，同一份 spec 在
+            # Windows 与 Linux 上会算出不同的 registered 集合（进而不同的 revision_id）。
+            # 归一后的值也正是 `project / relative` 能读到的那个形式。
+            registered = {portable_path(name) for name in state["spec"]["code_files"]}
             source_files = {}
             if parent_revision_id:
                 parent = self.verify(parent_revision_id)

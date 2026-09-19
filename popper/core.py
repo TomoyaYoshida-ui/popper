@@ -181,6 +181,53 @@ def inside(root, relative):
     return path
 
 
+def normalized_spec_path(field, name):
+    """spec 声明路径的唯一收纳口径：归一成规范 POSIX 形式，不合规则拒。
+
+    `inside()` 是「判完就用归一值拼路径」，spec 却是「判完要把字符串**存下来**」——它会被
+    写进 state.db、成为 `input_hashes` 的键、被 revision 注册集合与 zip arcname 消费。若这里
+    只判不归一，`pkg\\train.py` 会原样落盘，而下游 `Path(name).as_posix()` 只在 Windows 折叠
+    分隔符、在 Linux 上留成字面量，同一份 spec 在两侧算出不同的 `registered` 集合与指纹。
+    所以归一与落盘必须同形：判定与存下的都取 `portable_path()` 的返回值。
+    """
+    normalized = portable_path(name)
+    if normalized is None:
+        raise ProtocolError(f"{field} 必须是规范的相对路径: {name!r}")
+    return normalized
+
+
+def normalized_state(state):
+    """读取侧归一：把 state 里存过的相对路径折叠成规范 POSIX 形式。
+
+    写入侧（`validate_spec`）从今起只落规范形式，但更早建立的实验可能把 `pkg\\train.py`
+    原样写进了 state.db。下游大量搭配是「spec 里的名字就是 `input_hashes` 的键」（revision
+    注册集合、确认包候选身份、`code_dir / name` 拼接），所以两侧必须折叠成同一个形式才不会
+    分叉。折叠放在唯一的读取口，存量库因此不需要迁移脚本，`SCHEMA_VERSION` 也不必上升：
+    下一次 `_save` 落盘的自然就是规范形式。
+    """
+    spec = state.get("spec")
+    if not isinstance(spec, dict):
+        return state
+    for field in ("entrypoint", "train", "dev", "test"):
+        if isinstance(spec.get(field), str):
+            spec[field] = normalized_spec_path(field, spec[field])
+    for field in ("code_files", "provenance_files"):
+        if isinstance(spec.get(field), list):
+            spec[field] = [normalized_spec_path(field, name) for name in spec[field]]
+    hashes = state.get("input_hashes")
+    if isinstance(hashes, dict):
+        folded = {}
+        for name, value in hashes.items():
+            normalized = normalized_spec_path("input_hashes", name)
+            # 两个旧写法若折叠到同一个名字（`pkg\\m.py` 与 `pkg/m.py`），必须报错而不是让
+            # 后者静默覆盖前者：那会让 `verify_inputs` 少校验一个文件。
+            if normalized in folded and folded[normalized] != value:
+                raise ProtocolError(f"输入哈希键归一后冲突: {name!r}")
+            folded[normalized] = value
+        state["input_hashes"] = folded
+    return state
+
+
 def validate_spec(spec):
     required = {"name", "objective", "entrypoint", "code_files", "train", "dev", "test",
                 "baseline", "candidates", "budget", "timeout_seconds",
@@ -189,16 +236,29 @@ def validate_spec(spec):
         raise ProtocolError("experiment.json 缺少必需字段")
     evaluator_id = evaluator_for_metric(spec["metric"])
     pack = evaluator_pack(evaluator_id)
-    if not isinstance(spec["code_files"], list) or spec["entrypoint"] not in spec["code_files"]:
+    # 路径字段在这里就地归一（见 `normalized_spec_path`）：调用方随后会把这份 spec 写回
+    # experiment.json 或存进 state.db，落盘形状必须就是判定用的那个形状。
+    if not isinstance(spec["code_files"], list):
         raise ProtocolError("entrypoint 必须注册在 code_files")
     if any(not isinstance(p, str) or not p.endswith(".py") for p in spec["code_files"]):
         raise ProtocolError("code_files 只接受 Python 源文件")
-    if len(set(spec["code_files"])) != len(spec["code_files"]):
+    code_files = [normalized_spec_path("code_files", p) for p in spec["code_files"]]
+    if len(set(code_files)) != len(code_files):
         raise ProtocolError("重复 code_files")
+    entrypoint = (normalized_spec_path("entrypoint", spec["entrypoint"])
+                  if isinstance(spec["entrypoint"], str) else None)
+    if entrypoint not in code_files:
+        raise ProtocolError("entrypoint 必须注册在 code_files")
+    spec["code_files"] = code_files
+    spec["entrypoint"] = entrypoint
+    for split in ("train", "dev", "test"):
+        spec[split] = normalized_spec_path(split, spec[split])
     provenance = spec.get("provenance_files", [])
     if (not isinstance(provenance, list) or any(not isinstance(path, str) for path in provenance)
             or len(set(provenance)) != len(provenance)):
         raise ProtocolError("provenance_files 必须是无重复的相对路径列表")
+    if "provenance_files" in spec:
+        spec["provenance_files"] = [normalized_spec_path("provenance_files", p) for p in provenance]
     slices = spec.get("analysis_slices", [])
     if not isinstance(slices, list) or len(slices) > 16:
         raise ProtocolError("analysis_slices must be a list with at most 16 items")
@@ -375,7 +435,8 @@ class Experiment:
         self.db.close()
 
     def state(self):
-        return json.loads(self.db.execute("SELECT data FROM state WHERE id=1").fetchone()[0])
+        raw = json.loads(self.db.execute("SELECT data FROM state WHERE id=1").fetchone()[0])
+        return normalized_state(raw)
 
     def archive_events(self, target_dir):
         """Export the audit event chain to a gzip JSONL cold archive.

@@ -11,14 +11,18 @@
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import re
+import runpy
+import shutil
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from popper.core import ProtocolError, digest, inside, is_safe_relative, portable_path
+from popper.core import (Experiment, ProtocolError, canonical, digest, initialize, inside,
+                         is_safe_relative, portable_path, read_json, validate_spec, write_json)
 from popper.reproduction import _relative as reproduction_relative
 from popper.research.confirmation_bundle import _relative as bundle_relative
 from popper.research.confirmation_contracts import safe_code_path
@@ -143,6 +147,119 @@ class GuardSiteAgreementTests(unittest.TestCase):
             with self.subTest(path=raw):
                 self.assertEqual(expected, portable_path(raw))
                 self.assertEqual(expected, CodeEdit(raw, "x = 1\n").path)
+
+
+class SpecPathNormalizationTests(unittest.TestCase):
+    """spec 自己声明的路径也必须落盘成规范形式，不只是「判得对」。
+
+    `inside()` 能正确判 `pkg\\train.py` 合不合法，但 spec 里存的是**原始串**；下游
+    `Path(name).as_posix()` 只在 Windows 折叠分隔符，于是同一份 experiment.json 在两侧算出
+    不同的 `registered` 集合与不同的候选身份摘要。这里把「存下来的形状 == 判定用的形状」钉住。
+    """
+
+    EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "quadratic"
+
+    def base_spec(self):
+        return read_json(self.EXAMPLE / "experiment.json")
+
+    def make_project(self):
+        """一个真项目：代码在 `pkg/`、数据在 `data/`，experiment.json 里写反斜杠。"""
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name).resolve()
+        for name in ("experiment.json", "model.py"):
+            shutil.copyfile(self.EXAMPLE / name, root / name)
+        runpy.run_path(str(self.EXAMPLE / "generate_data.py"))["generate"](root)
+        (root / "pkg").mkdir()
+        (root / "data").mkdir()
+        shutil.move(str(root / "model.py"), str(root / "pkg" / "model.py"))
+        for split in ("train", "dev", "test"):
+            shutil.move(str(root / f"{split}.json"), str(root / "data" / f"{split}.json"))
+        spec = read_json(root / "experiment.json")
+        spec.update({"entrypoint": "pkg\\model.py", "code_files": ["pkg\\model.py"],
+                     "train": "data\\train.json", "dev": "data\\dev.json",
+                     "test": "data\\test.json"})
+        write_json(root / "experiment.json", spec)
+        return root
+
+    def test_validated_spec_paths_are_canonical_on_both_hosts(self):
+        spec = self.base_spec()
+        spec.update({"entrypoint": "pkg\\model.py", "code_files": ["pkg\\model.py"],
+                     "train": "data\\train.json", "dev": "data/dev.json",
+                     "test": "data\\test.json", "provenance_files": ["notes\\run.log"]})
+        validate_spec(spec)
+        self.assertEqual(["pkg/model.py"], spec["code_files"])
+        self.assertEqual("pkg/model.py", spec["entrypoint"])
+        self.assertEqual("data/train.json", spec["train"])
+        self.assertEqual("data/dev.json", spec["dev"])
+        self.assertEqual("data/test.json", spec["test"])
+        self.assertEqual(["notes/run.log"], spec["provenance_files"])
+        # 形状一旦规范，两侧的改名手法（共享判据 / 宿主的 Path）都折叠不出第二个答案。
+        paths = [spec["entrypoint"], spec["train"], spec["dev"], spec["test"],
+                 *spec["code_files"], *spec["provenance_files"]]
+        for name in paths:
+            with self.subTest(path=name):
+                self.assertEqual(name, portable_path(name))
+                self.assertEqual(name, Path(name).as_posix())
+
+    def test_spec_path_fields_are_rejected_not_silently_stored(self):
+        for raw in HOSTILE:
+            for field in ("code_files", "train"):
+                spec = self.base_spec()
+                if field == "code_files":
+                    spec["code_files"] = [raw]
+                    spec["entrypoint"] = raw
+                else:
+                    spec[field] = raw
+                with self.subTest(field=field, path=raw):
+                    with self.assertRaisesRegex(ProtocolError, "规范的相对路径"):
+                        validate_spec(spec)
+
+    def test_initialize_stores_the_normalized_spec_and_hash_keys(self):
+        """真项目走一遍：experiment.json 写反斜杠，初始化后 state 与输入哈希键都已归一。"""
+        root = self.make_project()
+        state = initialize(root)
+        self.assertEqual(["pkg/model.py"], state["spec"]["code_files"])
+        self.assertEqual("pkg/model.py", state["spec"]["entrypoint"])
+        self.assertEqual("data/train.json", state["spec"]["train"])
+        self.assertEqual({"pkg/model.py", "experiment.json", "data/train.json",
+                          "data/dev.json", "data/test.json"}, set(state["input_hashes"]))
+        # revisions.create / confirmation_bundle 两侧的 registered 都取自这两个字段，
+        # 它们必须就是 input_hashes 的键本身，而不是「换个平台再折一次」的产物。
+        registered = {portable_path(name) for name in state["spec"]["code_files"]}
+        self.assertEqual({"pkg/model.py"}, registered)
+        for name in registered:
+            self.assertIn(name, state["input_hashes"])
+        experiment = Experiment(root)
+        self.addCleanup(experiment.close)
+        self.assertEqual(state["spec"], experiment.state()["spec"])
+
+    def test_existing_states_with_unnormalized_paths_need_no_migration(self):
+        """存量 state.db 里若已存着反斜杠名，读取侧统一折叠即可，不必改既有实验。
+
+        本仓当前 116 个 state.db 实测无一含反斜杠路径（`experiment.json` 全用简单名），
+        所以归一只需要管新写入；这条钉住的是「读旧形式也不炸」这一半——它同时也是
+        `SCHEMA_VERSION` 不必上升的判据。
+        """
+        root = self.make_project()
+        initialize(root)
+        experiment = Experiment(root)
+        legacy = copy.deepcopy(experiment.state())
+        legacy["spec"].update({"entrypoint": "pkg\\model.py", "code_files": ["pkg\\model.py"]})
+        for split in ("train", "dev", "test"):
+            legacy["spec"][split] = legacy["spec"][split].replace("data/", "data\\")
+        legacy["input_hashes"] = {
+            name.replace("pkg/model.py", "pkg\\model.py").replace("data/", "data\\"): value
+            for name, value in legacy["input_hashes"].items()}
+        with experiment.db:
+            experiment.db.execute("UPDATE state SET data=? WHERE id=1", (canonical(legacy),))
+        experiment.close()
+
+        store = RevisionStore(root / ".popper" / "revisions")
+        manifest = store.create(root, "H1", "D1", [CodeEdit("pkg/note.py", "x = 1\n")], "actor")
+        self.assertEqual(["pkg/model.py"], manifest["registered_code_files"])
+        self.assertEqual("pkg/model.py", manifest["entrypoint"])
+        self.assertIn("pkg/model.py", manifest["files"])
 
 
 class NoHostDependentJudgmentTests(unittest.TestCase):

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from .core import ProtocolError, inside, read_json
+from .core import ProtocolError, inside, portable_path, read_json
 
 
 DISCLOSURES = {
@@ -129,19 +129,26 @@ class Materializer:
         code_files = spec.get("code_files")
         if not isinstance(code_files, list):
             raise ProtocolError("experiment.json 缺少 code_files")
-        for name in ["experiment.json", *code_files, spec.get("train"), spec.get("dev"),
-                     spec.get("test")]:
+        declared = ["experiment.json", *code_files, spec.get("train"), spec.get("dev"),
+                    spec.get("test")]
+        if spec.get("provenance_files"):
+            declared.extend(spec["provenance_files"])
+        files = []
+        for name in declared:
             # 越界检查必须走 inside()：它对拼接结果先 resolve() 再判前缀。原先写成
             # `(self.root / name).is_relative_to(self.root)`，而 resolve() 之前的 `..`
             # 不折叠（`C:\proj\..\secret\x.json` 仍以前缀 `C:\proj` 开头），守卫对任何
             # `../` 都恒真——形同虚设，项目外的文件会被打进 reproducibility.zip。
             inside(self.root, name)
+            # 收进 files 的是归一值而非原始串：arcname 是压缩包内的条目名，与宿主分隔符
+            # 无关。这里的 experiment.json 是项目自带输入，不经过 validate_spec，`init`
+            # 也刻意不回写它，盘上可能仍是 `pkg\model.py` 这种写法；拿原始串当 arcname
+            # 会让同一份包在两侧长出不同条目名（Linux 上就是一个含反斜杠的怪名字）。
+            # 只归一产物，盘上的 experiment.json 保持用户原样。
+            files.append(portable_path(name))
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         zip_path = out_dir / "reproducibility.zip"
-        files = ["experiment.json", *code_files, spec["train"], spec["dev"], spec["test"]]
-        if spec.get("provenance_files"):
-            files.extend(spec["provenance_files"])
         lock_present = (self.root / "environment.lock").is_file()
         # 聚合已完成运行结果，使自包含核验脚本可独立重算 claim（不依赖目标 .popper）。
         aggregated = self._aggregate_results()

@@ -202,6 +202,30 @@ class MaterializeTests(unittest.TestCase):
             lock = __import__("json").loads(archive.read("environment.lock"))
             self.assertTrue(lock.get("_generated_stub"))
 
+    def test_build_normalizes_backslash_arcnames(self):
+        # experiment.json 是项目自带输入，不经过 validate_spec，`init` 也刻意不回写它，
+        # 盘上可能仍是反斜杠写法。zip 的 arcname 是包内条目名、与宿主分隔符无关：直接拿
+        # 原始串当 arcname，同一份包在 Linux 上会长出含反斜杠的怪名字。打包时归一，
+        # 但不静默改写用户盘上的 experiment.json。
+        import json
+        (self.project / "pkg").mkdir()
+        (self.project / "pkg" / "model.py").write_text("def main():\n    return 0\n",
+                                                      encoding="utf-8")
+        spec = json.loads((self.project / "experiment.json").read_text(encoding="utf-8"))
+        spec["entrypoint"] = "pkg\\model.py"
+        spec["code_files"] = ["pkg\\model.py"]
+        write_json(self.project / "experiment.json", spec)
+
+        result = Materializer(self.project).build_repro_package(self.out)
+
+        self.assertIn("pkg/model.py", result["files"])
+        with ZipFile(Path(result["path"])) as archive:
+            names = archive.namelist()
+        self.assertIn("pkg/model.py", names)
+        self.assertEqual([], [name for name in names if "\\" in name])
+        on_disk = json.loads((self.project / "experiment.json").read_text(encoding="utf-8"))
+        self.assertEqual(["pkg\\model.py"], on_disk["code_files"])
+
     def test_build_without_experiment_json_raises_protocol_error(self):
         missing = self.root / "missing"
         missing.mkdir()
