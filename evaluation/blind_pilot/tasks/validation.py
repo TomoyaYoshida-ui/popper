@@ -87,22 +87,6 @@ def _is_boundary(global_effect, slice_effects, threshold):
             and max(slice_effects) >= threshold and min(slice_effects) < threshold)
 
 
-def _subset_rows(rows, rule):
-    if rule.get("rule") == "abs_le":
-        bound = rule["bound"]
-        return [r for r in rows if abs(r["x"]) <= bound]
-    if rule.get("rule") == "id_prefix":
-        prefix = rule["prefix"]
-        return [r for r in rows if r["id"].startswith(prefix)]
-    if rule.get("rule") == "feature_ge":
-        index, value = rule["index"], rule["value"]
-        return [r for r in rows if r["features"][index] >= value]
-    if rule.get("rule") == "feature_lt":
-        index, value = rule["index"], rule["value"]
-        return [r for r in rows if r["features"][index] < value]
-    raise ProtocolError(f"未知子集规则: {rule}")
-
-
 def verify_condition(task_id, public_dir, gold_dir, spec, boundary_rule=None):
     """在 scratch 副本上验证 condition 带宽（基于 dev）并写 gold/validation-manifest.json。
 
