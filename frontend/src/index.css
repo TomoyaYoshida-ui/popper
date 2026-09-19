@@ -128,6 +128,26 @@ canvas.stars-canvas { position: fixed; inset: 0; z-index: 0; pointer-events: non
 .newq:hover { background: var(--pill-active); color: var(--fg); }
 .newq kbd { font-size: 10px; color: var(--faint); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
 
+/* 工作区切换（多工作区根） */
+.wsbar {
+  display: flex; align-items: center; gap: 8px; width: calc(100% - 24px); margin: 12px 12px 0;
+  padding: 8px 10px; background: var(--pill); border: 1px solid var(--border); border-radius: 9px;
+  color: var(--fg-2); font-size: 13px; text-align: left;
+}
+.wsbar:hover { background: var(--pill-active); color: var(--fg); }
+.wsbar svg.i { width: 15px; height: 15px; color: var(--accent-2); flex: none; }
+.wsbar .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsbar .chev { color: var(--faint); font-size: 10px; }
+.wsrow { cursor: pointer; }
+.wsrow.on { color: var(--accent-2); }
+.wsrow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wsdel {
+  margin-left: auto; width: 20px; height: 20px; display: grid; place-items: center;
+  border-radius: 6px; color: var(--faint); font-size: 12px; flex: none;
+}
+.wsdel:hover { color: #ff8a8a; background: rgba(255, 95, 87, .12); }
+.ctx-hint { padding: 6px 10px 4px; font-size: 11px; color: var(--faint); }
+
 .sec-h {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 12px 6px; font-size: 11px; letter-spacing: .08em; color: var(--faint);

@@ -120,6 +120,9 @@ def main(argv=None):
     web.add_argument("--research-run", type=Path, action="append", default=None,
                      help="登记研究 run 目录（可重复传参）：工作台假设环只读展示该目录 "
                           "research.sqlite 的真实研究状态（假设/观察/修订/决策/反思）")
+    web.add_argument("--workspace-root", type=Path, action="append", default=None,
+                     help="登记额外工作区根目录（可重复传参）：每个根持有独立的 Quest "
+                          "工作区与稿件产物，登记持久化，工作台侧栏可切换当前根")
     corpus = research_commands.add_parser("corpus", help="领域语料库与社区共享协议（opt-in）")
     corpus_commands = corpus.add_subparsers(dest="corpus_command", required=True)
     for name in ("init", "stats", "list-community", "verify-community"):
@@ -479,7 +482,8 @@ def main(argv=None):
         if args.command == "serve":
             from .server import serve
             serve(args.project, args.port, args.trusted_local, args.campaign,
-                  research_runs=tuple(args.research_run or ()))
+                  research_runs=tuple(args.research_run or ()),
+                  workspace_roots=tuple(args.workspace_root or ()))
             return 0
         elif args.command == "research":
             if args.research_command == "worker":

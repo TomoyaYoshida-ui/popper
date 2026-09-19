@@ -15,6 +15,7 @@ from .reproduction import STATE_DIR
 
 SCHEMA_VERSION = "1.0"
 WORKSPACE_REL = ".popper/workspace.json"
+REGISTRY_REL = ".popper/workspaces.json"
 DELIVERABLES_REL = "deliverables"
 
 PHASE_LABEL = {
@@ -260,3 +261,133 @@ class Workspace:
             raise ProtocolError("仅允许覆写已生成的物化文件")
         target.write_text(str(content), encoding="utf-8")
         return target
+
+
+class WorkspaceHub:
+    """多工作区根注册表：主根 + 显式登记的额外根 + 当前根指针。
+
+    主根是 serve 的项目目录，永远存在且不可移除；额外根只能经 CLI
+    --workspace-root 显式登记（不做磁盘扫描，与 --research-run 同一模式），
+    登记持久化到 <project>/.popper/workspaces.json，重启不丢；当前根指针同样
+    持久化。每个根的 Quest 与产物状态仍只存在于该根自己的 workspace.json /
+    deliverables/ 里——注册表只保存「有哪些根、当前在哪个根」，不复制业务状态，
+    根间数据天然隔离。所有方法都要求调用方持有 ws_lock（与 Workspace 共用一把锁）。
+    """
+
+    def __init__(self, project_dir, lock=None):
+        self.primary = Workspace(project_dir, lock)
+        self.lock = self.primary.lock
+        self.registry_path = self.primary.root / REGISTRY_REL
+        self._cache: dict[str, Workspace] = {str(self.primary.root): self.primary}
+        self._ensure_registry()
+
+    # -- 注册表持久化 ----------------------------------------------------------
+    @staticmethod
+    def _derive_name(root: Path) -> str:
+        """根显示名：优先真实项目名（experiment.json / 复现任务），否则目录名。"""
+        return Workspace(root).project_spec() or root.name
+
+    def _load(self) -> dict:
+        if not self.registry_path.is_file():
+            return {"schema_version": SCHEMA_VERSION, "current": None, "roots": []}
+        try:
+            data = read_json(self.registry_path)
+        except Exception as error:
+            raise ProtocolError(f"workspaces.json 无法解析：{error}")
+        if not isinstance(data, dict) or not isinstance(data.get("roots"), list):
+            raise ProtocolError("workspaces.json 结构不合法")
+        data.setdefault("current", None)
+        return data
+
+    def _save(self, reg: dict) -> None:
+        write_json(self.registry_path, reg)
+
+    def _ensure_registry(self) -> None:
+        """保证注册表存在且自洽：主根在列、当前指针有效；仅自修复时写文件。"""
+        reg = self._load()
+        changed = False
+        if not any(entry.get("primary") for entry in reg["roots"]):
+            reg["roots"].insert(0, {
+                "wid": "primary", "root": str(self.primary.root),
+                "name": self._derive_name(self.primary.root),
+                "primary": True, "registered": Workspace._now(),
+            })
+            changed = True
+        if reg["current"] is None or not any(entry["wid"] == reg["current"]
+                                             for entry in reg["roots"]):
+            reg["current"] = reg["roots"][0]["wid"]
+            changed = True
+        if changed:
+            self._save(reg)
+
+    # -- 登记 ------------------------------------------------------------------
+    def register_cli_roots(self, paths) -> None:
+        """CLI 显式登记额外工作区根：不存在/非目录拒绝；重复与主根幂等跳过。"""
+        reg = self._load()
+        known = {Path(entry["root"]).resolve() for entry in reg["roots"]}
+        changed = False
+        for raw in paths or ():
+            root = Path(raw).resolve()
+            if not root.is_dir():
+                raise ProtocolError(f"工作区根不存在或不是目录：{root}")
+            if root in known:
+                continue
+            reg["roots"].append({
+                "wid": f"w_{uuid.uuid4().hex[:12]}", "root": str(root),
+                "name": self._derive_name(root), "primary": False,
+                "registered": Workspace._now(),
+            })
+            known.add(root)
+            changed = True
+        if changed:
+            self._save(reg)
+
+    # -- 查询 / 切换 / 移除 ------------------------------------------------------
+    def current_wid(self) -> str:
+        return self._load()["current"]
+
+    def current(self) -> Workspace:
+        reg = self._load()
+        for entry in reg["roots"]:
+            if entry["wid"] == reg["current"]:
+                return self._workspace_for(entry["root"])
+        return self.primary
+
+    def roots_payload(self) -> list[dict]:
+        reg = self._load()
+        items = []
+        for entry in reg["roots"]:
+            item = dict(entry)
+            if entry.get("primary"):
+                # 主根显示名跟随真实项目名（experiment.json 改名即生效）。
+                item["name"] = self._derive_name(self.primary.root)
+            item["current"] = entry["wid"] == reg["current"]
+            items.append(item)
+        return items
+
+    def _workspace_for(self, root_str: str) -> Workspace:
+        ws = self._cache.get(root_str)
+        if ws is None:
+            ws = Workspace(root_str, self.lock)
+            self._cache[root_str] = ws
+        return ws
+
+    def switch(self, wid: str) -> None:
+        reg = self._load()
+        if not any(entry["wid"] == wid for entry in reg["roots"]):
+            raise ProtocolError("工作区不存在")
+        reg["current"] = wid
+        self._save(reg)
+
+    def remove(self, wid: str) -> None:
+        """从注册表摘除非主根（磁盘数据保留）；摘除当前根则回退主根。"""
+        reg = self._load()
+        entry = next((e for e in reg["roots"] if e["wid"] == wid), None)
+        if entry is None:
+            raise ProtocolError("工作区不存在")
+        if entry.get("primary"):
+            raise ProtocolError("主工作区不可移除")
+        reg["roots"] = [e for e in reg["roots"] if e["wid"] != wid]
+        if reg["current"] == wid:
+            reg["current"] = reg["roots"][0]["wid"]
+        self._save(reg)

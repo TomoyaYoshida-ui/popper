@@ -210,6 +210,8 @@ export async function postCampaignDecision(
 
 // ---- 工作区 / 稿件物化 ----
 export type WorkspaceOp =
+  | { op: 'workspace_switch'; wid: string }
+  | { op: 'workspace_remove'; wid: string }
   | { op: 'folder_create'; name: string }
   | { op: 'folder_rename'; fid: string; name: string }
   | { op: 'folder_remove'; fid: string }

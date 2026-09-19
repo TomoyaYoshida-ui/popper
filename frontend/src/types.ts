@@ -110,11 +110,23 @@ export type Deliverable = {
   created: string
   bytes: number
 }
+// 多工作区根：注册表由后端持久化（主根 = serve 的项目目录，永在不可移除）
+export type WorkspaceRoot = {
+  wid: string
+  root: string
+  name: string
+  primary: boolean
+  registered: string
+  current: boolean
+}
 export type Workspace = {
   schema_version: string
   meta: { next_quest_counter: number; seed?: { folder_name: string; phase?: string | null; seeded_at: string } }
   folders: Folder[]
   deliverables: Deliverable[]
+  // 多工作区：已登记根清单 + 当前根 wid（Quest/产物跟随当前根）
+  roots: WorkspaceRoot[]
+  current_root: string
   // 稿件模板与 AI 披露口径中文标签：后端单一下发，前端不再硬编码或回退
   template_labels: Record<string, string>
   disclosure_labels: Record<string, string>

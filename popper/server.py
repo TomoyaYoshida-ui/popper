@@ -18,7 +18,7 @@ from .workspace import (
     TEMPLATE_LABELS,
     VALID_DISCLOSURES,
     VALID_TEMPLATES,
-    Workspace,
+    WorkspaceHub,
 )
 from .materialize import Materializer
 from .orchestrator import Orchestrator
@@ -352,7 +352,7 @@ class Workstation(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address, project, trusted_local=False, campaign_dir=None,
-                 research_runs=()):
+                 research_runs=(), workspace_roots=()):
         self.project = Path(project).resolve()
         self.mode = project_mode(self.project)
         # 研究运行目录只能显式登记（--research-run，可重复）：不做磁盘扫描，
@@ -378,13 +378,21 @@ class Workstation(ThreadingHTTPServer):
         self._campaign_nodes = None
         self.ws_lock = threading.Lock()
         self.materialize_lock = threading.Lock()
-        self.workspace = Workspace(self.project, self.ws_lock)
+        # 多工作区根：主根 = 项目目录；额外根仅经 CLI --workspace-root 显式登记。
+        # 服务器内一律经 .workspace 属性取「当前根」的 Workspace，切换即全局生效。
+        self.workspaces = WorkspaceHub(self.project, self.ws_lock)
+        self.workspaces.register_cli_roots(workspace_roots)
         # SSE 订阅者：monitor 线程按资源指纹做 diff，只广播变化资源的完整补丁。
         self._subscribers: set[queue.Queue] = set()
         super().__init__(address, Handler)
         self._start_monitor()
 
     # ── 资源 payload：HTTP 端点与 SSE monitor 共用同一份构造逻辑 ──────────────
+
+    @property
+    def workspace(self):
+        """当前工作区根的 Workspace：多根切换后所有 Quest/产物读写都落在当前根。"""
+        return self.workspaces.current()
 
     def state_payload(self):
         """构造 GET /api/state 的响应（含后端单一定义的阶段标签 phases）。"""
@@ -428,16 +436,18 @@ class Workstation(ThreadingHTTPServer):
         return payload
 
     def workspace_payload(self):
-        """构造 GET /api/workspace 的响应。"""
+        """构造 GET /api/workspace 的响应（当前根的 Quest 状态 + 根注册表）。"""
         with self.ws_lock:
-            if self.workspace.is_empty():
-                self.workspace.seed_if_empty(
-                    self.workspace.project_spec(),
-                    self.workspace.current_phase())
-            data = self.workspace.read()
+            ws = self.workspaces.current()
+            if ws.is_empty():
+                ws.seed_if_empty(ws.project_spec(), ws.current_phase())
+            data = ws.read()
+            roots = self.workspaces.roots_payload()
+            current_root = self.workspaces.current_wid()
         return {"schema_version": data["schema_version"], "meta": data["meta"],
                 "folders": data["folders"],
-                "deliverables": self.workspace.list_deliverables(data),
+                "deliverables": ws.list_deliverables(data),
+                "roots": roots, "current_root": current_root,
                 # 稿件模板与 AI 披露口径中文标签：后端单一下发，前端不再硬编码或回退。
                 "template_labels": TEMPLATE_LABELS,
                 "disclosure_labels": DISCLOSURE_LABELS,
@@ -554,7 +564,9 @@ class Workstation(ThreadingHTTPServer):
             state_src = self.project / STATE_DIR
         return {
             "state": (self._path_sig(state_src), self._job_sig(self.job)),
-            "workspace": self._path_sig(self.project / ".popper" / "workspace.json"),
+            # 工作区：注册表（登记/切换/移除都会改它）+ 当前根 workspace.json 任一变化。
+            "workspace": (self._path_sig(self.workspaces.registry_path),
+                          self._path_sig(self.workspaces.current().path)),
             "campaign": (
                 self._path_sig(self.campaign_dir / "campaign.json")
                 if self.campaign_dir else None,
@@ -985,6 +997,19 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict) or not isinstance(payload.get("op"), str):
             raise ProtocolError("请求必须含 op 字符串")
         op = payload["op"]
+        # 多工作区：切换/移除操作作用于根注册表而非当前根的 workspace.json，
+        # 返回切换后的全量工作区载荷（新当前根的 folders + roots 清单）。
+        if op in ("workspace_switch", "workspace_remove"):
+            wid = payload.get("wid")
+            if not isinstance(wid, str) or not wid:
+                raise ProtocolError("缺少 wid")
+            with self.server.ws_lock:
+                if op == "workspace_switch":
+                    self.server.workspaces.switch(wid)
+                else:
+                    self.server.workspaces.remove(wid)
+            self.send(200, {"ok": True, **self.server.workspace_payload()})
+            return
         handler = {
             "folder_create": (["name"], lambda w, d: w.folder_create(d, payload["name"])),
             "folder_rename": (["fid", "name"], lambda w, d: w.folder_rename(d, payload["fid"], payload["name"])),
@@ -1039,10 +1064,11 @@ class Handler(BaseHTTPRequestHandler):
             "disclosure": item["disclosure"], "created": item["created"], "bytes": item["bytes"]}})
 
 
-def serve(project, port, trusted_local=False, campaign_dir=None, research_runs=()):
+def serve(project, port, trusted_local=False, campaign_dir=None, research_runs=(),
+          workspace_roots=()):
     project_mode(project)
     server = Workstation(("127.0.0.1", port), project, trusted_local, campaign_dir,
-                         research_runs=research_runs)
+                         research_runs=research_runs, workspace_roots=workspace_roots)
     print(f"Popper workstation: http://127.0.0.1:{server.server_address[1]}", flush=True)
     try:
         server.serve_forever()

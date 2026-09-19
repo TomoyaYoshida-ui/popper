@@ -3,6 +3,7 @@ import { postWorkspaceOp } from '../api'
 import type { Folder, Quest, Workspace } from '../types'
 
 type Ctx = { x: number; y: number; folderId: string; taskId?: string } | null
+type WsMenu = { x: number; y: number } | null
 
 function fmt(t: string): string {
   if (!t) return ''
@@ -34,16 +35,30 @@ export function QuestsSidebar({
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const [ctx, setCtx] = useState<Ctx>(null)
+  const [wsMenu, setWsMenu] = useState<WsMenu>(null)
   const [renaming, setRenaming] = useState<{ fid: string; name: string } | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
   const [overFid, setOverFid] = useState<string | null>(null)
   const foldTimer = useRef<number | null>(null)
 
   const folders = workspace?.folders ?? []
+  const roots = workspace?.roots ?? []
+  const currentRoot = roots.find((r) => r.wid === workspace?.current_root) ?? null
   const seedQuid = folders.length && folders[0].tasks.length ? folders[0].tasks[0].quid : null
 
   const run = async (op: Parameters<typeof postWorkspaceOp>[0]) => {
     try { await postWorkspaceOp(op) } finally { reload() }
+  }
+
+  /** 多工作区：切换当前根 / 从侧边栏移除非主根（磁盘数据保留），后端返回切换后的全量载荷 */
+  const switchRoot = async (wid: string) => {
+    setWsMenu(null)
+    if (wid === workspace?.current_root) return
+    await run({ op: 'workspace_switch', wid })
+  }
+  const removeRoot = async (wid: string) => {
+    setWsMenu(null)
+    await run({ op: 'workspace_remove', wid })
   }
 
   const toggleFolder = (fid: string, ev?: React.MouseEvent) => {
@@ -120,8 +135,43 @@ export function QuestsSidebar({
     return () => document.removeEventListener('mousedown', close)
   }, [ctx])
 
+  useEffect(() => {
+    if (!wsMenu) return
+    const close = () => setWsMenu(null)
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [wsMenu])
+
   return (
     <div>
+      <button className="wsbar" title={currentRoot?.root ?? ''}
+        onClick={(e) => {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+          setWsMenu({ x: Math.min(r.left, window.innerWidth - 260), y: Math.min(r.bottom + 6, window.innerHeight - 200) })
+        }}>
+        <svg className="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+        <span className="nm">{currentRoot?.name ?? ''}</span>
+        <span className="chev">▾</span>
+      </button>
+
+      {wsMenu && (
+        <div className="ctx-menu" style={{ left: wsMenu.x, top: wsMenu.y }}>
+          {roots.map((r) => (
+            <div key={r.wid} className={`ctx-item wsrow ${r.current ? 'on' : ''}`} title={r.root}
+              onClick={() => switchRoot(r.wid)}>
+              <span className="ic">{r.current ? '✓' : '·'}</span>
+              <span className="nm">{r.name}</span>
+              {!r.primary && (
+                <span className="wsdel" title="从侧边栏移除该工作区（磁盘数据保留）"
+                  onClick={(e) => { e.stopPropagation(); removeRoot(r.wid) }}>✕</span>
+              )}
+            </div>
+          ))}
+          <div className="ctx-sep" />
+          <div className="ctx-hint">新根用 popper serve --workspace-root 登记</div>
+        </div>
+      )}
+
       <button className="newq" onClick={quickAdd}>
         <span>创建 Quest</span><kbd>Ctrl N</kbd>
       </button>
