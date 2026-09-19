@@ -17,10 +17,10 @@ from unittest.mock import patch
 from popper import core
 from popper.core import (EVALUATORS, Experiment, ProtocolError, dataset, evaluator_for_metric, initialize,
                          model_inputs, score, write_json)
-from popper.domains import protocol, register, registered_metrics
+from popper.domains import STAGED_ARTIFACTS, protocol, register, registered_metrics
 from popper.domains.protocol import EXECUTION_TRACE_NAME, Invocation, MetricSpec
 from popper.domains.staged import StagedArtifactsPack
-from popper.research.confirmation_runner import require_aligned_prediction
+from popper.research.confirmation_runner import require_supported_shape
 
 
 PILOT = Path(__file__).resolve().parents[1] / "examples" / "throughput-sort"
@@ -494,11 +494,10 @@ class PilotThroughputEndToEndTests(unittest.TestCase):
         self.assertTrue(replay["claim_recomputed"])
         self.assertTrue(Path(exp.report()).is_file())
 
-    def test_staged_pilot_cannot_enter_holdout(self):
-        with self.assertRaises(ProtocolError) as caught:
-            require_aligned_prediction("algorithm-throughput-v1")
-        self.assertIn("未支持的任务形状", str(caught.exception))
-        self.assertIn("staged_artifacts", str(caught.exception))
+    def test_staged_pilot_can_enter_holdout(self):
+        pack = require_supported_shape("algorithm-throughput-v1")
+        self.assertEqual(STAGED_ARTIFACTS, pack.task_shape)
+        self.assertFalse(pack.units_from_data)
 
     def test_pilot_declaration_uses_non_default_names(self):
         pack = protocol.get("algorithm-throughput-v1")
@@ -575,10 +574,10 @@ class PilotConvergenceEndToEndTests(unittest.TestCase):
         # claim 的差值取自最终测试划分，冻结后的选择也不得改变这一口径。
         self.assertAlmostEqual(test["rk4"] - test["euler"], claim["delta"], places=9)
 
-    def test_convergence_pilot_cannot_enter_holdout(self):
-        with self.assertRaises(ProtocolError) as caught:
-            require_aligned_prediction("convergence-order-v1")
-        self.assertIn("staged_artifacts", str(caught.exception))
+    def test_convergence_pilot_can_enter_holdout(self):
+        pack = require_supported_shape("convergence-order-v1")
+        self.assertEqual(STAGED_ARTIFACTS, pack.task_shape)
+        self.assertFalse(pack.units_from_data)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-﻿"""treatment-effect-v1 域包与「统计单元」回炉抽象的契约测试（PILOT3 / §8.2 第三试点）。
+"""treatment-effect-v1 域包与「统计单元」回炉抽象的契约测试（PILOT3 / §8.2 第三试点）。
 
 覆盖四件事：
 1. 分析单元成为一等统计单位：repeat_unit=analysis_unit、unit_values 从数据导出、
@@ -20,7 +20,7 @@ from unittest.mock import patch
 from popper.core import Experiment, ProtocolError, initialize, read_json, validate_spec
 from popper.domains import protocol
 from popper.gates import (GateError, claim_outcome, claim_stats, l1_significance)
-from popper.research.confirmation_runner import require_aligned_prediction
+from popper.research.confirmation_runner import require_supported_shape
 
 PILOT = Path(__file__).resolve().parents[1] / "examples" / "treatment-effect"
 PILOT_FILES = ("experiment.json", "model.py", "train.json", "dev.json", "test.json")
@@ -282,9 +282,11 @@ class PilotTreatmentEffectEndToEndTests(unittest.TestCase):
         self.assertTrue(Path(exp.report()).is_file())
 
     def test_treatment_pilot_cannot_enter_holdout(self):
+        """分析单元形状的重复取值要从带标签数据导出，确认端拿不到标签，必须立即失败。"""
         with self.assertRaises(ProtocolError) as caught:
-            require_aligned_prediction(PACK_ID)
-        self.assertIn("staged_artifacts", str(caught.exception))
+            require_supported_shape(PACK_ID)
+        self.assertIn("未支持的任务形状", str(caught.exception))
+        self.assertIn("重复单位取自数据", str(caught.exception))
 
 
 if __name__ == "__main__":

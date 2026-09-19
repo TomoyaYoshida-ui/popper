@@ -9,7 +9,7 @@ from pathlib import Path
 from .. import sandbox
 from ..core import (Experiment, ProtocolError, _require_holdout_seal, canonical,
                     dataset, digest, evaluator_pack, file_hash, inside, model_inputs,
-                    read_json, score, write_json)
+                    read_json, repeat_values, score, write_json)
 from ..harness import for_policy as harness_for_policy
 from .actions import (ADD_CONTROL, REQUEST_CONFIRMATION, RUN_EXPERIMENT, STOP,
                       CONCLUDE_SCOPE_BOUNDARY, IMPLEMENT_REVISION,
@@ -410,7 +410,10 @@ class ResearchController:
             artifacts = self._staged_inputs(
                 pack.invocation(), inputs_dir, state, rows, config, evaluator_id)
             seed_specs = []
-            for seed in spec["seeds"]:
+            # 重复单位取值与 core.evaluate 同源：分析单元域包从本划分数据导出，
+            # 训练种子/独立重复域包取预注册 seeds。本处曾经直接读 spec["seeds"]，
+            # 会让「单元取自数据」的域包一个作业都不产生。
+            for seed in repeat_values(pack, rows, spec):
                 args, outputs = job_invocation(pack, seed)
                 output = outputs[0]
                 job = JobSpec(
@@ -452,7 +455,8 @@ class ResearchController:
                     prediction_path = run_dir / pack.invocation().prediction_name(seed)
                     self.worker.fetch_artifact(job.job_id, output, prediction_path)
                     points.append({"seed": seed,
-                                   "value": score(rows, read_json(prediction_path), evaluator_id)})
+                                   "value": score(rows, read_json(prediction_path), evaluator_id,
+                                                  unit=seed)})
             result = self.exp.build_result(rid, state, config, split, points, started, sandboxed)
             self.exp.complete_run(rid, result)
             return result

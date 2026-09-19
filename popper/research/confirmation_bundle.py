@@ -5,14 +5,15 @@ import hashlib
 import json
 import shutil
 import uuid
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
 
 from ..core import (ProtocolError, dataset, digest, evaluator_pack, file_hash, is_safe_relative,
-                    model_inputs, read_json, write_json)
+                    model_inputs, portable_path, read_json, write_json)
 from .confirmation_contracts import validate_contract, validate_submission
 from .evaluation_service import _validate_response, scoring_code_hash
 from .execution import assess_execution
-from .workers import job_invocation
+from .workers import job_invocation, staged_input_artifacts
 
 
 def _sha256(data):
@@ -143,23 +144,31 @@ def _evaluated_request(controller, observation, state):
 def _execution_evidence(controller, revision, observation, request, state):
     revision_id = revision["revision_id"]
     revision_sha = file_hash(controller.revisions.path(revision_id) / "revision.json")
-    input_root = controller.run_dir / "revision-inputs" / revision_id
-    dev_input_path = _file(input_root, "inputs.json")
-    config_path = _file(input_root, "config.json")
-    if (read_json(dev_input_path) != model_inputs(
-            dataset(controller.project / state["spec"]["dev"], state["evaluator_id"]), state["evaluator_id"])
-            or read_json(config_path) != controller.manifest["configs"][observation["hypothesis_id"]]):
-        raise ProtocolError("候选开发输入或实际干预配置与冻结研究不一致")
-    expected_inputs = [
-        {"source": str(controller.project / state["spec"]["train"]), "target": "train.json",
-         "sha256": state["input_hashes"][state["spec"]["train"]], "role": "training_data"},
-        {"source": str(dev_input_path), "target": "inputs.json", "sha256": file_hash(dev_input_path),
-         "role": "development_features_without_labels"},
-        {"source": str(config_path), "target": "config.json", "sha256": file_hash(config_path),
-         "role": "frozen_intervention"},
-    ]
-    expected_predictions = []
     pack = evaluator_pack(state["evaluator_id"])
+    invocation = pack.invocation()
+    rows = dataset(controller.project / state["spec"]["dev"], state["evaluator_id"])
+    input_root = controller.run_dir / "revision-inputs" / revision_id
+    # 落位名与审计标签都从域包声明派生，与控制器的 _staged_inputs 同源：形状不同
+    # （逐样本预测 / 声明式制品，有或没有 train 角色）时不存在第二份要同步的字面量。
+    # train 角色的源不在 revision-inputs 下——控制器直接指向冻结的项目数据文件。
+    sources = {}
+    for role, basename in invocation.inputs:
+        if role == "train":
+            train = state["spec"]["train"]
+            sources[role] = (controller.project / train, state["input_hashes"][train])
+            continue
+        path = _file(input_root, basename)
+        if role == "inputs":
+            if read_json(path) != model_inputs(rows, state["evaluator_id"]):
+                raise ProtocolError("候选开发输入或实际干预配置与冻结研究不一致")
+        elif role == "config":
+            if read_json(path) != controller.manifest["configs"][observation["hypothesis_id"]]:
+                raise ProtocolError("候选开发输入或实际干预配置与冻结研究不一致")
+        else:
+            raise ProtocolError(f"未支持的调用输入角色: {role!r}")
+        sources[role] = (path, file_hash(path))
+    expected_inputs = [asdict(item) for item in staged_input_artifacts(invocation, sources)]
+    expected_predictions = []
     for seed in state["spec"]["seeds"]:
         key = f"{observation['run_id']}:seed:{seed}:execution-v1"
         job_id = "JOB-" + digest({"idempotency_key": key})[:24]
@@ -420,7 +429,10 @@ def export_confirmation_bundle(controller, contract_envelope, pinned_public_key,
                        else set(evidence) == set(decision["observation_refs"]))
             if (not refs_ok or actual_pairs != expected_pairs or not boundary):
                 raise ProtocolError("边界确认请求缺少完整的开发切片证据")
-        code_files = {Path(name).as_posix(): state["input_hashes"][name] for name in state["spec"]["code_files"]}
+        # 与 revisions.create 同一口径：候选身份里的文件名必须走共享判据，不能用
+        # `Path(name).as_posix()`（宿主相关，两侧会算出不同的 files 摘要）。
+        code_files = {portable_path(name): state["input_hashes"][name]
+                      for name in state["spec"]["code_files"]}
         revision_root = (controller.revisions.path(revision["revision_id"])
                          if revision is not None else controller.project)
         candidate_identity = {

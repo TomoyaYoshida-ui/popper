@@ -27,7 +27,7 @@ from .confirmation_bundle import verify_bundle
 from .confirmation_contracts import (public_key_b64, sign_payload, validate_ticket,
                                      verify_envelope)
 from .revisions import RevisionStore
-from .workers import InputArtifact, JobSpec, LocalWorker, job_invocation
+from .workers import JobSpec, LocalWorker, job_invocation, staged_input_artifacts
 
 
 BACKEND = "windows_low_integrity_engineering"
@@ -54,12 +54,18 @@ def _runtime_metadata(runtime_id):
     return {**value, "metadata_sha256": digest(value)}
 
 
-def require_aligned_prediction(evaluator_id):
-    """holdout 只支持逐样本预测：其它形状必须立即失败，而不是按逐样本契约猜参数。"""
+def require_supported_shape(evaluator_id):
+    """holdout 的重复取值必须来自冻结合同的 seeds：其它形状立即失败。
+
+    逐样本（``train_seed``）与声明式制品（``independent_run``）的重复取值都是预注册
+    seeds，故共用同一份 ``{seed, rows}`` 回执契约执行，只是判分输入一个是逐样本预测、
+    另一个是制品里的原始测量。分析单元形状（``units_from_data``）的重复取值要从带标
+    签的数据行导出，确认端刻意拿不到那些标签，必须立即失败而不是按 seeds 猜参数。
+    """
     pack = evaluator_pack(evaluator_id)
-    if pack.task_shape != ALIGNED_PREDICTION:
+    if pack.units_from_data:
         raise ProtocolError(
-            f"未支持的任务形状: {pack.task_shape!r}（holdout 只支持逐样本预测）")
+            f"未支持的任务形状: {pack.task_shape!r}（重复单位取自数据，确认端拿不到标签）")
     return pack
 
 
@@ -69,12 +75,20 @@ def _validate_features(rows, evaluator_id):
     return {row["id"] for row in rows}
 
 
-def _validate_prediction_rows(rows, sample_ids, evaluator_id):
-    """预测的「形状 + id 覆盖」由领域包判定；runner 不接触标签。"""
-    evaluator_pack(evaluator_id).validate_prediction_values(rows, sample_ids, None)
+def _validate_prediction_rows(payload, features, sample_ids, evaluator_id):
+    """预测的形状校验由领域包判定；runner 不接触标签。
+
+    逐样本形状只需「形状 + id 覆盖」；声明式制品形状要拿工作负载行对照制品里的测量
+    （如收敛阶要求 steps 与工作负载逐位对齐）。两条分支都调领域包自己的入口。
+    """
+    pack = evaluator_pack(evaluator_id)
+    if pack.task_shape == ALIGNED_PREDICTION:
+        pack.validate_prediction_values(payload, sample_ids, None)
+    else:
+        pack.validate_predictions(features, payload, None)
 
 
-def _validate_predictions(predictions, identity, sample_ids, succeeded):
+def _validate_predictions(predictions, identity, features, sample_ids, succeeded):
     if not isinstance(predictions, dict) or set(predictions) != set(ROLES):
         raise ProtocolError("Confirmation predictions must contain control and candidate")
     seeds = identity["seeds"]
@@ -88,7 +102,8 @@ def _validate_predictions(predictions, identity, sample_ids, succeeded):
             if (not isinstance(point, dict) or set(point) != {"seed", "rows"}
                     or type(point["seed"]) is not int or point["seed"] != seeds[index]):
                 raise ProtocolError("Confirmation seeds differ from their frozen execution order")
-            _validate_prediction_rows(point["rows"], sample_ids, identity["evaluator_id"])
+            _validate_prediction_rows(point["rows"], features, sample_ids,
+                                      identity["evaluator_id"])
 
 
 def _copy_registered_code(source, destination, files):
@@ -169,7 +184,7 @@ def _receipt_identity(manifest, ticket_payload, contract):
             "code_hashes": {role: manifest["identity"][role]["files"] for role in ROLES}}
 
 
-def _validate_saved_result(result, expected, runner_key, identity, sample_ids):
+def _validate_saved_result(result, expected, runner_key, identity, features, sample_ids):
     if not isinstance(result, dict) or set(result) != {"runner_receipt", "predictions"}:
         raise ProtocolError("Saved confirmation result is incomplete")
     payload = verify_envelope(result["runner_receipt"], runner_key)
@@ -184,7 +199,7 @@ def _validate_saved_result(result, expected, runner_key, identity, sample_ids):
         raise ProtocolError("Saved runner receipt status is malformed")
     if payload["predictions_sha256"] != digest(result["predictions"]):
         raise ProtocolError("Saved predictions differ from the signed runner receipt")
-    _validate_predictions(result["predictions"], identity, sample_ids,
+    _validate_predictions(result["predictions"], identity, features, sample_ids,
                           succeeded=payload["status"] == "succeeded")
     return result
 
@@ -219,8 +234,9 @@ def run_confirmation_bundle(bundle_dir, ticket, features, service_public_key,
         raise ProtocolError("This runner cannot supply the registered execution backend")
     identity = manifest["identity"]
     # 最早能拿到 evaluator_id 的位置：在任何目录落盘、建 job 与执行之前先定形状，
-    # 非逐样本形状在这里失败，不产生 job 或部分状态。
-    pack = require_aligned_prediction(identity["evaluator_id"])
+    # 不受支持的形状在这里失败，不产生 job 或部分状态。
+    pack = require_supported_shape(identity["evaluator_id"])
+    call = pack.invocation()
     sample_ids = _validate_features(features, identity["evaluator_id"])
     if digest(features) != ticket_payload["features_sha256"]:
         raise ProtocolError("Confirmation features differ from the signed service ticket")
@@ -232,7 +248,8 @@ def run_confirmation_bundle(bundle_dir, ticket, features, service_public_key,
         if (not invocation_path.is_file() or read_json(invocation_path) != invocation
                 or not result_path.is_file()):
             raise ProtocolError("Confirmation directory conflicts or was interrupted; execution cannot repeat")
-        return _validate_saved_result(read_json(result_path), expected, runner_key, identity, sample_ids)
+        return _validate_saved_result(read_json(result_path), expected, runner_key, identity,
+                                      features, sample_ids)
 
     # Exclusive directory creation consumes this local invocation before copying
     # code or launching any work. Crashes preserve it as a non-retryable attempt.
@@ -248,9 +265,10 @@ def run_confirmation_bundle(bundle_dir, ticket, features, service_public_key,
         revisions, revision_ids = _import_revisions(bundle, output, manifest)
         inputs = output / "inputs"
         inputs.mkdir()
+        # inputs 角色的源必须原样是 ticket 里签名的 features：ticket 绑的是
+        # digest(model_inputs(...))，任何改写都会在 features_sha256 上暴露。
         feature_path = inputs / "inputs.json"
         write_json(feature_path, features)
-        train_path = bundle / "train.json"
         worker = LocalWorker(output / "jobs", revisions)
         for role in ROLES:
             registered = identity[role]
@@ -258,14 +276,14 @@ def run_confirmation_bundle(bundle_dir, ticket, features, service_public_key,
             write_json(config_path, registered["config"])
             revision_id = revision_ids[role]
             revision_hash = file_hash(revisions.path(revision_id) / "revision.json")
-            # 输入落位名沿用字面量：此文件受 require_aligned_prediction 守卫，故输入
-            # 落位名与 aligned 声明逐字段相同（声明驱动的唯一入口是 job_invocation）。
-            artifacts = (
-                InputArtifact(str(train_path), "train.json", identity["train_sha256"], "training_data"),
-                InputArtifact(str(feature_path), "inputs.json", file_hash(feature_path),
-                              "heldout_features_without_labels"),
-                InputArtifact(str(config_path), "config.json", file_hash(config_path), "frozen_intervention"),
-            )
+            # 输入落位（角色 → 落位名 → 审计标签）全部由域包声明派生，不存在第二份
+            # 字面量；未声明的角色（如收敛阶没有 train）不会出现在候选工作区。train
+            # 角色的源在 runner 侧只能是 bundle 里冻结的 train.json。
+            artifacts = staged_input_artifacts(call, {
+                "train": (bundle / "train.json", identity["train_sha256"]),
+                "inputs": (feature_path, file_hash(feature_path)),
+                "config": (config_path, file_hash(config_path)),
+            })
             for seed in identity["seeds"]:
                 args, outputs = job_invocation(pack, seed)
                 prediction_output = outputs[0]
@@ -289,9 +307,10 @@ def run_confirmation_bundle(bundle_dir, ticket, features, service_public_key,
                     raise ProtocolError("Confirmation worker failed or did not execute the frozen revision")
                 prediction_path = worker.root / spec.job_id / "workspace" / prediction_output
                 rows = read_json(prediction_path)
-                _validate_prediction_rows(rows, sample_ids, identity["evaluator_id"])
+                _validate_prediction_rows(rows, features, sample_ids,
+                                          identity["evaluator_id"])
                 predictions[role].append({"seed": seed, "rows": rows})
-        _validate_predictions(predictions, identity, sample_ids, succeeded=True)
+        _validate_predictions(predictions, identity, features, sample_ids, succeeded=True)
         # Recheck frozen files and every signed input/output binding after workers
         # stop, before this supervisor signs any claim about their execution.
         after_manifest, after_contract = verify_bundle(bundle, service_public_key)
@@ -308,6 +327,6 @@ def run_confirmation_bundle(bundle_dir, ticket, features, service_public_key,
                        "predictions_sha256": digest(predictions), "error_type": error_type}
     result = {"runner_receipt": sign_payload(receipt_payload, runner_private_key),
               "predictions": predictions}
-    _validate_saved_result(result, expected, runner_key, identity, sample_ids)
+    _validate_saved_result(result, expected, runner_key, identity, features, sample_ids)
     write_json(result_path, result)
     return result
