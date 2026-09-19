@@ -117,6 +117,9 @@ def main(argv=None):
     web.add_argument("--campaign", type=Path, default=None,
                      help="监控并交互审批该 campaign 运行目录（含 vendor 步骤时须位于 workspace "
                           "integrations/runs 内；仅实验模式生效）")
+    web.add_argument("--research-run", type=Path, action="append", default=None,
+                     help="登记研究 run 目录（可重复传参）：工作台假设环只读展示该目录 "
+                          "research.sqlite 的真实研究状态（假设/观察/修订/决策/反思）")
     corpus = research_commands.add_parser("corpus", help="领域语料库与社区共享协议（opt-in）")
     corpus_commands = corpus.add_subparsers(dest="corpus_command", required=True)
     for name in ("init", "stats", "list-community", "verify-community"):
@@ -475,7 +478,8 @@ def main(argv=None):
     try:
         if args.command == "serve":
             from .server import serve
-            serve(args.project, args.port, args.trusted_local, args.campaign)
+            serve(args.project, args.port, args.trusted_local, args.campaign,
+                  research_runs=tuple(args.research_run or ()))
             return 0
         elif args.command == "research":
             if args.research_command == "worker":

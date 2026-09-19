@@ -22,7 +22,34 @@ from .workspace import (
 )
 from .materialize import Materializer
 from .orchestrator import Orchestrator
+from .research.readout import read_research_state
 
+
+# 研究实体状态 / 假设修订来源 / 决策与反思动作→中文标签：后端单一定义，前端不再硬编码或回退。
+RESEARCH_STATUS_LABELS = {
+    "study": {
+        "active": "进行中", "concluded": "已结论", "budget_exhausted": "预算耗尽",
+        "blocked_external": "外部受阻", "integrity_failed": "完整性失败",
+    },
+    "hypothesis": {
+        "untested": "未实验", "supported_in_scope": "范围内支持",
+        "contradicted_in_scope": "范围内证伪", "inconclusive": "证据不足", "retired": "已退役",
+    },
+    "design": {"draft": "草稿", "frozen": "已冻结"},
+    "run": {
+        "queued": "排队", "running": "执行中", "succeeded": "成功",
+        "infrastructure_failed": "基础设施失败", "implementation_failed": "实现失败",
+        "cancelled": "已取消",
+    },
+    "action": {
+        "run_experiment": "执行实验", "add_control": "安排对照",
+        "request_confirmation": "请求确认", "stop": "停止",
+        "request_scope_boundary_confirmation": "请求边界确认",
+        "conclude_scope_boundary": "边界结论", "implement_revision": "实现修订",
+        "repair_implementation": "修复实现", "freeze_external_confirmation": "冻结外部确认",
+    },
+    "origin": {"created": "预注册", "revised": "证据后修订"},
+}
 
 # Arbor 假设节点状态→中文标签：后端单一定义，前端不再硬编码或回退。
 ARBOR_NODE_STATUS_LABELS = {
@@ -324,9 +351,13 @@ def project_mode(project):
 class Workstation(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, project, trusted_local=False, campaign_dir=None):
+    def __init__(self, address, project, trusted_local=False, campaign_dir=None,
+                 research_runs=()):
         self.project = Path(project).resolve()
         self.mode = project_mode(self.project)
+        # 研究运行目录只能显式登记（--research-run，可重复）：不做磁盘扫描，
+        # 假设环只展示用户点名的研究 run；每个目录只读投影其 research.sqlite。
+        self.research_runs = [Path(run_dir).resolve() for run_dir in research_runs]
         self.token = secrets.token_urlsafe(32)
         self.trusted_local = trusted_local
         self.job_lock = threading.Lock()
@@ -413,6 +444,15 @@ class Workstation(ThreadingHTTPServer):
                 # 合法模板与披露口径取值清单：后端单一下发，前端不再硬编码。
                 "valid_templates": sorted(VALID_TEMPLATES),
                 "valid_disclosures": sorted(d for d in VALID_DISCLOSURES if d)}
+
+    def research_payload(self):
+        """构造 GET /api/research 的响应：已登记研究 run 的只读投影。
+
+        每个 run 目录独立投影，失败以 ok:false + reason 原样呈现，不吞错误。
+        """
+        runs = [{"run_dir": str(run_dir), **read_research_state(run_dir)}
+                for run_dir in self.research_runs]
+        return {"runs": runs, "status_labels": RESEARCH_STATUS_LABELS}
 
     def campaign_payload(self):
         """构造 GET /api/campaign 的响应（9 阶段统一切磋进度）。"""
@@ -521,6 +561,12 @@ class Workstation(ThreadingHTTPServer):
                 self._job_sig(self.campaign_job),
                 self._vendor_sig(),
             ),
+            # 研究库（manifest + sqlite）任一文件变化都算研究状态变化：
+            # 控制器写的是 sqlite，init/manifest 变更落在 research.json。
+            "research": tuple(
+                (str(run_dir), self._path_sig(run_dir / "research.json"),
+                 self._path_sig(run_dir / "research.sqlite"))
+                for run_dir in self.research_runs),
         }
 
     def _start_monitor(self):
@@ -550,6 +596,9 @@ class Workstation(ThreadingHTTPServer):
                             patch["campaign"] = self.campaign_payload()
                         except Exception:
                             pass
+                    if "research" in changed:
+                        # 逐 run 目录自带错误投影，research_payload 本身不抛。
+                        patch["research"] = self.research_payload()
                     if patch:
                         self._broadcast(patch)
                 except Exception:
@@ -763,7 +812,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 self.send(400, {"error": str(error)})
             return
-        if route in ("/api/literature", "/api/arbor", "/api/campaign"):
+        if route in ("/api/literature", "/api/arbor", "/api/campaign", "/api/research"):
             if not self.authorized():
                 return self.send(403, {"error": "Missing session token"})
             try:
@@ -775,6 +824,8 @@ class Handler(BaseHTTPRequestHandler):
                                     "runs": list_vendor_runs(),
                                     # Arbor 节点状态中文标签：后端单一下发，前端不再硬编码或回退。
                                     "node_status_labels": ARBOR_NODE_STATUS_LABELS})
+                elif route == "/api/research":
+                    self.send(200, self.server.research_payload())
                 else:
                     self.send(200, self.server.campaign_payload())
             except Exception as error:
@@ -813,7 +864,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             full = {"state": self.server.state_payload(),
                     "workspace": self.server.workspace_payload(),
-                    "campaign": self.server.campaign_payload()}
+                    "campaign": self.server.campaign_payload(),
+                    "research": self.server.research_payload()}
         except Exception as error:
             return self.send(400, {"error": str(error)})
         q = self.server.subscribe()
@@ -987,9 +1039,10 @@ class Handler(BaseHTTPRequestHandler):
             "disclosure": item["disclosure"], "created": item["created"], "bytes": item["bytes"]}})
 
 
-def serve(project, port, trusted_local=False, campaign_dir=None):
+def serve(project, port, trusted_local=False, campaign_dir=None, research_runs=()):
     project_mode(project)
-    server = Workstation(("127.0.0.1", port), project, trusted_local, campaign_dir)
+    server = Workstation(("127.0.0.1", port), project, trusted_local, campaign_dir,
+                         research_runs=research_runs)
     print(f"Popper workstation: http://127.0.0.1:{server.server_address[1]}", flush=True)
     try:
         server.serve_forever()

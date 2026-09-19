@@ -29,6 +29,7 @@ export type EventPatch = {
   state?: PopperState
   workspace?: WorkspaceState
   campaign?: Campaign
+  research?: ResearchState
 }
 
 export function subscribeEvents(
@@ -97,6 +98,59 @@ export async function fetchArbor(): Promise<{ trees: ArborTree[]; runs: string[]
   const t = await sessionToken()
   const res = await fetch('/api/arbor', { headers: { 'X-Popper-Token': t } })
   const body = (await res.json()) as { trees: ArborTree[]; runs: string[]; node_status_labels: Record<string, string> } & { error?: string }
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`)
+  return body
+}
+
+// ---- 假设环：research controller 真实状态（/api/research 只读投影） ----
+export type ResearchHypothesis = {
+  entity_id: string; status: string; version: number; parent_version: number | null
+  mechanism: string; applicability: string
+  predictions: string[]; falsification: string[]; alternatives: string[]
+}
+export type ResearchObservation = {
+  entity_id: string; status: string; hypothesis_id: string; run_id: string
+  value: number; unit: string; uncertainty: number | null; scope: string; trust: string
+}
+export type ResearchDecision = {
+  entity_id: string; status: string; action: string; rationale: string
+  alternatives: string[]; observation_refs: string[]; actor: string; model: string | null
+  state_version: number; budget_request: number
+}
+export type ResearchReflection = {
+  entity_id: string; status: string; action: string; rationale: string
+  alternative_explanation: string; evidence_refs: string[]
+  next_hypothesis_id: string | null; actor: string; model: string | null; decision_id: string
+}
+export type ResearchRevision = {
+  hypothesis_id: string; version: number; parent_version: number | null
+  origin: string; seq: number
+}
+export type ResearchRunState = {
+  run_dir: string
+  ok: boolean
+  reason?: string
+  manifest?: { study_id: string; capability_mode?: string; policy?: string;
+    metric?: { name?: string }; min_meaningful_effect?: number }
+  study?: { entity_id: string; status: string; family_id: string; question: string }
+  state_version?: number | null
+  hypotheses?: ResearchHypothesis[]
+  revisions?: ResearchRevision[]
+  observations?: ResearchObservation[]
+  decisions?: ResearchDecision[]
+  reflections?: ResearchReflection[]
+  budget?: { family_id: string; cap: number; reserved: number; spent: number; available: number } | null
+  events_total?: number
+}
+export type ResearchState = {
+  runs: ResearchRunState[]
+  status_labels: Record<string, Record<string, string>>
+}
+
+export async function fetchResearch(): Promise<ResearchState> {
+  const t = await sessionToken()
+  const res = await fetch('/api/research', { headers: { 'X-Popper-Token': t } })
+  const body = (await res.json()) as ResearchState & { error?: string }
   if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`)
   return body
 }

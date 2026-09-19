@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchState, fetchWorkspace, fetchCampaign, postAction, adjudicate, subscribeEvents } from './api'
-import type { Campaign } from './api'
+import { fetchState, fetchWorkspace, fetchCampaign, fetchResearch, postAction, adjudicate, subscribeEvents } from './api'
+import type { Campaign, ResearchState } from './api'
 import type { ExperimentState, PopperState, Workspace } from './types'
 import { GateView } from './components/GateView'
 import { EnvView } from './components/EnvView'
@@ -45,6 +45,7 @@ export default function App() {
   const [pending, setPending] = useState(false)
   const [workspace, setWorkspace] = useState<Workspace | null>(null)
   const [campaign, setCampaign] = useState<Campaign | null>(null)
+  const [research, setResearch] = useState<ResearchState | null>(null)
   const [activeQuest, setActiveQuest] = useState<string | null>(null)
   const [showMaterialize, setShowMaterialize] = useState(false)
 
@@ -60,22 +61,27 @@ export default function App() {
     try { setCampaign(await fetchCampaign()) }
     catch (e) { setError((e as Error).message) }
   }, [])
+  const loadResearch = useCallback(async () => {
+    try { setResearch(await fetchResearch()) }
+    catch (e) { setError((e as Error).message) }
+  }, [])
 
   // 首次拉全量基线；之后由 SSE 推送资源级补丁，不再定时轮询。
   useEffect(() => {
     let alive = true
-    void Promise.all([loadState(), loadWorkspace(), loadCampaign()])
+    void Promise.all([loadState(), loadWorkspace(), loadCampaign(), loadResearch()])
     const unsubscribe = subscribeEvents(
       (patch) => {
         if (!alive) return
         if (patch.state) setData(patch.state)
         if (patch.workspace) setWorkspace(patch.workspace)
         if (patch.campaign) setCampaign(patch.campaign)
+        if (patch.research) setResearch(patch.research)
       },
       () => { /* 断线由 EventSource 自动重连，重连后重发全量基线 */ },
     )
     return () => { alive = false; unsubscribe() }
-  }, [loadState, loadWorkspace, loadCampaign])
+  }, [loadState, loadWorkspace, loadCampaign, loadResearch])
 
   const run = async (action: string) => {
     setPending(true)
@@ -200,7 +206,7 @@ export default function App() {
                 onReload={loadWorkspace} />}
               {view === 'activity' && <ActivityView events={data?.events ?? []} eventNames={eventNames} />}
               {view === 'lit' && <LitView />}
-              {view === 'loop' && <LoopView />}
+              {view === 'loop' && <LoopView research={research} />}
             </div>
           )}
         </main>
