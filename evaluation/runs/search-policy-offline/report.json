@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "baseline": 1.0,
+  "direction": "min",
+  "threshold": 0.2,
+  "paid_model_calls": 0,
+  "policies": [
+    {
+      "policy": "one_shot_repair",
+      "tried": 1,
+      "value": 0.9,
+      "delta": 0.1,
+      "reaches_threshold": false
+    },
+    {
+      "policy": "tree_search",
+      "tried": 4,
+      "value": 0.2,
+      "representative": "node-3",
+      "delta": 0.8,
+      "reaches_threshold": true
+    }
+  ]
+}

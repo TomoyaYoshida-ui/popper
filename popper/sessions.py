@@ -1968,14 +1968,17 @@ class AgentSessionStore:
                     (turn_id,)).fetchone():
                 raise ToolCallConflict("该 turn 已继续推理，不能追加工具提议")
             call_id, now = new_id(EntityKind.TOOL_CALL), _now()
-            status = "approved" if risk == "read" else "pending_approval"
+            from .research.envelope import covering_envelope
+            envelope = None if risk == "read" else covering_envelope(self.root, tool_name, arguments)
+            status = "approved" if risk == "read" or envelope is not None else "pending_approval"
+            event_actor = f"envelope:{envelope['envelope_sha256']}" if envelope is not None else actor
             self._conn.execute(
                 "INSERT INTO tool_calls(call_id,session_id,turn_id,idempotency_key,"
                 "tool_name,arguments_json,risk,status,proposed_by,trace_id,created,updated,"
                 "integrity_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)",
                 (call_id, session_id, turn_id, idempotency_key, tool_name, encoded,
                  risk, status, actor, trace_id, now, now))
-            self._append_tool_event(call_id, actor=actor, now=now)
+            self._append_tool_event(call_id, actor=event_actor, now=now)
             self._refresh_continuation_state(turn_id)
             self._conn.commit()
             return self.get_tool_call(call_id), False

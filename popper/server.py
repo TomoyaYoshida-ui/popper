@@ -777,6 +777,7 @@ class Workstation(ThreadingHTTPServer):
         # 自由对话：BYOK 端点必须成对提供（--chat-base-url/--chat-model），key 走
         # POPPER_API_KEY（make_chat_client 构造即校验，fail fast）。未配置时如实
         # configured=false 并拒绝发送；chat_llm 供测试注入 fake，绕过真实端点。
+        self.chat_base_url = chat_base_url
         if bool(chat_base_url) != bool(chat_model):
             raise ProtocolError("--chat-base-url 和 --chat-model 必须同时提供")
         self.chat_model = chat_model
@@ -1138,12 +1139,16 @@ class Workstation(ThreadingHTTPServer):
         finally:
             store.close()
 
-    def enqueue_study_action(self, study_id, action, max_steps, approval_sha256, idempotency_key):
+    def enqueue_study_action(self, study_id, action, max_steps, approval_sha256, idempotency_key,
+                             envelope=None):
         if not self.trusted_local:
             raise ProtocolError("Study 执行需要可信本机模式")
         run_dir = self.research_run_for_study(study_id)
+        preview = preview_study_action(run_dir, action, max_steps, envelope=envelope)
         request = {"study_id": study_id, "action": action, "max_steps": max_steps,
                    "approval_sha256": approval_sha256}
+        if action == "autopilot":
+            request["envelope"] = preview["envelope"]
         store = StudyJobStore(run_dir)
         try:
             store.verify()
@@ -1152,7 +1157,6 @@ class Workstation(ThreadingHTTPServer):
                 if prior["request"] != request:
                     raise ProtocolError("幂等键已绑定不同的 Study 请求")
                 return prior
-            preview = preview_study_action(run_dir, action, max_steps)
             if preview["approval_sha256"] != approval_sha256:
                 raise ProtocolError("研究状态已变化，请重新预览")
             job = store.enqueue(idempotency_key, request)
@@ -1171,16 +1175,30 @@ class Workstation(ThreadingHTTPServer):
                 job = store.claim(job_id)
                 request = job["request"]
                 try:
-                    preview = preview_study_action(run_dir, request["action"], request["max_steps"])
+                    preview = preview_study_action(
+                        run_dir, request["action"], request["max_steps"],
+                        envelope=request.get("envelope"))
                     if preview["approval_sha256"] != request["approval_sha256"]:
                         raise ProtocolError("排队期间研究状态已变化，请重新预览")
                     from .research.controller import ResearchController
                     controller = controller_for_run(run_dir)
                     cancelled = lambda: store.get(job_id)["cancel_requested"]
-                    result = (controller.run(sandboxed=True, max_steps=request["max_steps"],
-                                             auto_confirm=False, should_cancel=cancelled)
-                              if request["action"] == "run" else
-                              controller.confirm(sandboxed=True, should_cancel=cancelled))
+                    if request["action"] == "autopilot":
+                        from .harness.json_agent import JSONAgentHarness
+                        from .research.envelope import save_envelope
+                        if not self.chat_base_url or not self.chat_model:
+                            raise ProtocolError("自治实验需要已配置的模型端点")
+                        save_envelope(run_dir, request["envelope"])
+                        controller.harness = JSONAgentHarness.from_endpoint(
+                            self.chat_base_url, self.chat_model, run_dir / "model-diagnostics")
+                        result = controller.run(
+                            sandboxed=True, max_steps=request["max_steps"], autonomous_code=True,
+                            search=True, should_cancel=cancelled)
+                    elif request["action"] == "run":
+                        result = controller.run(sandboxed=True, max_steps=request["max_steps"],
+                                                auto_confirm=False, should_cancel=cancelled)
+                    else:
+                        result = controller.confirm(sandboxed=True, should_cancel=cancelled)
                     store.finish(job_id, "succeeded", result={"phase": result["phase"],
                         "observation_ids": [row["observation_id"] for row in result["observations"]],
                         "claim_ids": [row["claim_id"] for row in result["claims"]]})
@@ -4919,15 +4937,22 @@ class Handler(BaseHTTPRequestHandler):
                     raise ProtocolError("Study 请求信封不合法")
                 study_id = tool_parts[3]
                 if len(tool_parts) == 6 and tool_parts[5] == "preview":
-                    if set(body) != {"schema_version", "action", "max_steps"}:
+                    allowed = {"schema_version", "action", "max_steps"}
+                    if body.get("action") == "autopilot":
+                        allowed.add("envelope")
+                    if set(body) != allowed:
                         raise ProtocolError("Study 预览字段不合法")
                     result = preview_study_action(self.server.research_run_for_study(study_id),
-                                                 body["action"], body["max_steps"])
+                                                 body["action"], body["max_steps"], body.get("envelope"))
                 elif len(tool_parts) == 6 and tool_parts[5] == "jobs":
-                    if set(body) != {"schema_version", "action", "max_steps", "approval_sha256", "idempotency_key"}:
+                    allowed = {"schema_version", "action", "max_steps", "approval_sha256", "idempotency_key"}
+                    if body.get("action") == "autopilot":
+                        allowed.add("envelope")
+                    if set(body) != allowed:
                         raise ProtocolError("Study 执行字段不合法")
-                    result = self.server.enqueue_study_action(study_id, body["action"], body["max_steps"],
-                                                             body["approval_sha256"], body["idempotency_key"])
+                    result = self.server.enqueue_study_action(
+                        study_id, body["action"], body["max_steps"],
+                        body["approval_sha256"], body["idempotency_key"], body.get("envelope"))
                     return self.send(202, api_success(result, trace_id=trace_id))
                 elif (len(tool_parts) == 8 and tool_parts[5] == "jobs" and tool_parts[7] == "cancel"
                       and set(body) == {"schema_version"}):

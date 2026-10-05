@@ -302,7 +302,7 @@ class ResearchController:
         return next((o for o in self.store.list("observation")
                      if o.get("design_id") == design_id and o.get("scope") == scope), None)
 
-    def _record_development_observations(self, run_id, evaluated):
+    def _record_development_observations(self, run_id, evaluated, scope="dev"):
         """Persist the global score and every preregistered diagnostic slice."""
         common = {"run_id": run_id, "scorer_id": self.manifest["scorer_id"],
                   "unit": self.manifest["metric"]["name"],
@@ -311,10 +311,12 @@ class ResearchController:
                   "evaluator_service_hash": evaluated["service_sha256"],
                   "trust": evaluated["trust"]}
         observation_id = "OBS-" + digest(
-            {"run_id": run_id, "request": evaluated["request_sha256"], "scope": "dev"})[:18]
+            {"run_id": run_id, "request": evaluated["request_sha256"], "scope": scope})[:18]
         self.store.observations.add(Observation(
             observation_id, value=evaluated["mean"], uncertainty=evaluated["std"],
-            scope="dev", selector="mean", **common))
+            scope=scope, selector="mean", **common))
+        if scope != "dev":
+            return self.store.get("observation", observation_id)
         for index, item in enumerate(evaluated.get("slices", [])):
             scope = f"dev:slice:{item['slice_id']}"
             slice_id = "OBS-" + digest(
@@ -700,7 +702,7 @@ class ResearchController:
         return observation
 
     def implement(self, hypothesis_id, parent_revision_id=None, gpu_count=0,
-                  should_cancel=None):
+                  should_cancel=None, search_node=False, fidelity=None, seen_diffs=None):
         """Generate, freeze, execute and independently score one code revision.
 
         Generated code always goes through LocalWorker's OS sandbox. There is no
@@ -721,7 +723,7 @@ class ResearchController:
             raise ProtocolError("hypothesis 不属于当前 study")
         design_id = self._current_design_id(hypothesis_id)
         existing = self._observation_for_design(design_id)
-        if existing:
+        if existing and not search_node:
             # Do not generate a fresh, unexecuted revision and attach old evidence.
             return {"revision": None, "observation": existing,
                     "status": "already_observed"}
@@ -748,10 +750,19 @@ class ResearchController:
                       and r.get("status") != "succeeded"]
             if failed:
                 previous_failure = self.worker.failure_context(failed[-1]["job_id"])
+        question = self.store.get("study", self.manifest["study_id"])["question"]
+        if search_node:
+            from .search_memory import research_notes
+            question = research_notes(self.store, self.manifest, question)
         proposed = self.harness.propose_revision(
-            self.store.get("study", self.manifest["study_id"])["question"], hypothesis,
+            question, hypothesis,
             self.manifest["configs"][hypothesis_id], code_files,
             parent_revision=parent_revision_id, failure=previous_failure)
+        if search_node:
+            from .tree_search import reject_duplicate
+            if not proposed["edits"]:
+                raise ProtocolError("搜索节点必须给出代码修改")
+            reject_duplicate(proposed["edits"], seen_diffs if seen_diffs is not None else set())
         proposal_source = self.harness.name
         proposal_model = getattr(self.harness, "model", None)
         if not proposed["edits"]:
@@ -813,12 +824,20 @@ class ResearchController:
             # （理论上 controller 的 existing_run 检查会先拦下重复执行），此时不重写
             # core.runs，Worker 仍跑以收集 receipts/execution_gate，但不再 complete_run。
             config = self.manifest["configs"][hypothesis_id]
-            core_rid, core_state, core_prior = self.exp.register_run(config, "dev")
+            if search_node:
+                # 搜索节点记在研究库。核心实验库只保留首次完成的开发运行，避免同一配置
+                # 的后续节点耗尽预注册次数或改写已完成结果。
+                core_rid, core_state, core_prior = None, None, {"search_node": True}
+            else:
+                core_rid, core_state, core_prior = self.exp.register_run(config, "dev")
             core_started = time.monotonic()
             inputs_dir = self.run_dir / "revision-inputs" / revision_id
             inputs_dir.mkdir(parents=True, exist_ok=True)
             dev_rows = dataset(self.project / state["spec"]["dev"], state["evaluator_id"])
             pack = evaluator_pack(state["evaluator_id"])
+            all_seeds = list(repeat_values(pack, dev_rows, state["spec"]))
+            phases = ([(all_seeds[:1], "dev:smoke"), (all_seeds, "dev")]
+                      if fidelity == "ladder" and len(all_seeds) > 1 else [(all_seeds, "dev")])
             artifacts = self._staged_inputs(
                 pack.invocation(), inputs_dir, state, dev_rows,
                 config, state["evaluator_id"])
@@ -826,7 +845,9 @@ class ResearchController:
             receipts = []
             seed_specs = []
             seed_outputs = []
-            for seed in repeat_values(pack, dev_rows, state["spec"]):
+            # 保真度阶梯先只跑第一个重复单位。它失败就不再启动其余单位；
+            # 通过后才跑完全部单位，并且只对完整预测做一次可进入结论的评分。
+            for seed in phases[-1][0]:
                 args, outputs = job_invocation(pack, seed)
                 output = outputs[0]
                 spec = JobSpec(
@@ -844,13 +865,14 @@ class ResearchController:
             # 多个 seed 争抢同一批设备；CPU job 保持并发。
             job_ids = [spec.job_id for spec in seed_specs]
             max_in_flight = 1 if gpu_count else len(seed_specs)
+            wave_limit = 1 if fidelity == "ladder" and len(seed_specs) > 1 else len(seed_specs)
             batches = (len(seed_specs) + max_in_flight - 1) // max_in_flight
             deadline = time.monotonic() + max(
                 spec.timeout_seconds for spec in seed_specs) * batches + 120.0
             next_to_launch = 0
             in_flight = 0
             while next_to_launch < len(seed_specs) or in_flight > 0:
-                while next_to_launch < len(seed_specs) and in_flight < max_in_flight:
+                while next_to_launch < wave_limit and next_to_launch < len(seed_specs) and in_flight < max_in_flight:
                     self.worker.launch(seed_specs[next_to_launch])
                     next_to_launch += 1
                     in_flight += 1
@@ -876,7 +898,13 @@ class ResearchController:
                     time.sleep(0.5)
                 in_flight = sum(1 for s in statuses.values()
                                 if s["status"] not in TERMINAL_JOB_STATUSES)
-            for spec, (seed, output) in zip(seed_specs, seed_outputs):
+                if wave_limit == 1 and in_flight == 0 and job_ids:
+                    first_status = statuses.get(job_ids[0], {}).get("status")
+                    if first_status == "succeeded":
+                        wave_limit = len(seed_specs)
+                    elif first_status in TERMINAL_JOB_STATUSES:
+                        break
+            for spec, (seed, output) in zip(seed_specs[:next_to_launch], seed_outputs[:next_to_launch]):
                 receipt = self.worker.collect(spec.job_id)
                 receipts.append(receipt)
                 if receipt["status"] != "succeeded":
@@ -1081,8 +1109,68 @@ class ResearchController:
                             + "（--autonomous-code 依赖沙箱，在本平台不可用；"
                               "见 docs/技术方案.md §2.2）")
 
+    def _run_tree_search(self, baseline, max_steps, should_cancel):
+        """在同一候选上搜索多个代码节点。达到开发阈值后只请求确认，不消费确认集。"""
+        import random
+
+        from .envelope import assert_active, load_envelope, write_usage
+        from .search_memory import journal_summary
+        from .tree_search import best_node, choose_action, node_record
+        hypothesis_id = self.manifest["candidate_hypothesis_ids"][0]
+        nodes, seen = [], set()
+        limit = 8 if max_steps is None else max_steps
+        direction = self.manifest["metric"]["direction"]
+        threshold = self.manifest["min_meaningful_effect"]
+        for step in range(limit):
+            if should_cancel is not None and should_cancel():
+                raise ProtocolError("研究执行已取消")
+            envelope = load_envelope(self.run_dir)
+            if envelope is not None:
+                study = self.store.get("study", self.manifest["study_id"])
+                assert_active(envelope, dev_runs_used=step,
+                              state_version=study["state_version"])
+                write_usage(self.run_dir, dev_runs_used=step)
+            decision = choose_action(nodes, direction=direction, rng=random.Random(step))
+            parent = next((node for node in nodes if node["node_id"] == decision["parent_id"]), None)
+            depth = 0 if parent is None else parent["depth"] + 1
+            try:
+                outcome = self.implement(
+                    hypothesis_id, parent_revision_id=None if parent is None else parent.get("revision_id"),
+                    search_node=True, fidelity="ladder", seen_diffs=seen, should_cancel=should_cancel)
+            except RevisionExecutionError as error:
+                nodes.append(node_record(f"node-{step}", decision["kind"], decision["parent_id"],
+                                         depth, "buggy", revision_id=error.revision_id))
+                continue
+            except ProtocolError as error:
+                if "重复节点" not in str(error):
+                    raise
+                nodes.append(node_record(f"node-{step}", decision["kind"], decision["parent_id"],
+                                         depth, "duplicate"))
+                continue
+            observation = outcome["observation"]
+            revision = outcome.get("revision") or {}
+            nodes.append(node_record(
+                f"node-{step}", decision["kind"], decision["parent_id"], depth, "scored",
+                observation["value"], observation.get("scope", "dev"), revision.get("revision_id")))
+            winner = best_node(nodes, direction)
+            if winner is None:
+                continue
+            delta = (baseline["value"] - winner["value"] if direction == "min"
+                     else winner["value"] - baseline["value"])
+            if delta >= threshold:
+                summary = journal_summary(nodes, direction)
+                self._record(ActionProposal(
+                    REQUEST_CONFIRMATION,
+                    f"树搜索比较了 {summary['tried']} 个节点后达到开发阈值，"
+                    f"代表节点 {summary['representative']}。冒烟失败不会进入结论。",
+                    hypothesis_id, source="tree_search"))
+                version = self.store.get("hypothesis", hypothesis_id)["version"]
+                self.store.set_hypothesis_status(hypothesis_id, version, HypothesisStatus.SUPPORTED_IN_SCOPE)
+                return self.status()
+        return self.status()
+
     def run(self, trusted_local=False, sandboxed=False, max_steps=None, auto_confirm=False,
-            autonomous_code=False, should_cancel=None):
+            autonomous_code=False, should_cancel=None, search=False):
         def check_cancelled():
             if should_cancel is not None and should_cancel():
                 raise ProtocolError("研究执行已取消")
@@ -1129,6 +1217,11 @@ class ResearchController:
                                control_id, source="research_controller"),
                 trusted_local, sandboxed, should_cancel=should_cancel)
             self.store.set_hypothesis_status(control_id, 1, HypothesisStatus.INCONCLUSIVE)
+
+        if search:
+            if not (autonomous_code and sandboxed):
+                raise ProtocolError("实验树搜索只能在沙箱中的自主代码模式下运行")
+            return self._run_tree_search(baseline, max_steps, should_cancel)
 
         steps = 0
         if hasattr(self.policy, "reflect"):

@@ -83,6 +83,20 @@ def test_http_study_run_confirm_claim_and_replay(tmp_path, domain):
         thread.join(timeout=3)
 
 
+def test_autopilot_preview_keeps_the_same_approval_and_excludes_confirmation(tmp_path):
+    _, run_dir = make_project(tmp_path, "ode-convergence")
+    code_file = read_json(run_dir.parent / "project" / "experiment.json")["code_files"][0]
+    requested = {"max_dev_runs": 2, "max_model_tokens": 1000,
+                 "max_wall_clock_minutes": 30, "code_files": [code_file]}
+    preview = preview_study_action(run_dir, "autopilot", 2, requested)
+    assert preview["scope"] == "dev_search"
+    assert "confirm" not in preview["envelope"]["allowed_actions"]
+    replay = preview_study_action(run_dir, "autopilot", 2, preview["envelope"])
+    assert replay["approval_sha256"] == preview["approval_sha256"]
+    with pytest.raises(ProtocolError, match="开发运行上限"):
+        preview_study_action(run_dir, "autopilot", 2, {**requested, "max_dev_runs": 3})
+
+
 def test_queue_cancellation_recovery_and_tamper(tmp_path):
     project, run_dir = make_project(tmp_path, "ode-convergence")
     preview = preview_study_action(run_dir, "run", 1)

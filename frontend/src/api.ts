@@ -233,32 +233,39 @@ export type ResearchState = {
   trusted_local: boolean
 }
 
+export type StudyEnvelope = {
+  max_dev_runs: number; max_model_tokens: number; max_wall_clock_minutes: number; code_files: string[]
+}
 export type StudyActionPreview = {
-  study_id: string; action: 'run' | 'confirm'; max_steps: number; state_version: number
+  study_id: string; action: 'run' | 'confirm' | 'autopilot'; max_steps: number; state_version: number
   approval_sha256: string; objective: string; metric: { name: string; direction: string }
   selected_hypothesis_id: string | null; scope: string; confirmation_cost: number
   budget: { available: number }; stop_conditions: string[]; confirmation_warning: string | null
+  envelope?: StudyEnvelope & { envelope_sha256: string; study_id: string; state_version: number }
 }
 export type StudyLifecycleJob = {
   job_id: string; status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted'
-  request: { study_id: string; action: 'run' | 'confirm'; max_steps: number }
+  request: { study_id: string; action: 'run' | 'confirm' | 'autopilot'; max_steps: number }
   cancel_requested: boolean; error: string | null
   result: { phase: string; observation_ids: string[]; claim_ids: string[] } | null
 }
 export function fetchStudyJobs(studyId: string): Promise<{ jobs: StudyLifecycleJob[] }> {
   return projectFilesRequest(`/api/v1/research/${encodeURIComponent(studyId)}/lifecycle`)
 }
-export function previewStudyAction(studyId: string, action: 'run' | 'confirm', maxSteps: number): Promise<StudyActionPreview> {
+export function previewStudyAction(studyId: string, action: 'run' | 'confirm' | 'autopilot', maxSteps: number,
+  envelope?: StudyEnvelope): Promise<StudyActionPreview> {
   return projectFilesRequest(`/api/v1/research/${encodeURIComponent(studyId)}/lifecycle/preview`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ schema_version: '1.0', action, max_steps: maxSteps }),
+    body: JSON.stringify({ schema_version: '1.0', action, max_steps: maxSteps,
+      ...(envelope ? { envelope } : {}) }),
   })
 }
 export function executeStudyAction(preview: StudyActionPreview): Promise<StudyLifecycleJob> {
   return projectFilesRequest(`/api/v1/research/${encodeURIComponent(preview.study_id)}/lifecycle/jobs`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ schema_version: '1.0', action: preview.action, max_steps: preview.max_steps,
-      approval_sha256: preview.approval_sha256, idempotency_key: `web-study-${preview.approval_sha256}` }),
+      approval_sha256: preview.approval_sha256, idempotency_key: `web-study-${preview.approval_sha256}`,
+      ...(preview.envelope ? { envelope: preview.envelope } : {}) }),
   })
 }
 export function cancelStudyJob(studyId: string, jobId: string): Promise<StudyLifecycleJob> {

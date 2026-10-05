@@ -15,8 +15,8 @@ from .readout import read_research_state
 TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
 
 
-def preview_study_action(run_dir, action, max_steps=1):
-    if action not in {"run", "confirm"}:
+def preview_study_action(run_dir, action, max_steps=1, envelope=None):
+    if action not in {"run", "confirm", "autopilot"}:
         raise ProtocolError("未知 Study 动作")
     if type(max_steps) is not int or not 1 <= max_steps <= 100:
         raise ProtocolError("候选执行步数须为 1 到 100 的整数")
@@ -34,7 +34,7 @@ def preview_study_action(run_dir, action, max_steps=1):
         raise ProtocolError("Study 已终结，不能继续执行")
     if core.get("test_consumed"):
         raise ProtocolError("确认资源已经消费，不能创建新的执行作业")
-    allowed_phase = {"searching"} if action == "run" else {"searching", "frozen"}
+    allowed_phase = {"searching"} if action in {"run", "autopilot"} else {"searching", "frozen"}
     if core["phase"] not in allowed_phase:
         raise ProtocolError("当前实验阶段不允许创建此研究作业")
     decisions = state["decisions"]
@@ -52,19 +52,37 @@ def preview_study_action(run_dir, action, max_steps=1):
             raise ProtocolError("独立确认至少需要两次评分预算")
     elif ready or last_action == "request_scope_boundary_confirmation":
         raise ProtocolError("研究已请求独立确认，请审查确认方案")
+    if action == "autopilot":
+        from .envelope import build_envelope
+        if not isinstance(envelope, dict):
+            raise ProtocolError("自治实验需要包络")
+        envelope = build_envelope(
+            manifest["study_id"], max_dev_runs=envelope["max_dev_runs"],
+            max_model_tokens=envelope["max_model_tokens"],
+            max_wall_clock_minutes=envelope["max_wall_clock_minutes"],
+            code_files=envelope["code_files"], state_version=state["state_version"],
+            allowed_actions=envelope.get("allowed_actions"),
+            approved_at=envelope.get("approved_at"))
+        if envelope["max_dev_runs"] > max_steps:
+            raise ProtocolError("包络里的开发运行上限不能超过本次步数")
     request = {"study_id": manifest["study_id"], "action": action,
-               "max_steps": max_steps if action == "run" else 1,
+               "max_steps": max_steps if action in {"run", "autopilot"} else 1,
                "state_version": state["state_version"],
                "manifest_sha256": file_hash(run_dir / "research.json"),
                "input_hashes": core["input_hashes"],
                "graph_sha256": digest(state["experiment_graph"]),
                "budget": state["budget"],
                "selected_hypothesis_id": selected["hypothesis_id"] if selected else None}
+    if envelope is not None:
+        request["envelope"] = envelope
     return {**request, "approval_sha256": digest(request),
             "objective": state["study"]["question"], "metric": manifest["metric"],
-            "scope": "registered_independent_confirmation" if action == "confirm" else "dev",
+            "scope": ("registered_independent_confirmation" if action == "confirm"
+                      else "dev_search" if action == "autopilot" else "dev"),
             "confirmation_cost": 2 if action == "confirm" else 0,
-            "stop_conditions": ["用户停止", "步数达到上限", "预算耗尽", "策略停止或请求确认"],
+            "stop_conditions": ["用户停止", "步数达到上限", "预算耗尽", "策略停止或请求确认",
+                                "自治包络超限"] if action == "autopilot" else
+            ["用户停止", "步数达到上限", "预算耗尽", "策略停止或请求确认"],
             "confirmation_warning": ("确认数据只消费一次；执行开始后失败或中断不会自动重试"
                                      if action == "confirm" else None)}
 

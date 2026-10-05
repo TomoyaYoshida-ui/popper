@@ -29,6 +29,7 @@ const descriptions: Record<string, string> = {
 }
 const isActive = (job: StudyLifecycleJob) => job.status === 'queued' || job.status === 'running'
 const scopeLabel = (scope: string) => scope === 'dev' ? '固定开发划分' :
+  scope === 'dev_search' ? '开发划分上的实验树搜索' :
   scope === 'registered_independent_confirmation' ? '预注册独立确认范围' : scope
 
 export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenResource, concluded = false,
@@ -46,6 +47,9 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
   const context = useRef({ routeKey, contextKey })
   context.current = { routeKey, contextKey }
   const [steps, setSteps] = useState(1)
+  const [devRuns, setDevRuns] = useState(1)
+  const [minutes, setMinutes] = useState(60)
+  const [codeFiles, setCodeFiles] = useState('')
   const [previewState, setPreview] = useState<{ key: string; value: StudyActionPreview } | null>(null)
   const [jobState, setJobs] = useState<{ key: string; rows: StudyLifecycleJob[]; loaded: boolean }>({ key: routeKey, rows: [], loaded: false })
   const [busy, setBusy] = useState(false)
@@ -119,18 +123,41 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
     catch (cause) { if (mounted.current && context.current.contextKey === contextKey) setError((cause as Error).message) }
     finally { if (requestInFlight.current === token) { requestInFlight.current = null; setBusy(false) } }
   }
+  const acceptPreview = (next: StudyActionPreview) => {
+    if (mounted.current && context.current.contextKey === contextKey && next.study_id === studyId &&
+      (stateVersion == null || next.state_version === stateVersion)) setPreview({ key: contextKey, value: next })
+    else if (mounted.current && context.current.contextKey === contextKey) setError('研究状态已变化，请重新载入后预览。')
+  }
   const review = async () => {
     if (!requestedAction || disabledReason) return
     setPreview(null)
     await request(async () => {
       const next = await previewStudyAction(studyId, requestedAction, requestedAction === 'confirm' ? 1 : steps)
-      if (mounted.current && context.current.contextKey === contextKey && next.study_id === studyId &&
-        (stateVersion == null || next.state_version === stateVersion)) setPreview({ key: contextKey, value: next })
-      else if (mounted.current && context.current.contextKey === contextKey) setError('研究状态已变化，请重新载入后预览。')
+      acceptPreview(next)
+    })
+  }
+  const reviewAutopilot = async () => {
+    if (requestedAction !== 'run' || disabledReason) return
+    const files = codeFiles.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean)
+    if (!files.length || !files.every((item) => item.endsWith('.py') && !item.includes('..'))) {
+      setError('自治实验需要列出可修改的相对 .py 路径。')
+      return
+    }
+    if (!Number.isInteger(devRuns) || devRuns < 1 || devRuns > steps) {
+      setError('开发运行次数须为 1 到候选步数之间的整数。')
+      return
+    }
+    setPreview(null)
+    await request(async () => {
+      const next = await previewStudyAction(studyId, 'autopilot', steps, {
+        max_dev_runs: devRuns, max_model_tokens: 200_000, max_wall_clock_minutes: minutes, code_files: files,
+      })
+      acceptPreview(next)
     })
   }
   const execute = async () => {
-    if (!preview || disabledReason || preview.action !== requestedAction) return
+    if (!preview || disabledReason) return
+    if (preview.action === 'autopilot' ? requestedAction !== 'run' : preview.action !== requestedAction) return
     await request(async () => {
       const job = await executeStudyAction(preview)
       if (!mounted.current || context.current.contextKey !== contextKey) return
@@ -149,10 +176,11 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
       if (!isActive(next)) notify.current()
     })
   }
-  const openJob = (job: StudyLifecycleJob) => onOpenResource?.({ kind: 'job', ref: job.job_id, studyId, title: job.request.action === 'confirm' ? '独立确认作业' : '研究运行作业' })
+  const actionLabel = (action: string) => action === 'confirm' ? '独立确认' : action === 'autopilot' ? '自治实验' : '研究运行'
+  const openJob = (job: StudyLifecycleJob) => onOpenResource?.({ kind: 'job', ref: job.job_id, studyId, title: `${actionLabel(job.request.action)}作业` })
   const jobRow = (job: StudyLifecycleJob) => <div key={job.job_id} className="row job-row">
     <div>
-      <div><strong>{job.request.action === 'confirm' ? '独立确认' : '研究运行'}</strong> · {jobLabels[job.status]}</div>
+      <div><strong>{actionLabel(job.request.action)}</strong> · {jobLabels[job.status]}</div>
       {job.cancel_requested && isActive(job) && <div className="notice" role="status">已请求停止，等待安全检查点及真实终态；尚未结束。</div>}
       {job.error && <div className="notice err">{job.error}</div>}
       {job.result && <div>阶段：{phaseLabels[job.result.phase] || job.result.phase} · 观察 {job.result.observation_ids.length} · 结论 {job.result.claim_ids.length}</div>}
@@ -177,6 +205,15 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
       <button className="btn primary" disabled={!!disabledReason} title={disabledReason || undefined} onClick={() => void review()}>
         {requestedAction === 'confirm' ? '预览独立确认' : '预览研究运行'}
       </button>
+      {requestedAction === 'run' && <>
+        <label>开发运行上限 <input aria-label="开发运行上限" type="number" min={1} max={steps} value={devRuns}
+          disabled={busy || !trustedLocal || resourceConsumed} onChange={(event) => { setDevRuns(Number(event.target.value)); setPreview(null) }} /></label>
+        <label>墙钟分钟 <input aria-label="墙钟分钟" type="number" min={1} max={1440} value={minutes}
+          disabled={busy || !trustedLocal || resourceConsumed} onChange={(event) => { setMinutes(Number(event.target.value)); setPreview(null) }} /></label>
+        <label>可改代码 <input aria-label="可改代码" value={codeFiles} placeholder="src/model.py"
+          disabled={busy || !trustedLocal || resourceConsumed} onChange={(event) => { setCodeFiles(event.target.value); setPreview(null) }} /></label>
+        <button className="btn" type="button" disabled={!!disabledReason} title={disabledReason || undefined} onClick={() => void reviewAutopilot()}>预览自治实验</button>
+      </>}
     </div>}
     {!active && disabledReason && requestedAction && <p className="muted" role="note">{disabledReason}</p>}
     {!active && lifecycle === 'concluded' && onOpenResource && <div className="actions">
@@ -187,19 +224,23 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
     {error && <div className="notice err" role="alert">{error}</div>}
     {jobsError && <div className="notice err" role="alert">无法核对作业状态：{jobsError}</div>}
     {preview && <div className={`notice action-preview ${preview.action === 'confirm' ? 'confirmation-preview' : ''}`}>
-      <strong>{preview.action === 'confirm' ? '独立确认审批预览' : '研究运行审批预览'}</strong>
+      <strong>{preview.action === 'confirm' ? '独立确认审批预览' : preview.action === 'autopilot' ? '自治实验审批预览' : '研究运行审批预览'}</strong>
       <div>{preview.objective}</div>
       <div>范围：{scopeLabel(preview.scope)} · 研究状态版本：{preview.state_version}</div>
       <div>指标：{preview.metric.name} · 剩余评分预算：{preview.budget.available}</div>
       {preview.action === 'confirm' ? <>
         <div>选定候选：{preview.selected_hypothesis_id} · 本次确认评分预算：{preview.confirmation_cost}</div>
         <div className="confirmation-warning" role="note">{preview.confirmation_warning || '一次性确认资源消费后，失败或中断不得自动重试。'}</div>
-      </> : <div>最多推进 {preview.max_steps} 个候选步骤；缺少基线时会先运行基线。</div>}
+      </> : preview.action === 'autopilot' && preview.envelope ? <div>
+        最多 {preview.max_steps} 个搜索节点，开发运行不超过 {preview.envelope.max_dev_runs} 次，
+        墙钟 {preview.envelope.max_wall_clock_minutes} 分钟。可改文件：{preview.envelope.code_files.join('、')}。
+        一次批准只覆盖开发实验；独立确认仍需单独审批。
+      </div> : <div>最多推进 {preview.max_steps} 个候选步骤；缺少基线时会先运行基线。</div>}
       <div>停止条件：{preview.stop_conditions.join('；')}</div>
       <details><summary>审批技术详情</summary><div className="mono selectable">Study ID：{preview.study_id}<br />审批摘要：{preview.approval_sha256}</div></details>
       <div className="actions">
         <button className="btn primary" disabled={!!disabledReason} title={disabledReason || undefined} onClick={() => void execute()}>
-          {preview.action === 'confirm' ? '批准并执行独立确认' : '批准并运行研究'}
+          {preview.action === 'confirm' ? '批准并执行独立确认' : preview.action === 'autopilot' ? '批准并开始自治实验' : '批准并运行研究'}
         </button>
         <button className="btn" disabled={busy} onClick={() => setPreview(null)}>取消此次审批</button>
       </div>
