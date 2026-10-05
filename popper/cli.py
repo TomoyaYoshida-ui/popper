@@ -1,9 +1,11 @@
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from .core import Experiment, ProtocolError, initialize, read_json
+from .demo import CASES as DEMO_CASES, initialize_demo
 from .evaluation import Evaluator
 from .brownfield import Brownfield
 from .campaign_nodes import BUILTIN_NODES, DEFAULT_CAMPAIGN_STEPS
@@ -25,7 +27,8 @@ from .reproduction import ReproductionTask, initialize_reproduction, inspect_rep
 from .vendors import VendorRegistry
 from .harness import names as harness_names, resolve as resolve_harness
 from .research import DeepSeekResearchPolicy, ResearchController
-from .research.revisions import RevisionStore
+from .research.followup import create_followup_study
+from .research.revisions import RevisionDiffArchive, RevisionStore
 from .research.workers import RemoteWorker
 
 
@@ -54,6 +57,11 @@ def _build_code_harness(name, base_url, model, diagnostics_dir):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="popper", description="Popper 实验推进 Agent · M0")
     commands = parser.add_subparsers(dest="command", required=True)
+    demo = commands.add_parser("demo", help="从随包非 ML 模板建立离线科研项目")
+    demo_commands = demo.add_subparsers(dest="demo_command", required=True)
+    demo_init = demo_commands.add_parser("init", help="在空目录中创建并初始化示例")
+    demo_init.add_argument("project", type=Path)
+    demo_init.add_argument("--case", choices=DEMO_CASES, default="ode-convergence")
     research = commands.add_parser(
         "research", help="研究流程：证据驱动控制器 / campaign 编排 / 想法 / 语料 / 证据 / 稿件")
     research_commands = research.add_subparsers(dest="research_command", required=True)
@@ -67,6 +75,15 @@ def main(argv=None):
     research_init.add_argument("--holdout-contract", type=Path, default=None)
     research_init.add_argument("--holdout-public-key", type=Path, default=None,
                                help="独立取得的服务 Ed25519 公钥文本文件；必须在研究开始前固定")
+    followup = research_commands.add_parser(
+        "followup", help="以新独立确认集和新候选创建后继预注册实验及 Study")
+    followup.add_argument("parent_run_dir", type=Path)
+    followup.add_argument("new_project", type=Path)
+    followup.add_argument("new_run_dir", type=Path)
+    followup.add_argument("--candidates-json", type=Path, required=True)
+    followup.add_argument("--new-test", type=Path, required=True)
+    followup.add_argument("--budget", type=int, required=True)
+    followup.add_argument("--objective", default=None)
     for research_name in ("run", "confirm"):
         sub = research_commands.add_parser(research_name)
         sub.add_argument("run_dir", type=Path)
@@ -88,6 +105,27 @@ def main(argv=None):
                              help="指定实现代码的编码 Agent 接入（默认从 --base-url/--model 推导）")
     research_status = research_commands.add_parser("status")
     research_status.add_argument("run_dir", type=Path)
+    benchmark = research_commands.add_parser(
+        "benchmark", help="运行内置 ODE/算法吞吐的离线跨领域 Research Kernel 基准")
+    benchmark.add_argument("out_dir", type=Path)
+    benchmark.add_argument("--case", action="append", choices=("ode-convergence", "throughput-sort"))
+    benchmark.add_argument("--trusted-local", action="store_true")
+    verify_benchmark = research_commands.add_parser(
+        "verify-benchmark", help="重新核验跨领域基准报告与保留的原始研究证据")
+    verify_benchmark.add_argument("out_dir", type=Path)
+    execute_design = research_commands.add_parser(
+        "execute-design", help="在沙箱中执行匹配已预注册候选的冻结设计")
+    execute_design.add_argument("run_dir", type=Path)
+    execute_design.add_argument("--design", required=True,
+                                help="已冻结的 ExperimentDesign ID")
+    execute_design.add_argument("--worker-url", default=None,
+                                help="远端分离式 worker 服务端基址")
+    migrate_diffs = research_commands.add_parser(
+        "migrate-diffs",
+        help="从不可变 parent/child 快照生成旧 revision Diff 旁路证明（不改写身份）")
+    migrate_diffs.add_argument("run_dir", type=Path)
+    migrate_diffs.add_argument("--revision", default=None,
+                               help="只迁移指定 REV-*；缺省审计全部 revision")
     prepare_confirmation = research_commands.add_parser("prepare-confirmation")
     prepare_confirmation.add_argument("run_dir", type=Path)
     accept_confirmation = research_commands.add_parser("accept-confirmation")
@@ -123,6 +161,12 @@ def main(argv=None):
     web.add_argument("--workspace-root", type=Path, action="append", default=None,
                      help="登记额外工作区根目录（可重复传参）：每个根持有独立的 Quest "
                           "工作区与稿件产物，登记持久化，工作台侧栏可切换当前根")
+    web.add_argument("--chat-base-url", default=os.environ.get("POPPER_CHAT_BASE_URL"),
+                     help="自由对话的 BYOK OpenAI 兼容端点（HTTPS 或本机 HTTP；key 走 "
+                          "环境变量 POPPER_API_KEY）。未配置时工作台如实显示未配置，"
+                          "拒绝发送对话")
+    web.add_argument("--chat-model", default=os.environ.get("POPPER_CHAT_MODEL"),
+                     help="自由对话使用的模型名（须与 --chat-base-url 成对提供）")
     corpus = research_commands.add_parser("corpus", help="领域语料库与社区共享协议（opt-in）")
     corpus_commands = corpus.add_subparsers(dest="corpus_command", required=True)
     for name in ("init", "stats", "list-community", "verify-community"):
@@ -244,9 +288,31 @@ def main(argv=None):
     mat_manuscript.add_argument("out_dir", type=Path)
     mat_manuscript.add_argument("--manuscript-json", type=Path, required=True)
     mat_manuscript.add_argument("--template", choices=("md", "tex", "docx", "pdf"), default="md")
-    mat_repro = materialize_commands.add_parser("repro", help="构建可一键重跑的复现包")
+    mat_evidence = materialize_commands.add_parser(
+        "evidence", help="从已验证的 Research Claim 生成确定性证据附录")
+    mat_evidence.add_argument("project_dir", type=Path)
+    mat_evidence.add_argument("research_run_dir", type=Path)
+    mat_evidence.add_argument("out_dir", type=Path)
+    mat_verify_evidence = materialize_commands.add_parser(
+        "verify-evidence", help="对照当前研究库和制品重新校验证据附录")
+    mat_verify_evidence.add_argument("project_dir", type=Path)
+    mat_verify_evidence.add_argument("research_run_dir", type=Path)
+    mat_verify_evidence.add_argument("out_dir", type=Path)
+    for command, help_text in (
+            ("bound-draft", "从全部已验证 Claim 生成结构化稿件草稿"),
+            ("verify-bound-draft", "重新校验稿件、草稿结构与权威研究证据")):
+        bound_parser = materialize_commands.add_parser(command, help=help_text)
+        bound_parser.add_argument("project_dir", type=Path)
+        bound_parser.add_argument("research_run_dir", type=Path)
+        bound_parser.add_argument("evidence_dir", type=Path)
+        bound_parser.add_argument("out_dir", type=Path)
+        bound_parser.add_argument("--manuscript-json", type=Path, required=True)
+    mat_repro = materialize_commands.add_parser(
+        "repro", help="导出代码、输入和已确认摘要；可显式包含原始证据以便携 replay")
     mat_repro.add_argument("project_dir", type=Path)
     mat_repro.add_argument("out_dir", type=Path)
+    mat_repro.add_argument("--include-raw-evidence", action="store_true",
+                           help="包含可能敏感的原始预测、日志与状态库，并在临时解压目录实际 replay")
     paper = research_commands.add_parser("paper", help="稿件事务流编排（写作/投稿/传播）")
     paper_commands = paper.add_subparsers(dest="paper_command", required=True)
     paper_submit = paper_commands.add_parser("submit", help="提交：reviewed->submitted（含 submit 前 gap 报告）")
@@ -258,11 +324,28 @@ def main(argv=None):
     paper_publish.add_argument("project", type=Path)
     paper_publish.add_argument("--manuscript", type=Path, default=None)
     paper_publish.add_argument("--reason", default=None)
+    for command, help_text in (
+            ("review-bound", "校验证据绑定草稿并记录人工审校状态"),
+            ("submit-bound", "校验证据绑定草稿后记录本地提交状态"),
+            ("publish-bound", "重新校验证据绑定草稿后记录本地发布状态")):
+        bound_paper = paper_commands.add_parser(command, help=help_text)
+        bound_paper.add_argument("project", type=Path)
+        bound_paper.add_argument("research_run_dir", type=Path)
+        bound_paper.add_argument("evidence_dir", type=Path)
+        bound_paper.add_argument("--manuscript", type=Path, required=True)
+        bound_paper.add_argument("--draft-spec-json", type=Path, required=True)
+        bound_paper.add_argument("--reason", required=command == "review-bound",
+                                 default=None)
     paper_revert = paper_commands.add_parser("revert", help="回退到更早状态（必须携带原因）")
     paper_revert.add_argument("project", type=Path)
     paper_revert.add_argument("to", choices=("draft", "reviewed", "submitted", "published"))
     paper_revert.add_argument("--reason", required=True)
     paper_revert.add_argument("--manuscript", type=Path, default=None)
+    paper_recover = paper_commands.add_parser(
+        "recover-projection", help="显式恢复单个仅写入 JSON、未写入事件链的稿件迁移")
+    paper_recover.add_argument("project", type=Path)
+    paper_recover.add_argument("--manuscript", type=Path, required=True)
+    paper_recover.add_argument("--reason", required=True)
     paper_status = paper_commands.add_parser("status", help="查看稿件状态")
     paper_status.add_argument("project", type=Path)
     paper_share = paper_commands.add_parser("share", help="登记稿件去向（复用 corpus.share 契约）")
@@ -448,13 +531,19 @@ def main(argv=None):
             sub.add_argument("--model")
         if name == "recover":
             sub.add_argument("--runner-stopped", action="store_true", help="确认原执行进程已结束")
+        if name == "replay":
+            sub.add_argument("--portable", action="store_true",
+                             help="只跳过原宿主身份比较；仍校验输入、评估器、事件与逐样本预测")
     reproduce = experiment_commands.add_parser("reproduce", help="运行通用论文复现任务")
     reproduce_commands = reproduce.add_subparsers(dest="reproduce_command", required=True)
-    for name in ("inspect", "init", "run", "verify", "status"):
+    for name in ("inspect", "init", "run", "verify", "status", "recover"):
         sub = reproduce_commands.add_parser(name)
         sub.add_argument("project", type=Path)
         if name in {"run", "verify"}:
             sub.add_argument("--trusted-local", action="store_true")
+        if name == "recover":
+            sub.add_argument("--runner-stopped", action="store_true", required=True,
+                             help="确认原执行进程已结束")
     archive = experiment_commands.add_parser("archive", help="审计日志压缩归档（冷存储分层，不删除原库）")
     archive.add_argument("project", type=Path)
     isolation = experiment_commands.add_parser("isolation", help="安全边界 / 隔离状态自检")
@@ -479,11 +568,16 @@ def main(argv=None):
     experiment = None
     research_controller = None
     try:
-        if args.command == "serve":
+        if args.command == "demo":
+            result = initialize_demo(args.project, args.case)
+        elif args.command == "serve":
+            if bool(args.chat_base_url) != bool(args.chat_model):
+                raise ProtocolError("--chat-base-url 和 --chat-model 必须同时提供")
             from .server import serve
             serve(args.project, args.port, args.trusted_local, args.campaign,
                   research_runs=tuple(args.research_run or ()),
-                  workspace_roots=tuple(args.workspace_root or ()))
+                  workspace_roots=tuple(args.workspace_root or ()),
+                  chat_base_url=args.chat_base_url, chat_model=args.chat_model)
             return 0
         elif args.command == "research":
             if args.research_command == "worker":
@@ -507,6 +601,15 @@ def main(argv=None):
                     confirmation_contract=read_json(args.holdout_contract) if args.holdout_contract else None,
                     confirmation_public_key=args.holdout_public_key.read_text(encoding="utf-8").strip()
                     if args.holdout_public_key else None)
+            elif args.research_command == "followup":
+                result = create_followup_study(
+                    args.parent_run_dir, args.new_project, args.new_run_dir,
+                    read_json(args.candidates_json), args.new_test,
+                    budget=args.budget, objective=args.objective)
+            elif args.research_command == "migrate-diffs":
+                archive = RevisionDiffArchive(args.run_dir / "revisions")
+                result = (archive.migrate(args.revision) if args.revision
+                          else archive.migrate_all())
             elif args.research_command == "corpus":
                 corpus = Corpus(args.corpus_dir)
                 if args.corpus_command == "init":
@@ -559,13 +662,36 @@ def main(argv=None):
                 else:
                     result = reviewer.assess(report)
             elif args.research_command == "materialize":
-                materializer = Materializer(args.project_dir)
-                if args.materialize_command == "manuscript":
+                if args.materialize_command in {"evidence", "verify-evidence"}:
+                    from .research.evidence_binding import (export_research_evidence,
+                                                            verify_research_evidence)
+                    fn = (export_research_evidence if args.materialize_command == "evidence"
+                          else verify_research_evidence)
+                    result = fn(args.project_dir, args.research_run_dir, args.out_dir)
+                elif args.materialize_command in {"bound-draft", "verify-bound-draft"}:
+                    from .research.bound_manuscript import (materialize_bound_draft,
+                                                            verify_bound_draft)
+                    fn = (materialize_bound_draft
+                          if args.materialize_command == "bound-draft"
+                          else verify_bound_draft)
+                    result = fn(args.project_dir, args.research_run_dir,
+                                args.evidence_dir, args.manuscript_json, args.out_dir)
+                elif args.materialize_command == "manuscript":
+                    materializer = Materializer(args.project_dir)
                     manuscript_json = read_json(args.manuscript_json)
                     result = materializer.materialize(manuscript_json, args.out_dir,
                                                       args.template)
                 else:
-                    result = materializer.build_repro_package(args.out_dir)
+                    materializer = Materializer(args.project_dir)
+                    result = materializer.build_repro_package(
+                        args.out_dir, include_raw_evidence=args.include_raw_evidence)
+            elif args.research_command in {"benchmark", "verify-benchmark"}:
+                from .research.benchmark import (run_cross_domain_benchmark,
+                                                 verify_cross_domain_benchmark)
+                result = (run_cross_domain_benchmark(
+                    args.out_dir, args.case, trusted_local=args.trusted_local)
+                    if args.research_command == "benchmark" else
+                    verify_cross_domain_benchmark(args.out_dir))
             elif args.research_command == "paper":
                 # 给 main() 末尾的 finally 去关：内联构造会让这个 sqlite 句柄没人接，
                 # 而在进程内调用 main()（工作台与测试都是）时它会一直开着。
@@ -573,10 +699,25 @@ def main(argv=None):
                 flow = ManuscriptFlow(experiment)
                 if args.paper_command == "submit":
                     result = flow.submit(args.manuscript, args.evidence_dir, args.reason)
+                elif args.paper_command == "review-bound":
+                    result = flow.review_bound(
+                        args.manuscript, args.research_run_dir, args.evidence_dir,
+                        args.draft_spec_json, args.reason)
+                elif args.paper_command == "submit-bound":
+                    result = flow.submit_bound(
+                        args.manuscript, args.research_run_dir, args.evidence_dir,
+                        args.draft_spec_json, args.reason)
                 elif args.paper_command == "publish":
                     result = flow.publish(args.manuscript, args.reason)
+                elif args.paper_command == "publish-bound":
+                    result = flow.publish_bound(
+                        args.manuscript, args.research_run_dir, args.evidence_dir,
+                        args.draft_spec_json, args.reason)
                 elif args.paper_command == "revert":
                     result = flow.revert(args.manuscript, args.to, args.reason)
+                elif args.paper_command == "recover-projection":
+                    result = flow.recover_interrupted_projection(
+                        args.manuscript, args.reason)
                 elif args.paper_command == "share":
                     result = flow.share(args.manuscript, args.destination, args.community_dir)
                 else:
@@ -685,6 +826,8 @@ def main(argv=None):
                 elif args.research_command == "implement":
                     result = research_controller.implement(
                         args.hypothesis, args.parent_revision, args.gpu_count)
+                elif args.research_command == "execute-design":
+                    result = research_controller.execute_registered_design(args.design)
                 elif args.research_command == "prepare-confirmation":
                     result = research_controller.prepare_external_confirmation()
                 elif args.research_command == "accept-confirmation":
@@ -702,6 +845,8 @@ def main(argv=None):
                     result = task.run(args.trusted_local)
                 elif args.reproduce_command == "verify":
                     result = task.verify(args.trusted_local)
+                elif args.reproduce_command == "recover":
+                    result = task.recover_interrupted()
                 else:
                     result = task.audit()
         elif args.command == "experiment" and args.experiment_command == "gate":
@@ -849,10 +994,15 @@ def main(argv=None):
                     raise ProtocolError("先停止原执行进程，再使用 --runner-stopped")
                 result = experiment.recover()
             else:
-                result = getattr(experiment,
-                                 args.experiment_command
-                                 if args.experiment_command != "status" else "state")()
+                result = (experiment.replay(portable=args.portable)
+                          if args.experiment_command == "replay" else
+                          getattr(experiment,
+                                  args.experiment_command
+                                  if args.experiment_command != "status" else "state")())
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        if (args.command == "research" and args.research_command == "benchmark"
+                and result["status"] != "passed"):
+            return 1
         return 0
     except (ProtocolError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"Popper: {error}", file=sys.stderr)

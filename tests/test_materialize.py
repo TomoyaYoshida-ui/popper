@@ -199,6 +199,7 @@ class MaterializeTests(unittest.TestCase):
             self.assertIn("train.json", names)
             self.assertIn("run.sh", names)
             self.assertIn("README_REPRO.md", names)
+            self.assertIn("manifest.json", names)
             lock = __import__("json").loads(archive.read("environment.lock"))
             self.assertTrue(lock.get("_generated_stub"))
 
@@ -232,6 +233,47 @@ class MaterializeTests(unittest.TestCase):
         _make_project(missing, include_experiment=False)
         with self.assertRaisesRegex(ProtocolError, "experiment.json"):
             Materializer(missing).build_repro_package(self.out)
+
+    def test_build_rejects_reserved_archive_member(self):
+        import json
+        for name in ("run.sh", "MANIFEST.JSON", ".popper/runs/fake/predictions.json"):
+            with self.subTest(name=name):
+                target = self.project / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("reserved input", encoding="utf-8")
+                spec = json.loads((self.project / "experiment.json").read_text(encoding="utf-8"))
+                spec["code_files"] = ["model.py", name]
+                write_json(self.project / "experiment.json", spec)
+                with self.assertRaisesRegex(ProtocolError, "保留成员名"):
+                    Materializer(self.project).build_repro_package(self.out)
+                self.assertFalse((self.out / "reproducibility.zip").exists())
+
+    def test_build_rejects_raw_evidence_member_collision(self):
+        from unittest import mock
+        raw = [(".popper/runs/A/results.json", self.project / "model.py"),
+               (".popper/runs/a/results.json", self.project / "model.py")]
+        with mock.patch.object(Materializer, "_portable_evidence", return_value=raw):
+            with self.assertRaisesRegex(ProtocolError, "成员名重复或大小写冲突"):
+                Materializer(self.project).build_repro_package(
+                    self.out, include_raw_evidence=True)
+        self.assertFalse((self.out / "reproducibility.zip").exists())
+
+    def test_corrupt_registered_state_fails_closed(self):
+        home = self.project / ".popper"
+        home.mkdir()
+        (home / "state.db").write_bytes(b"not-a-sqlite-database")
+        with self.assertRaisesRegex(ProtocolError, "拒绝生成"):
+            Materializer(self.project).build_repro_package(self.out)
+        self.assertFalse((self.out / "reproducibility.zip").exists())
+
+    def test_failed_portable_export_preserves_previous_artifact(self):
+        old = self.out / "reproducibility.zip"
+        old.write_bytes(b"previous-valid-export-placeholder")
+        with self.assertRaises(ProtocolError):
+            Materializer(self.project).build_repro_package(
+                self.out, include_raw_evidence=True)
+        self.assertEqual(b"previous-valid-export-placeholder", old.read_bytes())
+        self.assertFalse(list(self.out.glob("popper-export-*")))
 
     def test_build_rejects_declared_file_that_escapes_project(self):
         # experiment.json 是项目自带的输入，它声明的相对路径却可以写 `../`。
@@ -279,7 +321,13 @@ class MaterializeTests(unittest.TestCase):
         with ZipFile(Path(pack["path"])) as archive:
             self.assertIn("results.json", archive.namelist())
             self.assertIn("verify_claims.py", archive.namelist())
+            self.assertIn("manifest.json", archive.namelist())
+            original_results = archive.read("results.json")
             archive.extractall(self.root / "extracted")
+        import hashlib
+        self.assertEqual(hashlib.sha256(Path(pack["path"]).read_bytes()).hexdigest(),
+                         pack["sha256"])
+        self.assertEqual("summary_consistency_only", pack["verification_level"])
         # 在全新解压目录中运行自包含核验（无宿主 .popper 状态）。
         extracted = self.root / "extracted"
         # 核验脚本被发给任意用户，字节编码不能随宿主 locale 变。这里刻意剥掉
@@ -293,9 +341,163 @@ class MaterializeTests(unittest.TestCase):
         self.assertEqual(0, run.returncode, run.stderr)
         out = _json.loads(run.stdout)
         self.assertIn("delta", out)
-        self.assertIn("verified", out)
+        self.assertTrue(out["verified"])
+        self.assertEqual("summary_consistency_only", out["verification_level"])
+        self.assertFalse(out["scientific_claim_verified"])
         # 独立核验的 δ 必须与真实冻结 claim 的 test δ 一致（min 方向、真实候选）。
         self.assertAlmostEqual(out["delta"], true_claim["delta"], places=6)
+        (extracted / "results.json").write_text("{}", encoding="utf-8")
+        tampered = subprocess.run([sys.executable, "verify_claims.py"], cwd=extracted,
+                                  capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(3, tampered.returncode)
+        self.assertEqual("member_hash_mismatch", _json.loads(tampered.stdout)["reason"])
+
+        # Even if a local editor updates the unsigned manifest too, dev-only
+        # summaries cannot be mistaken for confirmed test evidence.
+        summary = _json.loads(original_results)
+        summary["runs"] = [{**row, "split": "dev"} for row in summary["runs"]]
+        (extracted / "results.json").write_text(_json.dumps(summary), encoding="utf-8")
+        manifest_path = extracted / "manifest.json"
+        manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["files"]["results.json"] = hashlib.sha256(
+            (extracted / "results.json").read_bytes()).hexdigest()
+        manifest_path.write_text(_json.dumps(manifest), encoding="utf-8")
+        dev_only = subprocess.run([sys.executable, "verify_claims.py"], cwd=extracted,
+                                  capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(2, dev_only.returncode)
+        self.assertEqual("missing_or_ambiguous_confirmed_test_runs",
+                         _json.loads(dev_only.stdout)["reason"])
+
+    def test_frozen_unconfirmed_project_cannot_emit_confirmation_check(self):
+        import runpy
+        from popper.core import Experiment, initialize
+        project = self.root / "frozen-only"
+        project.mkdir()
+        example = Path(__file__).resolve().parents[1] / "examples" / "quadratic"
+        for name in ("experiment.json", "model.py"):
+            shutil.copyfile(example / name, project / name)
+        runpy.run_path(str(example / "generate_data.py"))["generate"](project)
+        initialize(project)
+        experiment = Experiment(project)
+        try:
+            experiment.search(True)
+            experiment.freeze()
+        finally:
+            experiment.close()
+        result = Materializer(project).build_repro_package(self.out)
+        with ZipFile(result["path"]) as archive:
+            self.assertNotIn("results.json", archive.namelist())
+            self.assertNotIn("verify_claims.py", archive.namelist())
+            self.assertIn("manifest.json", archive.namelist())
+
+    def test_negative_confirmed_claim_passes_summary_consistency(self):
+        import json as _json
+        import runpy
+        import subprocess
+        import sys
+        from popper.core import Experiment, initialize
+        project = self.root / "negative-claim"
+        project.mkdir()
+        example = Path(__file__).resolve().parents[1] / "examples" / "quadratic"
+        for name in ("experiment.json", "model.py"):
+            shutil.copyfile(example / name, project / name)
+        spec = _json.loads((project / "experiment.json").read_text(encoding="utf-8"))
+        spec["min_improvement"] = 1_000_000
+        write_json(project / "experiment.json", spec)
+        runpy.run_path(str(example / "generate_data.py"))["generate"](project)
+        initialize(project)
+        experiment = Experiment(project)
+        try:
+            experiment.search(True)
+            experiment.freeze()
+            claim = experiment.confirm(True)
+            self.assertEqual("insufficient_evidence", claim["status"])
+        finally:
+            experiment.close()
+        pack = Materializer(project).build_repro_package(self.out)
+        extracted = self.root / "negative-extracted"
+        with ZipFile(pack["path"]) as archive:
+            archive.extractall(extracted)
+        run = subprocess.run([sys.executable, "verify_claims.py"], cwd=extracted,
+                             capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(0, run.returncode, run.stderr)
+        result = _json.loads(run.stdout)
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["supports_threshold_from_mean"])
+        self.assertEqual("insufficient_evidence", result["claim_status_recorded"])
+        self.assertFalse(result["scientific_claim_verified"])
+
+    def test_raw_evidence_package_replays_after_independent_extraction(self):
+        import runpy
+        from unittest.mock import patch
+        from popper.core import Experiment, initialize
+        project = self.root / "portable-completed"
+        project.mkdir()
+        example = Path(__file__).resolve().parents[1] / "examples" / "quadratic"
+        for name in ("experiment.json", "model.py"):
+            shutil.copyfile(example / name, project / name)
+        runpy.run_path(str(example / "generate_data.py"))["generate"](project)
+        initialize(project)
+        experiment = Experiment(project)
+        try:
+            experiment.search(True)
+            experiment.freeze()
+            experiment.confirm(True)
+        finally:
+            experiment.close()
+        package = Materializer(project).build_repro_package(
+            self.out, include_raw_evidence=True)
+        self.assertEqual("raw_prediction_replay_with_installed_popper",
+                         package["verification_level"])
+        extracted = self.root / "portable-extracted"
+        with ZipFile(package["path"]) as archive:
+            names = archive.namelist()
+            self.assertIn(".popper/state.db", names)
+            self.assertTrue(any(name.endswith("predictions-11.json") for name in names))
+            self.assertNotIn(".popper/chat.json", names)
+            archive.extractall(extracted)
+        reopened = Experiment(extracted)
+        try:
+            with patch("popper.core.platform.platform", return_value="different-host"):
+                with self.assertRaisesRegex(ProtocolError, "运行环境"):
+                    reopened.replay()
+                result = reopened.replay(portable=True)
+            self.assertTrue(result["claim_recomputed"])
+            self.assertEqual(6, result["runs_recomputed"])
+            prediction = next((extracted / ".popper" / "runs").rglob("predictions-11.json"))
+            prediction.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(ProtocolError, "修改"):
+                reopened.replay(portable=True)
+        finally:
+            reopened.close()
+
+    def test_non_ml_ode_raw_evidence_package_replays(self):
+        from popper.core import Experiment, initialize
+        project = self.root / "portable-ode"
+        project.mkdir()
+        example = Path(__file__).resolve().parents[1] / "examples" / "ode-convergence"
+        for name in ("experiment.json", "model.py", "train.json", "dev.json", "test.json"):
+            shutil.copyfile(example / name, project / name)
+        initialize(project)
+        experiment = Experiment(project)
+        try:
+            experiment.search(True)
+            experiment.freeze()
+            experiment.confirm(True)
+        finally:
+            experiment.close()
+        package = Materializer(project).build_repro_package(
+            self.out, include_raw_evidence=True)
+        extracted = self.root / "portable-ode-extracted"
+        with ZipFile(package["path"]) as archive:
+            archive.extractall(extracted)
+        reopened = Experiment(extracted)
+        try:
+            replay = reopened.replay(portable=True)
+            self.assertTrue(replay["claim_recomputed"])
+            self.assertGreaterEqual(replay["runs_recomputed"], 4)
+        finally:
+            reopened.close()
 
 
 if __name__ == "__main__":

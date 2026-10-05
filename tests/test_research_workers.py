@@ -9,8 +9,9 @@ import unittest
 from unittest.mock import Mock, patch
 from pathlib import Path
 
-from popper.core import ProtocolError, file_hash, initialize, read_json, write_json
-from popper.research.revisions import CodeEdit, RevisionStore
+from popper.core import ProtocolError, digest, file_hash, initialize, read_json, write_json
+from popper.research.revisions import (CodeEdit, RevisionStore,
+                                       source_control_provenance)
 from popper.research.workers import (
     InputArtifact, JobSpec, LocalWorker, RemoteWorker, TERMINAL_JOB_STATUSES,
     job_invocation, staged_input_artifacts)
@@ -55,6 +56,10 @@ class ResearchWorkerTests(unittest.TestCase):
             outputs=("outputs/result.json",), timeout_seconds=10)
 
     def test_revision_is_content_addressed_and_tamper_evident(self):
+        self.assertIn("--- a/model.py", self.manifest["diff"])
+        self.assertIn("+++ b/model.py", self.manifest["diff"])
+        self.assertEqual(digest(self.manifest["diff"]),
+                         self.manifest["identity"]["diff_sha256"])
         source = self.project / "model.py"
         edit = CodeEdit("model.py", source.read_text(encoding="utf-8") + "\n# revision\n",
                         file_hash(source))
@@ -64,6 +69,46 @@ class ResearchWorkerTests(unittest.TestCase):
         target.write_text("# tampered", encoding="utf-8")
         with self.assertRaisesRegex(ProtocolError, "已变化"):
             self.revisions.verify(self.manifest["revision_id"])
+
+    def test_revision_diff_is_identity_bound(self):
+        manifest_path = self.revision_dir / "revision.json"
+        manifest = read_json(manifest_path)
+        manifest["diff"] += "\nforged\n"
+        write_json(manifest_path, manifest)
+        with self.assertRaisesRegex(ProtocolError, "diff 摘要"):
+            self.revisions.verify(self.manifest["revision_id"])
+
+    @unittest.skipUnless(shutil.which("git"), "git is required")
+    def test_revision_records_git_commit_and_dirty_source_state(self):
+        subprocess.run(["git", "init", "-q"], cwd=self.project, check=True)
+        subprocess.run(["git", "config", "user.email", "popper@example.invalid"],
+                       cwd=self.project, check=True)
+        subprocess.run(["git", "config", "user.name", "Popper Test"],
+                       cwd=self.project, check=True)
+        subprocess.run(["git", "add", "model.py"], cwd=self.project, check=True)
+        subprocess.run(["git", "commit", "-qm", "source"], cwd=self.project, check=True)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=self.project, check=True,
+            capture_output=True, text=True).stdout.strip()
+
+        source = self.project / "model.py"
+        revision = self.revisions.create(
+            self.project, "H-git", "D-git",
+            [CodeEdit("model.py", source.read_text(encoding="utf-8") + "\n# git\n",
+                      file_hash(source))], "test-policy")
+        anchor = revision["identity"]["source_control"]
+        self.assertEqual("git", anchor["kind"])
+        self.assertEqual(head, anchor["head_commit"])
+        self.assertEqual(".", anchor["project_path"])
+        self.assertTrue(anchor["source_files_clean"])
+        self.assertEqual(64, len(anchor["source_status_sha256"]))
+
+        source.write_text(source.read_text(encoding="utf-8") + "\n# dirty\n",
+                          encoding="utf-8")
+        dirty = source_control_provenance(self.project, ["model.py"])
+        self.assertFalse(dirty["source_files_clean"])
+        self.assertNotEqual(anchor["source_status_sha256"],
+                            dirty["source_status_sha256"])
 
     def test_revision_requires_exact_source_hash(self):
         with self.assertRaisesRegex(ProtocolError, "SHA-256"):
@@ -475,6 +520,72 @@ class RevisionControllerIntegrationTests(unittest.TestCase):
 
     def test_unused_helper_is_blocked_then_wired_in_by_repair(self):
         self._exercise_revision(True, unused_helper=True)
+
+    def test_approved_existing_child_revision_uses_normal_execution_gates(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            project, run_dir = root / "project", root / "research"
+            project.mkdir()
+            for name in ("experiment.json", "model.py"):
+                shutil.copyfile(EXAMPLE / name, project / name)
+            runpy.run_path(str(EXAMPLE / "generate_data.py"))["generate"](project)
+            initialize(project)
+            ResearchController.initialize(project, run_dir)
+            controller = ResearchController(run_dir)
+
+            def executor(command, workspace, env, stdout, stderr, spec):
+                subprocess.run(command, cwd=workspace, env=env, stdout=stdout,
+                               stderr=stderr, timeout=spec.timeout_seconds, check=True)
+
+            controller.worker.executor = executor
+            try:
+                control_id = controller.manifest["control_hypothesis_id"]
+                controller._execute_development(
+                    control_id, ActionProposal(
+                        RUN_EXPERIMENT, "test baseline", control_id, source="test"),
+                    trusted_local=False, sandboxed=True)
+                hypothesis = controller.status()["candidates"][0]
+                source = project / "model.py"
+                original = source.read_text(encoding="utf-8")
+                parent_text = original.replace(
+                    "weights = solve(matrix, rhs)",
+                    "weights = solve(matrix, rhs)\n    weights = list(weights)")
+                parent = controller.revisions.create(
+                    project, hypothesis["hypothesis_id"], hypothesis["design_id"],
+                    [CodeEdit("model.py", parent_text, file_hash(source))],
+                    actor="local_user")
+                parent_file = controller.revisions.path(parent["revision_id"]) / "code/model.py"
+                child_text = parent_text.replace(
+                    "weights = solve(matrix, rhs)\n    weights = list(weights)",
+                    "weights = list(solve(matrix, rhs))")
+                child = controller.revisions.create(
+                    project, hypothesis["hypothesis_id"], hypothesis["design_id"],
+                    [CodeEdit("model.py", child_text, file_hash(parent_file))],
+                    actor="local_user", parent_revision_id=parent["revision_id"])
+
+                result = controller.execute_revision(child["revision_id"])
+                self.assertEqual("succeeded", result["status"])
+                self.assertEqual(child["revision_id"], result["requested_revision_id"])
+                self.assertEqual(child["revision_id"], result["revision"]["revision_id"])
+                self.assertEqual("dev", result["observation"]["scope"])
+                run = next(row for row in controller.store.list("run")
+                           if row.get("revision_id") == child["revision_id"])
+                self.assertEqual("succeeded", run["status"])
+                self.assertTrue(all(receipt["execution_gate"]["passed"]
+                                    for receipt in result["receipts"]))
+                replay = controller.execute_revision(child["revision_id"])
+                self.assertEqual("already_observed", replay["status"])
+                self.assertEqual(result["observation"]["observation_id"],
+                                 replay["observation"]["observation_id"])
+                sibling = controller.revisions.create(
+                    project, hypothesis["hypothesis_id"], hypothesis["design_id"],
+                    [CodeEdit("model.py", child_text + "\n# different approved child\n",
+                              file_hash(parent_file))],
+                    actor="local_user", parent_revision_id=parent["revision_id"])
+                with self.assertRaisesRegex(ProtocolError, "不同 revision"):
+                    controller.execute_revision(sibling["revision_id"])
+            finally:
+                controller.close()
 
     def _exercise_revision(self, fail_first, unused_helper=False):
         with tempfile.TemporaryDirectory() as d:

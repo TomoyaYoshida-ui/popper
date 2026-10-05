@@ -1,16 +1,27 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { adjudicate } from '../api'
-import type { PopperState, RiskEntry } from '../types'
+import type { Adjudication, PopperState, RiskEntry } from '../types'
+import { useConfirmation } from './ConfirmProvider'
 
-export function ReviewApprovalView({ data }: { data: PopperState }) {
+export function ReviewApprovalView({ data, projectName = '当前项目', workspaceId = '' }: { data: PopperState; projectName?: string; workspaceId?: string }) {
+  const confirm = useConfirmation()
+  const contextGeneration = useRef({ workspaceId, epoch: 0 })
+  if (contextGeneration.current.workspaceId !== workspaceId) contextGeneration.current = { workspaceId, epoch: contextGeneration.current.epoch + 1 }
+  const workspaceContext = `${workspaceId}:${contextGeneration.current.epoch}`
+  const currentWorkspace = useRef(workspaceContext); currentWorkspace.current = workspaceContext
   const state = data.state as { phase: string; claim: { claim_id: string; status: string; delta: number; threshold: number; scope: string; unit: string } | null }
   const review = data.review
 
   const risks: Record<string, RiskEntry> = review?.rejection_side.risks ?? {}
   const summary = review?.rejection_side.summary
   const fraud = review?.fraud_side.summary
-  const adjudications = review?.adjudications ?? {}
+  const [submitted, setSubmitted] = useState<{ context: string; risks: Record<string, Adjudication> } | null>(null)
+  const adjudications = { ...(submitted?.context === workspaceContext ? submitted.risks : {}), ...review?.adjudications }
   const [reason, setReason] = useState<Record<string, string>>({})
+  const requestInFlight = useRef(false)
+  const [busy, setBusy] = useState(false)
+  const [failure, setFailure] = useState<string | null>(null)
+  useEffect(() => { setReason({}); setFailure(null); setBusy(requestInFlight.current) }, [workspaceId])
 
   // 需用户裁决（机器产证据、用户裁决）：R6/R7
   const adjudication = Object.values(risks).filter((r) => r.user_adjudication)
@@ -23,12 +34,15 @@ export function ReviewApprovalView({ data }: { data: PopperState }) {
 
   return (
     <>
-      <p className="eyebrow">HUMAN REVIEW / 审批</p>
-      <h1>审批中心</h1>
+      <p className="eyebrow">项目评审 / HUMAN REVIEW</p>
+      <h1>项目评审裁决</h1>
+      <p className="muted">所属项目：{projectName}。此处处理项目旧实验的评审风险，不是当前 Study 的独立确认，也不是 Agent 工具审批。</p>
       <p className="muted">机器产证据、用户裁决。novelty 分级永不二值；R6/R7 需人工判断。裁定全程留痕入事件源。</p>
+      <div className="notice">下一步：{adjudication.some(r => !adjudications[r.risk_id]) ? '审查以下待裁决项，并填写留痕理由。' : mechanicalFails.length ? '核对机械失败项的证据；人工裁定不能覆盖机器评测。' : '当前没有待裁决项，可继续核对研究证据或审校稿件。'}</div>
+      {failure && <div className="chat-error" role="alert">{failure} · 输入理由已保留，可重新提交。</div>}
 
       <div className="section box">
-        <h2 style={{ fontSize: 16 }}>结论判定</h2>
+        <h2 style={{ fontSize: 16 }}>旧实验结论判定</h2>
         {claim ? (
           <>
             <div style={{ fontSize: 28, fontFamily: 'ui-monospace,monospace', margin: '8px 0' }} className={claim.status === 'supports_threshold' ? 'ok' : ''}>
@@ -43,7 +57,7 @@ export function ReviewApprovalView({ data }: { data: PopperState }) {
             <p className="muted" style={{ fontSize: 12 }}>{claim.scope}</p>
           </>
         ) : (
-          <p className="muted">尚未形成结论。最终确认后才生成 claim。</p>
+          <p className="muted">旧实验尚未形成结论。Study 的研究结论请从所属研究查看。</p>
         )}
       </div>
 
@@ -70,12 +84,12 @@ export function ReviewApprovalView({ data }: { data: PopperState }) {
                   <span className="badge ok">已处置</span>
                 ) : (
                   <span className="adj-ops">
-                    <input className="ginput" placeholder="留痕理由（必填）"
+                    <input className="ginput" placeholder="留痕理由（必填）" aria-label={`${r.risk_id} 裁决理由`} disabled={busy}
                       value={reason[r.risk_id] ?? ''}
                       onChange={(e) => setReason((m) => ({ ...m, [r.risk_id]: e.target.value }))} />
-                    <button className="gbtn ok" disabled={!(reason[r.risk_id] ?? '').trim()}
+                    <button className="gbtn ok" title={!(reason[r.risk_id] ?? '').trim() ? '请先填写留痕理由' : undefined} disabled={busy || !(reason[r.risk_id] ?? '').trim()}
                       onClick={() => doAdjudicate(r.risk_id, 'allow', reason[r.risk_id])}>放行</button>
-                    <button className="gbtn warn" disabled={!(reason[r.risk_id] ?? '').trim()}
+                    <button className="gbtn warn" title={!(reason[r.risk_id] ?? '').trim() ? '请先填写留痕理由' : undefined} disabled={busy || !(reason[r.risk_id] ?? '').trim()}
                       onClick={() => doAdjudicate(r.risk_id, 'reject', reason[r.risk_id])}>驳回</button>
                   </span>
                 )}
@@ -104,8 +118,8 @@ export function ReviewApprovalView({ data }: { data: PopperState }) {
         )}
       </div>
 
-      <div className="section box">
-        <h2 style={{ fontSize: 16 }}>汇总</h2>
+      <details className="section box">
+        <summary>评审记录与技术汇总</summary>
         {summary ? (
           <div className="row">
             <span className="muted">拒稿侧</span>
@@ -120,17 +134,27 @@ export function ReviewApprovalView({ data }: { data: PopperState }) {
             </span>
           </div>
         ) : null}
-      </div>
+      </details>
     </>
   )
 
-  /* 裁定成功后调用方立即拉取 /api/state；之后 SSE /api/events 的 state 补丁也会带出最新 adjudications。 */
+  /* Show the acknowledged decision immediately; SSE remains the authoritative projection. */
   async function doAdjudicate(riskId: string, verdict: 'allow' | 'reject', reasonText?: string) {
-    if (!reasonText || !reasonText.trim()) return
+    if (!reasonText || !reasonText.trim() || requestInFlight.current || adjudications[riskId]) return
+    requestInFlight.current = true
+    const requestWorkspace = workspaceContext
+    setBusy(true)
+    setFailure(null)
     try {
-      await adjudicate(riskId, verdict, reasonText.trim())
+      const accepted = await confirm({ title: '登记项目评审裁决', description: '此操作只处理项目旧实验的人工评审风险，不会批准 Agent 工具或消费 Study 独立确认资源。裁决及理由将写入项目事件记录。', details: [{ label: '所属项目', value: projectName }, { label: '风险项', value: riskId }, { label: '裁决', value: verdict === 'allow' ? '放行' : '驳回' }, { label: '留痕理由', value: reasonText.trim() }], confirmLabel: '确认登记裁决', danger: verdict === 'reject' })
+      if (!accepted || currentWorkspace.current !== requestWorkspace) return
+      const value = await adjudicate(riskId, verdict, reasonText.trim())
+      if (currentWorkspace.current === requestWorkspace) setSubmitted((previous) => ({ context: requestWorkspace, risks: { ...(previous?.context === requestWorkspace ? previous.risks : {}), [riskId]: value } }))
     } catch (e) {
-      window.alert((e as Error).message)
+      if (currentWorkspace.current === requestWorkspace) setFailure((e as Error).message)
+    } finally {
+      requestInFlight.current = false
+      setBusy(false)
     }
   }
 }

@@ -105,6 +105,67 @@ STUDY_TRANSITIONS = {
 VALID_DIRECTIONS = ("min", "max")
 
 
+HYPOTHESIS_PROPOSAL_FIELDS = frozenset({
+    "mechanism", "applicability", "predictions", "falsification", "alternatives",
+})
+
+
+def validate_hypothesis_proposal(payload):
+    """Validate a bounded, domain-neutral hypothesis before authoritative write."""
+    if not isinstance(payload, dict) or set(payload) != HYPOTHESIS_PROPOSAL_FIELDS:
+        raise ProtocolError("hypothesis proposal 字段不合法")
+    for field in ("mechanism", "applicability"):
+        value = payload[field]
+        if not isinstance(value, str) or not value.strip() or len(value) > 2000:
+            raise ProtocolError(f"hypothesis {field} 必须为 1–2000 字符")
+    for field in ("predictions", "falsification", "alternatives"):
+        values = payload[field]
+        if (not isinstance(values, list) or not 1 <= len(values) <= 8
+                or any(not isinstance(item, str) or not item.strip()
+                       or len(item) > 1000 for item in values)):
+            raise ProtocolError(f"hypothesis {field} 必须为 1–8 条非空文本")
+    return payload
+
+
+DESIGN_PROPOSAL_FIELDS = frozenset({
+    "hypothesis_id", "expected_hypothesis_version", "interventions",
+    "control", "baseline", "metric", "scorer_id", "metric_direction",
+    "analysis_unit", "splits", "repeat_values", "min_meaningful_effect",
+})
+
+
+def validate_design_proposal(payload):
+    """Bound a domain-neutral draft; execution binding is a separate capability."""
+    if not isinstance(payload, dict) or set(payload) != DESIGN_PROPOSAL_FIELDS:
+        raise ProtocolError("design proposal 字段不合法")
+    if (not isinstance(payload["hypothesis_id"], str)
+            or type(payload["expected_hypothesis_version"]) is not int
+            or payload["expected_hypothesis_version"] < 1):
+        raise ProtocolError("design hypothesis 身份或版本不合法")
+    for field in ("control", "baseline", "metric", "scorer_id", "analysis_unit"):
+        value = payload[field]
+        if not isinstance(value, str) or not value.strip() or len(value) > 2000:
+            raise ProtocolError(f"design {field} 必须为 1–2000 字符")
+    if payload["metric_direction"] not in VALID_DIRECTIONS:
+        raise ProtocolError("design metric_direction 必须为 min/max")
+    for field in ("interventions", "splits"):
+        values = payload[field]
+        if (not isinstance(values, list) or not 1 <= len(values) <= 16
+                or any(not isinstance(item, str) or not item.strip()
+                       or len(item) > 1000 for item in values)):
+            raise ProtocolError(f"design {field} 必须为 1–16 条非空文本")
+    repeats = payload["repeat_values"]
+    if (not isinstance(repeats, list) or not 1 <= len(repeats) <= 64
+            or any(type(item) not in (str, int) or
+                   (isinstance(item, str) and (not item.strip() or len(item) > 200))
+                   for item in repeats)):
+        raise ProtocolError("design repeat_values 必须为 1–64 个整数或非空标签")
+    effect = payload["min_meaningful_effect"]
+    if (type(effect) not in (int, float) or not math.isfinite(effect) or effect < 0):
+        raise ProtocolError("design min_meaningful_effect 必须为非负有限数值")
+    return payload
+
+
 def _require_transition(entity, current, target, table):
     allowed = table.get(current, set())
     if target not in allowed:

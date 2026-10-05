@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "popper-example-external-order"
+version = "0.1.0"
+description = "Example external Popper domain pack for numerical convergence"
+requires-python = ">=3.10"
+dependencies = ["popper-research==0.1.0"]
+
+[project.entry-points."popper.domain_packs"]
+external-order = "external_order_pack:PACK"
+
+[tool.setuptools.packages.find]
+include = ["external_order_pack*"]

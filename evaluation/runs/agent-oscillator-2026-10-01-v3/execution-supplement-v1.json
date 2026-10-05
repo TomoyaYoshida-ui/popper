@@ -1,0 +1,70 @@
+{
+  "schema_version": "1.0",
+  "kind": "oscillator_execution_supplement",
+  "frozen_at": "2026-10-01",
+  "original_protocol_sha256": "078608d0539e065af9ff6169115fa7f516dee40047ee14315638a84759a77abe",
+  "git_head": "6051dd9483977c679b9c2d63bb0a6c6680de382c",
+  "dirty_worktree": true,
+  "status": "execution_versions_frozen_formal_run_not_armed",
+  "code_sha256": {
+    "popper/domains/oscillator_trajectory.py": "fc63c9549f4aed50d710bd0a26989d40f9b04edc40687b44b072dc7ece534a36",
+    "popper/research/oscillator_study.py": "2e1f4bef0c6946356cf0453290a14d405cd76ec34666b3105e3fc2c8f86c235b",
+    "popper/research/evaluation_service.py": "4713fc1f4f320b145340b178b9f8bcdefb614a9c6ce6e7594728176b4d9e4002",
+    "popper/research/oscillator_broker.py": "27d4d42ed74e9d4d253441d5d2313b1c2bc45e0df70acac2011e62e34662195d",
+    "popper/research/oscillator_client.py": "98f62019feb8a8c1a019bf2f8f377e155f65805f9f431d2fdb6eb8e1c0531195",
+    "popper/research/oscillator_driver.py": "39c25283c42f989333268dba0b4b8e2c0eda1938c36ccb1a1f624fa102a94fa4",
+    "popper/research/oscillator_execution.py": "f3d45710f678c12fe49fb0f768f95076f8064c95594f56bcb2fbb1873743eb87",
+    "popper/research/oscillator_worker.py": "d1728f2629f8d32d7f4234822c178f376c6f061a7f932139e4d3320f99a1279c",
+    "popper/research/oscillator_baseline.py": "c6de1d2915391afe96a3115b50577fee3b6bc52dd0a2f55158661163b696be2d",
+    "popper/research/revision_archive.py": "81aa832ad0cf0dd54e78ecd3dbc123fb40997cab01af44ead2ef90195711cb22",
+    "popper/research/agent_evaluation_budget.py": "002cd93a7c422f54c47627bb7db2b97d07cd73f4d6dba1adfe7ba20bbeb85746",
+    "popper/research/agent_revisions.py": "323b544733512c3998bff52221aa6fabc75218e6942d5e077ce819a859043ccb",
+    "popper/research/revision_drafts.py": "d644f210fc5f618254b012cb18eb7aa6d098a0f7f7409d0c90fc53783cc77545",
+    "popper/revision_tools.py": "cecf2d66277cee3bac74dd4ca8079daaf78f7837473893d42744bd24d7ea57ec",
+    "popper/chat.py": "9bd4922233a7c7a52160814904ee23eec4b21656c975e6a983e504b196a62f8c",
+    "popper/server.py": "a7c1a04107f03a33b7e7ae5c856bd0c44036708c19a08b01cef31f5f012bde19",
+    "popper/task_context.py": "6efc8d26aaf5e3ca4411eecf59eacae11cdd00e4c278f071ae43d0c9b280596f",
+    "popper/sandbox/win_lowil.py": "4a0dc29cedb4c8973210d78675cf2502b928bef4124a796079ccff13122d410f"
+  },
+  "evaluator": "oscillator-trajectory-v1",
+  "reference_methods": [
+    "DOP853_8e-14",
+    "RK45_3e-14",
+    "DOP853_2.3e-14"
+  ],
+  "reference_normalized_disagreement_limit": 1e-8,
+  "query_budget_scope": "host-counted RHS oracle queries, not total arithmetic or equal model cost",
+  "boundary": {
+    "platform": "Windows",
+    "mechanism": "low integrity + host named pipe",
+    "kernel_network_block": false
+  },
+  "campaign": {
+    "max_requests": 60,
+    "max_tokens": 400000,
+    "unknown_usage": "stop",
+    "ambiguous_dispatch": "stop; no automatic resend",
+    "independent_confirmation": "separate user approval required"
+  },
+  "model_config": {
+    "model": "mimo-v2.5-pro",
+    "base_url": "https://api.xiaomimimo.com/v1",
+    "temperature": 0.7,
+    "max_output_tokens": 4096,
+    "tools_sha256": "2a53abe85f8b1af33d614ff5e0e912cb0e7885e5d26bf08e988e8d722fa5b3a5"
+  },
+  "gates": {
+    "actual_v3_reference_source_read_probe": true,
+    "full_regression": "failure observed; not yet accepted",
+    "model_initial_material_snapshot": "not frozen",
+    "agent_authored_protocol_to_study": "not yet validated",
+    "formal_model_requests": 0,
+    "confirmation_executions": 0
+  },
+  "no_claims": [
+    "not an Agent research result",
+    "not a hermetic sandbox",
+    "not third-party reproduction",
+    "not a completed evaluation"
+  ]
+}

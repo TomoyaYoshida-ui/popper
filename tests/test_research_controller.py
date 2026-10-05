@@ -1,3 +1,4 @@
+import json
 import runpy
 import shutil
 import tempfile
@@ -9,6 +10,7 @@ from popper.core import EVALUATORS, ProtocolError, digest, file_hash, initialize
 from popper.research.actions import (ADD_CONTROL, REQUEST_CONFIRMATION,
                                      RUN_EXPERIMENT, STOP)
 from popper.research.controller import ResearchController
+from popper.research.contracts import ExperimentDesign, Hypothesis
 from popper.research.evaluation_service import evaluate_request, scoring_code_hash
 from popper.research.models import EvidenceDrivenPolicy
 from popper.research.models import DeepSeekResearchPolicy
@@ -197,6 +199,118 @@ class ResearchControllerIntegrationTests(unittest.TestCase):
         self.assertEqual(4, len(controller.store.list("design")))
         self.assertTrue(all(d["status"] == "frozen" for d in controller.store.list("design")))
 
+    def test_frozen_agent_design_routes_only_to_registered_candidate(self):
+        controller = self._open()
+        candidate_id = controller.manifest["candidate_hypothesis_ids"][0]
+        original = controller.store.get("design", controller._current_design_id(candidate_id))
+
+        def add_design(design_id, interventions):
+            controller.store.create_design(ExperimentDesign(
+                design_id=design_id, hypothesis_id=candidate_id,
+                interventions=tuple(interventions), control=original["control"],
+                baseline=original["baseline"], metric=original["metric"],
+                scorer_id=original["scorer_id"],
+                metric_direction=original["metric_direction"],
+                analysis_unit=original["analysis_unit"],
+                splits=tuple(original["splits"]), seeds=tuple(original["seeds"]),
+                min_meaningful_effect=original["min_meaningful_effect"]))
+            controller.store.freeze_design(design_id)
+
+        add_design("D-agent-unregistered", ('{"unregistered":true}',))
+        with patch.object(controller, "_require_sandbox_backend"), self.assertRaisesRegex(
+                ProtocolError, "未匹配预注册候选"):
+            controller.execute_registered_design("D-agent-unregistered")
+        add_design("D-agent-registered", original["interventions"])
+        with patch.object(controller, "_require_sandbox_backend"), patch.object(
+                controller, "_execute_development", return_value={"ok": True}) as execute:
+            self.assertEqual({"ok": True}, controller.execute_registered_design(
+                "D-agent-registered"))
+            self.assertEqual("D-agent-registered", execute.call_args.kwargs["design_id"])
+            self.assertEqual(controller.manifest["configs"][candidate_id],
+                             execute.call_args.kwargs["config"])
+
+    def test_frozen_agent_design_executes_with_independent_observation(self):
+        from popper import sandbox
+        if not sandbox.available():
+            self.skipTest("sandbox backend unavailable")
+        controller = self._open()
+        candidate_id = controller.manifest["candidate_hypothesis_ids"][0]
+        original = controller.store.get("design", controller._current_design_id(candidate_id))
+        hypothesis_id = "H-agent-new-registered"
+        controller.store.add_hypothesis(Hypothesis(
+            hypothesis_id=hypothesis_id, study_id=controller.manifest["study_id"],
+            version=1, parent_version=None, mechanism="registered candidate mechanism",
+            applicability="current development scope", predictions=("directional effect",),
+            falsification=("no directional effect",)))
+        design_id = "D-agent-executed"
+        controller.store.create_design(ExperimentDesign(
+            design_id=design_id, hypothesis_id=hypothesis_id,
+            interventions=tuple(original["interventions"]),
+            control=original["control"], baseline=original["baseline"],
+            metric=original["metric"], scorer_id=original["scorer_id"],
+            metric_direction=original["metric_direction"],
+            analysis_unit=original["analysis_unit"],
+            splits=tuple(original["splits"]), seeds=tuple(original["seeds"]),
+            min_meaningful_effect=original["min_meaningful_effect"]))
+        controller.store.freeze_design(design_id)
+        spent_before = controller.status()["budget"]["spent"]
+        observation = controller.execute_registered_design(design_id)
+        run = controller.store.get("run", observation["run_id"])
+        self.assertEqual(design_id, run["design_id"])
+        self.assertEqual("succeeded", run["status"])
+        self.assertEqual("dev", observation["scope"])
+        self.assertTrue(run["revision_id"].startswith("REV-"))
+        self.assertEqual(design_id,
+                         controller.revisions.verify(run["revision_id"])["identity"]["design_id"])
+        self.assertTrue(controller.exp.results("dev"))
+        self.assertEqual("searching", controller.exp.state()["phase"])
+        self.assertEqual([], controller.exp.results("test"))
+        self.assertTrue(controller.store.verify()["ok"])
+        self.assertEqual("inconclusive", controller.store.get(
+            "hypothesis", hypothesis_id)["status"])
+        self.assertEqual(spent_before + 1, controller.status()["budget"]["spent"])
+        self.assertEqual(observation["observation_id"],
+                         controller.execute_registered_design(design_id)["observation_id"])
+        second_hypothesis_id = "H-agent-duplicate-evidence"
+        controller.store.add_hypothesis(Hypothesis(
+            hypothesis_id=second_hypothesis_id,
+            study_id=controller.manifest["study_id"], version=1,
+            parent_version=None, mechanism="same registered candidate",
+            applicability="current development scope", predictions=("effect",),
+            falsification=("no effect",)))
+        controller.store.create_design(ExperimentDesign(
+            design_id="D-agent-duplicate-evidence",
+            hypothesis_id=second_hypothesis_id,
+            interventions=tuple(original["interventions"]),
+            control=original["control"], baseline=original["baseline"],
+            metric=original["metric"], scorer_id=original["scorer_id"],
+            metric_direction=original["metric_direction"],
+            analysis_unit=original["analysis_unit"],
+            splits=tuple(original["splits"]), seeds=tuple(original["seeds"]),
+            min_meaningful_effect=original["min_meaningful_effect"]))
+        controller.store.freeze_design("D-agent-duplicate-evidence")
+        from popper.research.readout import controller_routing_readiness, read_research_state
+        projection = read_research_state(self.run_dir)
+        duplicate = next(row for row in projection["designs"]
+                         if row["design_id"] == "D-agent-duplicate-evidence")
+        route = controller_routing_readiness(self.run_dir, projection, duplicate)
+        self.assertFalse(route["registered_design_route_ready"])
+        self.assertIn("candidate_evidence_already_used", route["registered_design_reasons"])
+        with self.assertRaisesRegex(ProtocolError, "不能作为新设计的独立证据"):
+            controller.execute_registered_design("D-agent-duplicate-evidence")
+
+    def test_execute_design_cli_dispatches_to_controller(self):
+        from popper.cli import main
+        with patch("popper.cli.ResearchController") as controller_type, patch(
+                "builtins.print"):
+            controller_type.return_value.execute_registered_design.return_value = {
+                "observation_id": "OBS-cli"}
+            self.assertEqual(0, main(["research", "execute-design", str(self.run_dir),
+                                      "--design", "D-agent-cli"]))
+            controller_type.return_value.execute_registered_design.assert_called_once_with(
+                "D-agent-cli")
+            controller_type.return_value.close.assert_called_once()
+
     def test_real_adaptive_loop_and_confirmation(self):
         controller = self._open()
         status = controller.run(trusted_local=True, auto_confirm=True)
@@ -210,6 +324,30 @@ class ResearchControllerIntegrationTests(unittest.TestCase):
                             for c in status["candidates"]))
         self.assertGreater(status["budget"]["spent"], 0)
         self.assertEqual("separate_process_same_account", status["evaluation_trust"])
+        self.assertEqual(1, len(status["claims"]))
+        claim = status["claims"][0]
+        self.assertEqual("registered_independent_confirmation", claim["scope"])
+        self.assertEqual("supported_in_scope", claim["status"])
+        self.assertEqual(2, len(claim["observation_refs"]))
+        self.assertGreaterEqual(claim["oriented_delta"], claim["min_meaningful_effect"])
+        from popper.research.readout import read_research_state
+        projected = read_research_state(self.run_dir)
+        self.assertEqual(claim["claim_id"], projected["claims"][0]["entity_id"])
+        self.assertTrue(projected["experiment_graph"]["integrity"]["ok"])
+        decision_id = next(row["entity_id"] for row in
+                           controller.store.list_with_ids("decision")
+                           if row["actor"] == "confirmation_controller")
+        duplicate = controller.store.claims.confirm(
+            controller.manifest["study_id"], decision_id,
+            *claim["observation_refs"])
+        self.assertEqual(claim, duplicate)
+        dev_observation = next(item for item in status["observations"]
+                               if item["scope"] == "dev")
+        with self.assertRaisesRegex(ProtocolError, "决策"):
+            controller.store.claims.confirm(
+                controller.manifest["study_id"], decision_id,
+                dev_observation["observation_id"],
+                claim["observation_refs"][1])
 
     def test_resume_does_not_repeat_completed_side_effects(self):
         controller = self._open()
@@ -223,6 +361,63 @@ class ResearchControllerIntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(second["budget"]["spent"], spent)
         ids = [o["observation_id"] for o in second["observations"]]
         self.assertEqual(len(ids), len(set(ids)))
+
+    def test_claim_semantics_reject_rehashed_evidence_inflation(self):
+        controller = self._open()
+        controller.run(trusted_local=True, auto_confirm=True)
+        conn = controller.store._unsafe_conn
+        row = conn.execute("SELECT seq,payload FROM events WHERE kind='claim'").fetchone()
+        self.assertIsNotNone(row)
+        tampered = json.loads(row[1])
+        tampered["oriented_delta"] += 1.0
+        conn.execute("UPDATE events SET payload=? WHERE seq=?",
+                     (json.dumps(tampered), row[0]))
+        snapshot = dict(tampered)
+        snapshot.pop("status")
+        conn.execute("UPDATE snapshots SET payload=? WHERE kind='claim'",
+                     (json.dumps(snapshot),))
+        self._rehash_research_events(conn)
+        integrity = controller.store.verify()
+        self.assertFalse(integrity["ok"])
+        self.assertIn("Claim 与确认依据不一致", integrity["reason"])
+
+    def test_claim_semantics_reject_rehashed_failed_run(self):
+        controller = self._open()
+        claim = controller.run(trusted_local=True, auto_confirm=True)["claims"][0]
+        candidate = controller.store.get("observation", claim["observation_refs"][1])
+        run_id = candidate["run_id"]
+        conn = controller.store._unsafe_conn
+        row = conn.execute(
+            "SELECT seq,payload FROM events WHERE kind='run' AND entity_id=? "
+            "AND event_type='status' ORDER BY seq DESC LIMIT 1", (run_id,)).fetchone()
+        changed = json.loads(row[1])
+        self.assertEqual("succeeded", changed["to"])
+        changed["to"] = "infrastructure_failed"
+        conn.execute("UPDATE events SET payload=? WHERE seq=?",
+                     (json.dumps(changed), row[0]))
+        conn.execute("UPDATE snapshots SET status=? WHERE kind='run' AND entity_id=?",
+                     ("infrastructure_failed", run_id))
+        self._rehash_research_events(conn)
+        integrity = controller.store.verify()
+        self.assertFalse(integrity["ok"])
+        self.assertIn("Claim 与确认依据不一致", integrity["reason"])
+
+    @staticmethod
+    def _rehash_research_events(conn):
+        previous = "0" * 64
+        last_seq = 0
+        for last_seq, kind, entity_id, event_type, payload, writer in conn.execute(
+                "SELECT seq,kind,entity_id,event_type,payload,writer FROM events "
+                "ORDER BY seq").fetchall():
+            event_hash = digest({"kind": kind, "entity_id": entity_id,
+                                 "event_type": event_type, "payload": json.loads(payload),
+                                 "writer": writer, "previous": previous})
+            conn.execute("UPDATE events SET previous_hash=?,hash=? WHERE seq=?",
+                         (previous, event_hash, last_seq))
+            previous = event_hash
+        conn.execute("UPDATE store_meta SET value=? WHERE key='chain_head'",
+                     (json.dumps([last_seq, previous]),))
+        conn.commit()
 
     def test_manifest_tamper_blocks_resume(self):
         controller = self._open()

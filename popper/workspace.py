@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import threading
 import uuid
+import re
+import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from .core import ProtocolError, read_json, write_json
+from .core import ProtocolError, digest, file_hash, read_json, write_json
 from .reproduction import STATE_DIR
 
 SCHEMA_VERSION = "1.0"
@@ -45,6 +48,17 @@ DISCLOSURE_LABELS = {
     "ieee": "IEEE 口径",
 }
 
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
+_COMMAND_HISTORY_LIMIT = 256
+
+
+class WorkspaceVersionConflict(ProtocolError):
+    """A command was based on a stale workspace state version."""
+
+
+class WorkspaceIdempotencyConflict(ProtocolError):
+    """An idempotency key was reused for a different command."""
+
 
 class Workspace:
     def __init__(self, project_dir, lock=None):
@@ -72,10 +86,32 @@ class Workspace:
             raise ProtocolError(f"workspace.json 无法解析：{error}")
         if not isinstance(data, dict):
             raise ProtocolError("workspace.json 结构不合法")
+        meta = data.setdefault("meta", {})
+        meta.setdefault("state_version", 1)
+        meta.setdefault("_command_results", {})
         return data
 
-    def save(self, data: dict) -> None:
+    def save(self, data: dict, expected_version: int | None = None) -> int:
+        """Atomically persist a new workspace version.
+
+        Legacy callers omit ``expected_version`` and retain their previous
+        last-writer-wins behavior. API v1 commands always provide it and fail
+        closed on stale state.
+        """
+        if not isinstance(data, dict) or not isinstance(data.get("meta"), dict):
+            raise ProtocolError("workspace 数据缺少 meta")
+        current = self.read()
+        current_version = int(current["meta"]["state_version"]) if current else 0
+        if expected_version is not None:
+            if type(expected_version) is not int or expected_version < 1:
+                raise ProtocolError("expected_version 必须是正整数")
+            if expected_version != current_version:
+                raise WorkspaceVersionConflict(
+                    f"workspace 版本冲突：期望 {expected_version}，当前 {current_version}")
+        next_version = current_version + 1
+        data["meta"]["state_version"] = next_version
         write_json(self.path, data)
+        return next_version
 
     # -- 真实项目信息（用于无假数据播种） --------------------------------------
     def project_spec(self) -> str | None:
@@ -122,6 +158,8 @@ class Workspace:
             "schema_version": SCHEMA_VERSION,
             "meta": {
                 "next_quest_counter": 1,
+                "state_version": 1,
+                "_command_results": {},
                 "seed": {"folder_name": folder_name, "phase": phase, "seeded_at": now},
             },
             "folders": [{
@@ -139,6 +177,94 @@ class Workspace:
         }
         write_json(self.path, data)
         return True
+
+    def apply_operation(self, data: dict, payload: dict) -> dict:
+        """Apply one validated workspace mutation without persisting it."""
+        if not isinstance(payload, dict) or not isinstance(payload.get("op"), str):
+            raise ProtocolError("请求必须含 op 字符串")
+        op = payload["op"]
+        handlers = {
+            "folder_create": (["name"], lambda: self.folder_create(data, payload["name"])),
+            "folder_rename": (["fid", "name"], lambda: self.folder_rename(
+                data, payload["fid"], payload["name"])),
+            "folder_remove": (["fid"], lambda: self.folder_remove(data, payload["fid"])),
+            "task_create": (["fid"], lambda: self.task_create(
+                data, payload["fid"], payload.get("title"))),
+            "task_rename": (["fid", "quid", "title"], lambda: self.task_rename(
+                data, payload["fid"], payload["quid"], payload["title"])),
+            "task_toggle": (["fid", "quid"], lambda: self.task_toggle(
+                data, payload["fid"], payload["quid"], bool(payload.get("done", False)))),
+            "task_remove": (["fid", "quid"], lambda: self.task_remove(
+                data, payload["fid"], payload["quid"])),
+            "task_move": (["from_fid", "quid", "to_fid"], lambda: self.task_move(
+                data, payload["from_fid"], payload["quid"], payload["to_fid"])),
+        }
+        handler = handlers.get(op)
+        if handler is None:
+            raise ProtocolError("未知工作区操作")
+        needed, apply = handler
+        for key in needed:
+            if key not in payload or payload[key] is None:
+                raise ProtocolError(f"缺少 {key}")
+        apply()
+        return data
+
+    def apply_command(self, payload: dict, *, idempotency_key: str,
+                      expected_version: int) -> dict:
+        """Apply an API v1 command exactly once within workspace.json.
+
+        Command receipt and mutated state are written in the same atomic file
+        replacement, so a crash cannot persist one without the other.
+        """
+        if not isinstance(idempotency_key, str) or not _IDEMPOTENCY_KEY.fullmatch(
+                idempotency_key):
+            raise ProtocolError("idempotency_key 格式不合法")
+        data = self.read()
+        if data is None:
+            raise ProtocolError("workspace 尚未初始化")
+        command_hash = digest(payload)
+        receipts = data["meta"].setdefault("_command_results", {})
+        previous = receipts.get(idempotency_key)
+        if previous is not None:
+            if previous.get("command_sha256") != command_hash:
+                raise WorkspaceIdempotencyConflict("相同 idempotency_key 对应不同命令")
+            return dict(previous["result"])
+        current_version = data["meta"]["state_version"]
+        if expected_version != current_version:
+            raise WorkspaceVersionConflict(
+                f"workspace 版本冲突：期望 {expected_version}，当前 {current_version}")
+        self.apply_operation(data, payload)
+        result = {"operation": payload["op"], "state_version": current_version + 1}
+        receipts[idempotency_key] = {
+            "command_sha256": command_hash,
+            "result": result,
+            "applied_at": self._now(),
+        }
+        while len(receipts) > _COMMAND_HISTORY_LIMIT:
+            receipts.pop(next(iter(receipts)))
+        self.save(data, expected_version=expected_version)
+        return dict(result)
+
+    def command_receipt(self, payload: dict, *, idempotency_key: str) -> dict | None:
+        """Read an exact committed command receipt without replaying its effect."""
+        if not isinstance(idempotency_key, str) or not _IDEMPOTENCY_KEY.fullmatch(
+                idempotency_key):
+            raise ProtocolError("idempotency_key 格式不合法")
+        data = self.read()
+        if data is None:
+            return None
+        receipt = data["meta"].get("_command_results", {}).get(idempotency_key)
+        if receipt is None:
+            return None
+        if (not isinstance(receipt, dict)
+                or receipt.get("command_sha256") != digest(payload)
+                or not isinstance(receipt.get("result"), dict)
+                or receipt["result"].get("operation") != payload.get("op")
+                or type(receipt["result"].get("state_version")) is not int
+                or receipt["result"]["state_version"] < 1
+                or receipt["result"]["state_version"] > data["meta"]["state_version"]):
+            raise WorkspaceIdempotencyConflict("工具命令收据与原请求不一致")
+        return dict(receipt["result"])
 
     # -- 定位辅助 ------------------------------------------------------------
     @staticmethod
@@ -238,7 +364,7 @@ class Workspace:
 
     WRITEABLE_SUFFIXES = {".md", ".tex", ".json"}
 
-    def write_deliverable(self, item_id: str, content: str) -> Path:
+    def write_deliverable(self, item_id: str, content: str, *, expected_sha256: str) -> Path:
         """把编辑后的文本写回已登记的物化文件（id 或文件名定位）。
 
         仅允许覆写 deliverables 目录内已存在的 md/tex/json 真实文件；扩展名受限、
@@ -259,7 +385,28 @@ class Workspace:
             raise ProtocolError("产物路径越界")
         if not target.is_file():
             raise ProtocolError("仅允许覆写已生成的物化文件")
-        target.write_text(str(content), encoding="utf-8")
+        if (not isinstance(expected_sha256, str)
+                or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None):
+            raise ProtocolError("保存稿件需要已读取文件的 SHA-256")
+        if file_hash(target) != expected_sha256:
+            raise WorkspaceVersionConflict("稿件已在别处修改，请重新加载后再保存")
+        try:
+            encoded = content.encode("utf-8")
+        except UnicodeError as error:
+            raise ProtocolError("稿件包含无法编码的字符") from error
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                    mode="wb", prefix=".popper-edit-", dir=target.parent,
+                    delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, target)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
         return target
 
 

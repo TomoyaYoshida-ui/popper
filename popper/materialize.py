@@ -1,13 +1,17 @@
-"""物化层 + 复现包。把已验证的科研 artifact 转成可交付稿件与可一键重跑的复现包。"""
+"""Manuscript templates and a bounded, summary-level research export."""
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import platform
+import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from .core import ProtocolError, inside, portable_path, read_json
+from .core import ProtocolError, file_hash, inside, portable_path, read_json
 
 
 DISCLOSURES = {
@@ -120,7 +124,19 @@ class Materializer:
         return "\n".join(lines)
 
     # -- 复现包 -------------------------------------------------------------
-    def build_repro_package(self, out_dir):
+    def build_repro_package(self, out_dir, include_raw_evidence=False):
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Build and self-verify in a private staging directory. A failed raw
+        # replay must not replace a previously valid export with a broken ZIP.
+        with tempfile.TemporaryDirectory(prefix="popper-export-", dir=out_dir) as staged:
+            result = self._build_repro_package_in_dir(staged, include_raw_evidence)
+            final = out_dir / "reproducibility.zip"
+            os.replace(result["path"], final)
+            result["path"] = str(final)
+            return result
+
+    def _build_repro_package_in_dir(self, out_dir, include_raw_evidence):
         if not (self.root / "experiment.json").is_file():
             raise ProtocolError("复现包必须含 experiment.json；项目目录缺少受控实验配置")
         spec = read_json(self.root / "experiment.json")
@@ -146,41 +162,142 @@ class Materializer:
             # 会让同一份包在两侧长出不同条目名（Linux 上就是一个含反斜杠的怪名字）。
             # 只归一产物，盘上的 experiment.json 保持用户原样。
             files.append(portable_path(name))
+        if len(set(files)) != len(files):
+            raise ProtocolError("复现包登记了重复输入路径")
+        reserved = {"environment.lock", "results.json", "verify_claims.py",
+                    "run.sh", "README_REPRO.md", "manifest.json"}
+        reserved_folded = {item.casefold() for item in reserved}
+        for name in files:
+            folded = name.casefold()
+            if folded in reserved_folded or folded.startswith(".popper/"):
+                raise ProtocolError(f"复现包输入占用保留成员名: {name}")
+        if len({name.casefold() for name in files}) != len(files):
+            raise ProtocolError("复现包登记了大小写冲突的输入路径")
         out_dir = Path(out_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         zip_path = out_dir / "reproducibility.zip"
         lock_present = (self.root / "environment.lock").is_file()
-        # 聚合已完成运行结果，使自包含核验脚本可独立重算 claim（不依赖目标 .popper）。
+        # Only confirmed test summaries are exportable here. This is not raw
+        # prediction replay and must never be described as independent scoring.
         aggregated = self._aggregate_results()
-        with ZipFile(zip_path, "w", ZIP_DEFLATED) as archive:
-            for name in files:
-                archive.write(self.root / name, arcname=name)
-            if lock_present:
-                archive.write(self.root / "environment.lock", arcname="environment.lock")
-                files.append("environment.lock")
-            else:
-                lock = {"python": sys.version, "platform": platform.platform(),
-                        "_generated_stub": True,
-                        "note": "未找到环境锁；此为占位，未锁定真实依赖闭包。验证器已标注 generated_stub。"}
-                archive.writestr("environment.lock",
-                                 json.dumps(lock, ensure_ascii=False, indent=2))
-                files.append("environment.lock")
+        with tempfile.TemporaryDirectory(prefix="popper-repro-stage-") as temporary:
+            raw_files = (self._portable_evidence(Path(temporary))
+                         if include_raw_evidence else [])
+            planned = [*files, "environment.lock", "run.sh", "README_REPRO.md",
+                       "manifest.json"]
             if aggregated is not None:
-                archive.writestr("results.json", json.dumps(aggregated, ensure_ascii=False, indent=2))
-                files.append("results.json")
-                archive.writestr("verify_claims.py",
-                                 self._verify_script(spec, aggregated.get("selected")))
-                files.append("verify_claims.py")
-            archive.writestr("run.sh", RUN_SCRIPT)
-            archive.writestr("README_REPRO.md", self._readme(lock_present, aggregated is not None))
-            files.extend(["run.sh", "README_REPRO.md"])
+                planned.extend(("results.json", "verify_claims.py"))
+            planned.extend(name for name, _ in raw_files)
+            if len({name.casefold() for name in planned}) != len(planned):
+                raise ProtocolError("复现包成员名重复或大小写冲突")
+            with ZipFile(zip_path, "w", ZIP_DEFLATED) as archive:
+                for name in files:
+                    archive.write(self.root / name, arcname=name)
+                if lock_present:
+                    archive.write(self.root / "environment.lock", arcname="environment.lock")
+                    files.append("environment.lock")
+                else:
+                    lock = {"python": sys.version, "platform": platform.platform(),
+                            "_generated_stub": True,
+                            "note": "未找到环境锁；此为占位，未锁定真实依赖闭包。验证器已标注 generated_stub。"}
+                    archive.writestr("environment.lock",
+                                     json.dumps(lock, ensure_ascii=False, indent=2))
+                    files.append("environment.lock")
+                if aggregated is not None:
+                    archive.writestr("results.json", json.dumps(aggregated, ensure_ascii=False, indent=2))
+                    files.append("results.json")
+                    archive.writestr("verify_claims.py", self._verify_script(spec))
+                    files.append("verify_claims.py")
+                for name, path in raw_files:
+                    archive.write(path, arcname=name)
+                    files.append(name)
+                archive.writestr("run.sh", RUN_SCRIPT)
+                archive.writestr("README_REPRO.md", self._readme(
+                    lock_present, aggregated is not None, include_raw_evidence))
+                files.extend(["run.sh", "README_REPRO.md"])
+        # Hash the bytes actually written into the archive, not a second read
+        # of mutable project files after packaging (avoids a TOCTOU manifest).
+        with ZipFile(zip_path, "a", ZIP_DEFLATED) as archive:
+            digests = {}
+            for name in files:
+                hasher = hashlib.sha256()
+                with archive.open(name) as member:
+                    for chunk in iter(lambda: member.read(1024 * 1024), b""):
+                        hasher.update(chunk)
+                digests[name] = hasher.hexdigest()
+            level = ("raw_prediction_replay_with_installed_popper" if include_raw_evidence
+                     else "summary_consistency_only")
+            archive.writestr("manifest.json", json.dumps({
+                "schema_version": "1.0", "verification_level": level,
+                "signed": False, "files": digests,
+            }, ensure_ascii=False, sort_keys=True, indent=2))
+            files.append("manifest.json")
+        if include_raw_evidence:
+            # A package is not called portable merely because it contains a DB:
+            # prove an independent extraction can recompute the saved claim.
+            with tempfile.TemporaryDirectory(prefix="popper-repro-verify-") as temporary:
+                with ZipFile(zip_path) as archive:
+                    archive.extractall(temporary)
+                from .core import Experiment
+                reproduced = Experiment(temporary)
+                try:
+                    replay = reproduced.replay(portable=True)
+                finally:
+                    reproduced.close()
+                if not replay["claim_recomputed"]:
+                    raise ProtocolError("便携复现包未能从原始预测重算已确认 claim")
         with ZipFile(zip_path) as check:
             if "experiment.json" not in check.namelist():
                 raise ProtocolError("复现包校验失败：缺少 experiment.json")
-        return {"status": "built", "path": str(zip_path), "files": files}
+        archive_hash = hashlib.sha256()
+        with zip_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                archive_hash.update(chunk)
+        return {"status": "built", "path": str(zip_path), "files": files,
+                "sha256": archive_hash.hexdigest(),
+                "verification_level": level}
+
+    def _portable_evidence(self, staging: Path):
+        """Snapshot the authority DB and only event-declared run artifacts."""
+        from .core import Experiment
+        experiment = Experiment(self.root)
+        try:
+            state = experiment.verify_inputs()
+            if state["phase"] != "completed" or not state.get("claim"):
+                raise ProtocolError("原始证据导出要求已完成确认的实验")
+            replay = experiment.replay()
+            if not replay["claim_recomputed"]:
+                raise ProtocolError("原始证据未形成可重算 claim")
+            snapshot = staging / "state.db"
+            destination = sqlite3.connect(snapshot)
+            try:
+                experiment.db.backup(destination)
+            finally:
+                destination.close()
+            names = [(".popper/state.db", snapshot)]
+            seen = {".popper/state.db"}
+            for row in experiment.db.execute(
+                    "SELECT payload FROM events WHERE kind='run_completed' ORDER BY seq"):
+                event = json.loads(row[0])
+                run_id = event["run_id"]
+                run_root = (experiment.home / "runs").resolve()
+                run_dir = (run_root / run_id).resolve()
+                if not run_dir.is_relative_to(run_root) or not run_dir.is_dir():
+                    raise ProtocolError(f"运行目录缺失或越界: {run_id}")
+                for name, expected in event["artifacts"].items():
+                    path = inside(run_dir, name)
+                    if file_hash(path) != expected:
+                        raise ProtocolError(f"运行工件哈希不匹配: {run_id}/{name}")
+                    member = ".popper/runs/" + portable_path(run_id) + "/" + portable_path(name)
+                    if member not in seen:
+                        names.append((member, path))
+                        seen.add(member)
+            return names
+        finally:
+            experiment.close()
 
     def _aggregate_results(self):
-        """从已完成实验的 .popper 状态聚合 runs 结果；未完成/无状态则返回 None。
+        """从已确认实验的 .popper 状态聚合 test 摘要；未完成则返回 None。
 
         仅读取已保存的真实运行结果，不反写、不伪造。附带冻结候选 selected。
         """
@@ -192,97 +309,117 @@ class Materializer:
             exp = Experiment(self.root)
             try:
                 state = exp.state()
-                if state.get("phase") not in {"frozen", "completed", "confirming", "confirmation_failed"}:
+                if state.get("phase") != "completed" or not state.get("claim"):
                     return None
-                results = exp.results()
+                results = exp.results("test")
                 selected = state.get("selected")
+                claim = state["claim"]
             finally:
                 exp.close()
-            # 聚合为 verify_claims.py 期望的扁平 runs 结构（含 config/mean）+ 冻结候选。
-            return {"schema_version": "1.0", "selected": selected, "runs": [
+            # 只导出 test 摘要、冻结候选及已保存结论；不伪装逐样本 replay。
+            return {"schema_version": "1.0", "selected": selected,
+                    "claim": {"delta": claim["delta"], "status": claim["status"]},
+                    "runs": [
                 {"config": r["config"], "split": r["split"], "mean": r["mean"]}
                 for r in results]}
-        except Exception:
-            return None
+        except Exception as error:
+            raise ProtocolError(
+                f"已登记实验状态不可读取，拒绝生成可能误导的复现包: {type(error).__name__}") from error
 
-    def _verify_script(self, spec, selected_config=None):
+    def _verify_script(self, spec):
         metric = spec["metric"]["name"]
         direction = spec["metric"]["direction"]
         threshold = spec["min_improvement"]
-        # selected_config：真实冻结候选；缺省则回退为"首个非 baseline"（尽力而为，
-        # 但应答验时传入真值，避免误选）。summary json.dumps 不再 !r 二次转义。
         metric_lit = json.dumps(metric, ensure_ascii=False)
         direction_lit = json.dumps(direction, ensure_ascii=False)
         threshold_lit = json.dumps(threshold, ensure_ascii=False)
-        selected_lit = json.dumps(selected_config, ensure_ascii=False) if selected_config is not None else "None"
         return "\n".join([
             "#!/usr/bin/env python3",
-            "'''自包含离线核验：仅依赖本包内 experiment.json + results.json。",
-            "确定性重算 claim（描述性阈值，不做显著性检验），不依赖宿主 Popper 状态。'''",
+            "'''Check archive hashes and confirmed test-summary delta without Popper.",
+            "This cannot independently recompute metrics from raw predictions or verify a scientific claim.'''",
             "from __future__ import annotations",
-            "import json, pathlib, sys",
+            "import hashlib, json, math, pathlib, sys",
             "root = pathlib.Path(__file__).resolve().parent",
-            # stdout 是机器解析的契约（含中文 reason/scope），必须与宿主 locale 无关：
-            # 重定向到管道时 Python 按 locale 编码（中文 Windows 为 cp936），会让按 UTF-8
-            # 读取的一方解码失败。这里显式钉住 UTF-8，与 popper/vendors.py 调用 worker 的口径一致。
             "if hasattr(sys.stdout, 'reconfigure'):",
             "    sys.stdout.reconfigure(encoding='utf-8', errors='replace')",
+            "manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))",
+            "for name, expected in manifest['files'].items():",
+            "    path = (root / name).resolve()",
+            "    if not path.is_relative_to(root) or not path.is_file():",
+            "        print(json.dumps({'verified': False, 'reason': 'missing_or_unsafe_member', 'path': name}))",
+            "        raise SystemExit(3)",
+            "    actual = hashlib.sha256(path.read_bytes()).hexdigest()",
+            "    if actual != expected:",
+            "        print(json.dumps({'verified': False, 'reason': 'member_hash_mismatch', 'path': name}))",
+            "        raise SystemExit(3)",
             "spec = json.loads((root / 'experiment.json').read_text(encoding='utf-8'))",
             "results = json.loads((root / 'results.json').read_text(encoding='utf-8'))",
-            "runs = results.get('runs') or results.get('results') or []",
+            "runs = results.get('runs', [])",
             f"metric = {metric_lit}",
             f"direction = {direction_lit}",
             f"threshold = {threshold_lit}",
-            f"selected_config = {selected_lit}",
-            "def config_eq(a, b): return a == b or (a is not None and b is not None and str(a) == str(b))",
-            "# 复刻 core.confirm 口径：最终测试（test split）的 baseline vs 冻结候选。",
-            "test_runs = [r for r in runs if r.get('split') == 'test'] or runs",
-            "baseline = next((r for r in test_runs if r.get('config') == spec['baseline']), None)",
-            "selected = next((r for r in test_runs if config_eq(r.get('config'), selected_config) "
-            "and r['config'] != spec['baseline']), None)",
-            "if selected is None:",
-            "    selected = next((r for r in test_runs if r.get('config') is not None and r['config'] != spec['baseline']), None)",
-            "out = {'metric': metric, 'verified': False}",
-            "if not baseline or not selected:",
-            "    out['reason'] = '缺少基线结果或候选结果'",
+            "selected_config = results.get('selected')",
+            "test_runs = [r for r in runs if r.get('split') == 'test']",
+            "baseline = [r for r in test_runs if r.get('config') == spec['baseline']]",
+            "selected = [r for r in test_runs if selected_config is not None",
+            "            and r.get('config') == selected_config and r.get('config') != spec['baseline']]",
+            "out = {'metric': metric, 'verified': False,",
+            "       'verification_level': 'summary_consistency_only',",
+            "       'scientific_claim_verified': False,",
+            "       'claim_status_recorded': results.get('claim', {}).get('status')}",
+            "if len(baseline) != 1 or len(selected) != 1 or len(test_runs) != 2:",
+            "    out['reason'] = 'missing_or_ambiguous_confirmed_test_runs'",
+            "elif any(type(r.get('mean')) not in (int, float) or not math.isfinite(r['mean'])",
+            "         for r in (baseline[0], selected[0])):",
+            "    out['reason'] = 'non_finite_summary'",
             "else:",
-            "    delta = (baseline['mean'] - selected['mean'] if direction == 'min'",
-            "             else selected['mean'] - baseline['mean'])",
+            "    delta = (baseline[0]['mean'] - selected[0]['mean'] if direction == 'min'",
+            "             else selected[0]['mean'] - baseline[0]['mean'])",
+            "    recorded_delta = results.get('claim', {}).get('delta')",
             "    out['delta'] = delta",
             "    out['threshold'] = threshold",
-            "    out['selected_config'] = selected['config']",
-            "    out['supports_threshold'] = bool(delta > 0 and delta >= threshold)",
-            "    out['verified'] = out['supports_threshold']",
-            "    out['scope'] = '仅当前数据划分与 pre-registered 配置；不做显著性检验'",
+            "    out['selected_config'] = selected_config",
+            "    out['supports_threshold_from_mean'] = bool(delta > 0 and delta >= threshold)",
+            "    out['verified'] = (type(recorded_delta) in (int, float)",
+            "                       and math.isfinite(recorded_delta)",
+            "                       and math.isclose(delta, recorded_delta, rel_tol=0, abs_tol=1e-12))",
+            "    if not out['verified']: out['reason'] = 'recorded_delta_mismatch'",
             "print(json.dumps(out, ensure_ascii=False))",
             "if not out['verified']:",
-            "    raise SystemExit(2)",  # 非零退出便于脚本化验收
+            "    raise SystemExit(2)",
             "",
         ])
 
-    def _readme(self, lock_present, results_present=False):
+    def _readme(self, lock_present, results_present=False, raw_evidence=False):
         lock_note = ("已在包内含 environment.lock，用于复现时锁定运行环境。"
                      if lock_present else
                      "未找到 environment.lock；包内为 generated_stub 占位，复现前请锁定宿主环境（Python 版本等）。")
-        verify_note = ("包内含自包含离线核验脚本 verify_claims.py 与 run.sh，解压后无需宿主 .popper 状态即可确定性重算 claim。"
+        verify_note = ("包内含摘要一致性检查脚本 verify_claims.py 与 run.sh；它检查包内文件哈希及确认测试摘要的 delta，"
+                       "不从逐样本原始证据独立计分，也不验证完整科学主张。"
                        if results_present else
-                       "本包未包含 results.json，无法执行自包含离线核验；请在宿主用 popper experiment replay 提供证据。")
+                       "项目尚未完成确认或缺少已保存 claim；本包不生成 results.json/verify_claims.py，不能检查确认结论。")
         return "\n".join([
             "# Popper 复现包", "",
-            "本包由物化层从已验证的科研 artifact 生成，聚焦确定性交付（代码 + 数据 + 环境锁 + 一键重跑）。",
+            "本包保存登记的代码、输入与环境信息；只有已完成确认的项目才附带确认摘要。",
             "", "## 环境锁定", "", lock_note, "",
-            "## 一键重跑（自包含离线核验，推荐）", "", verify_note, "",
-            "进入解压后的项目目录：", "    python verify_claims.py   # 确定性重算 claim（无需宿主 .popper）",
-            "    # 或", "    bash run.sh                  # 优先 verify_claims，成功后再尝试审计工作台",
+            "## 包内检查", "", verify_note,
+            "manifest.json 列出包内文件 SHA-256；它本身未签名，需从可信渠道独立取得整个 ZIP 的 SHA-256 才能防止清单与文件一起被替换。", "",
+            "进入解压后的项目目录：", "    python verify_claims.py   # 仅已完成确认的项目；检查摘要一致性",
+            "    # 或", "    bash run.sh                  # 同一检查入口",
             "",
-            "## 依赖宿主 Popper 的离线审计（可选）", "",
-            "若宿主已安装 popper 且项目保有 .popper 状态，可：",
-            "    python -m popper experiment replay <project>   # 从已保存预测重算指标与 claim（不重跑代码/LLM）",
+            "## 从原始证据独立重算", "",
+            ("本包含原始运行库及事件登记的预测/工件。安装同版本 Popper 后运行："
+             if raw_evidence else
+             "本包未包含 .popper 原始运行库；只能在原项目有该库时运行："),
+            ("    python -m popper experiment replay . --portable"
+             if raw_evidence else
+             "    python -m popper experiment replay <原项目>"),
             "",
-            "## δ 验证口径", "",
-            "Popper 采用确定性验证器闭环兑现：claim 只针对 pre-registered 配置、固定数据划分与固定评估器",
-            "（见 experiment.json 中 metric / seeds / baseline）。重跑以离线证据重算为准，不做显著性检验，",
-            "不证明机制或创新性。任何导致输入/环境/评估器版本变化的修改都会使验证失败。",
+            "## 当前限制", "",
+            ("本 ZIP 包含可能敏感的原始预测、运行日志和数据库；分享前须人工审查。"
+             if raw_evidence else
+             "本 ZIP 不包含 .popper 原始运行库与逐样本预测，因此不能独立完成 replay。"),
+            "摘要一致性不等于模型重跑、独立计分、统计主张核验或机制证明。",
             "",
         ])
 
@@ -290,15 +427,15 @@ class Materializer:
 RUN_SCRIPT = "\n".join([
     "#!/usr/bin/env bash",
     "set -euo pipefail",
-    "# Popper 物化层一键重跑入口：优先自包含离线核验（无需宿主 .popper 状态）。",
+    "# Popper 物化层摘要一致性检查（不从原始证据重算）。",
     "cd \"${1:-.}\"",
     "if [ -f results.json ] && [ -f verify_claims.py ]; then",
-    "    echo \"==> 自包含离线核验：python verify_claims.py\"",
+    "    echo \"==> 包内摘要一致性检查：python verify_claims.py\"",
     "    python verify_claims.py",
-    "    echo \"==> 核验通过（supports_threshold）。\"",
+    "    echo \"==> 摘要一致；科学主张仍需原始证据 replay。\"",
     "    exit 0",
     "fi",
-    "echo \"==> 本包未含 results.json，尝试宿主 Popper 离线重算（需宿主已安装 popper 且保有 .popper 状态）。\"",
-    "python -m popper experiment replay .",
+    "echo \"==> 本包未含确认摘要；请在原项目用 Popper replay 原始运行证据。\" >&2",
+    "exit 2",
     "",
 ])

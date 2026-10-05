@@ -66,6 +66,23 @@ class ProtocolTests(unittest.TestCase):
         self.exp = Experiment(self.root)
         self.assertEqual(claim, self.exp.state()["claim"])
 
+    def test_portable_replay_skips_only_host_identity(self):
+        exp = self.start()
+        exp.search(True)
+        exp.freeze()
+        exp.confirm(True)
+        with patch("popper.core.platform.platform", return_value="other-host"):
+            with self.assertRaisesRegex(ProtocolError, "运行环境"):
+                exp.replay()
+            replay = exp.replay(portable=True)
+            self.assertTrue(replay["claim_recomputed"])
+            self.assertTrue(replay["portable_replay"])
+            self.assertIn("platform", replay["original_environment"])
+            test_run = exp.results("test")[0]
+            write_json(exp.home / "runs" / test_run["run_id"] / "predictions-11.json", [])
+            with self.assertRaisesRegex(ProtocolError, "修改"):
+                exp.replay(portable=True)
+
     def test_evaluator_contract_is_versioned_independently(self):
         exp = self.start()
         self.assertEqual("mse-v1", exp.state()["evaluator_id"])
@@ -355,8 +372,8 @@ class ProtocolTests(unittest.TestCase):
             # 前端未构建时 `/` 必须显式 503（不回退任何内嵌 HTML）。已构建才断言 HTML：
             # 分支不是放宽守卫，而是把两种状态都钉住——干净克隆里没有 dist，
             # 只断言 HTML 的写法会把一个正确的 fail-closed 行为误判成测试失败。
-            dist_built = (Path(popper_server.__file__).resolve().parents[1]
-                          / "frontend" / "dist" / "index.html").is_file()
+            # 安装包可从 popper/web 提供资源；与服务端使用同一解析规则。
+            dist_built = (popper_server.Handler._frontend_dist() / "index.html").is_file()
             if dist_built:
                 with urllib.request.urlopen(base + "/", timeout=2) as response:
                     page = response.read().decode()

@@ -3,6 +3,7 @@ import json
 import shutil
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -13,7 +14,9 @@ from popper.research import (BudgetLedger, Decision, DesignStatus,
                              Observation, ResearchStore, RunStatus, Study,
                              StudyStatus, TransitionError)
 from popper.research.schema import migrate_budget
-from popper.research.store import AUTHORITY, ObservationWriter, RunWriter
+from popper.research.store import (AUTHORITY, ObservationWriter,
+                                   ResearchIdempotencyConflict,
+                                   ResearchVersionConflict, RunWriter)
 
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "quadratic"
@@ -52,6 +55,23 @@ class ResearchStoreTestCase(unittest.TestCase):
 
 
 class StudyContractTests(ResearchStoreTestCase):
+    def test_readonly_store_verifies_without_migration_or_write_authority(self):
+        self.store.create_study(_study())
+        path = self.dir / "research.sqlite"
+        before = path.read_bytes()
+        readonly = ResearchStore(path, readonly=True)
+        try:
+            self.assertTrue(readonly.verify()["ok"])
+            self.assertEqual("active", readonly.get("study", "S1")["status"])
+            with self.assertRaisesRegex(ProtocolError, "只读 ResearchStore"):
+                readonly.set_study_status("S1", StudyStatus.CONCLUDED)
+            with self.assertRaisesRegex(ProtocolError, "只读 ResearchStore"):
+                with readonly.transaction():
+                    pass
+        finally:
+            readonly.close()
+        self.assertEqual(before, path.read_bytes())
+
     def test_study_requires_budget_cap(self):
         with self.assertRaisesRegex(ProtocolError, "预算硬上限"):
             Study(study_id="S", family_id="F", question="q", scope="s")
@@ -168,6 +188,29 @@ class DesignContractTests(ResearchStoreTestCase):
         with self.assertRaises(TransitionError):
             self.store.runs.set_status("R1", RunStatus.RUNNING)  # 终态回退
 
+    def test_run_source_binding_is_atomic_and_requires_complete_digest_pair(self):
+        self.store.create_design(_design())
+        self.store.freeze_design("D1")
+        revision_id = "REV-" + "a" * 24
+        manifest_sha = "b" * 64
+        run = self.store.runs.register(
+            "R1", "D1", revision_id=revision_id,
+            revision_manifest_sha256=manifest_sha)
+        self.assertEqual(revision_id, run["revision_id"])
+        self.assertEqual(manifest_sha, run["revision_manifest_sha256"])
+        event = self.store.history("run", "R1")[0]
+        self.assertEqual(revision_id, event["payload"]["revision_id"])
+        self.assertEqual(manifest_sha, event["payload"]["revision_manifest_sha256"])
+
+        with self.assertRaisesRegex(ProtocolError, "必须同时提供"):
+            self.store.runs.register("R2", "D1", revision_id=revision_id)
+        self.assertIsNone(self.store.get("run", "R2"))
+        with self.assertRaisesRegex(ProtocolError, "revision_id 格式"):
+            self.store.runs.register(
+                "R3", "D1", revision_id="mutable-main",
+                revision_manifest_sha256=manifest_sha)
+        self.assertIsNone(self.store.get("run", "R3"))
+
     def test_study_cannot_conclude_with_active_run(self):
         self.store.create_design(_design())
         self.store.freeze_design("D1")
@@ -176,6 +219,101 @@ class DesignContractTests(ResearchStoreTestCase):
             self.store.set_study_status("S1", StudyStatus.CONCLUDED)
         self.store.set_study_status("S1", StudyStatus.INTEGRITY_FAILED)
         self.store.runs.set_status("R1", RunStatus.CANCELLED)
+
+    def test_command_receipt_is_atomic_idempotent_and_versioned(self):
+        self.store.create_design(_design())
+        version = self.store.get("study", "S1")["state_version"]
+        command = {"design_id": "D1"}
+        first = self.store.execute_command(
+            "S1", "freeze_design", command,
+            idempotency_key="research-request-0001", expected_version=version,
+            actor="test-user", trace_id="trc_first001")
+        self.assertEqual("frozen", first["status"])
+        self.assertEqual(version + 1, first["state_version"])
+
+        replay = self.store.execute_command(
+            "S1", "freeze_design", command,
+            idempotency_key="research-request-0001", expected_version=version,
+            actor="test-user", trace_id="trc_retry001")
+        self.assertEqual(first, replay)
+        self.assertEqual(1, len(self.store.history("design", "D1")) - 1)
+        receipt = self.store.command_receipt("research-request-0001")
+        self.assertEqual("test-user", receipt["actor"])
+        self.assertEqual("trc_first001", receipt["trace_id"])
+        self.assertTrue(self.store.verify()["ok"])
+
+        with self.assertRaises(ResearchVersionConflict):
+            self.store.execute_command(
+                "S1", "set_hypothesis_status",
+                {"hypothesis_id": "H1", "version": 1, "status": "retired"},
+                idempotency_key="research-request-0002", expected_version=version,
+                actor="test-user", trace_id="trc_stale001")
+        with self.assertRaises(ResearchIdempotencyConflict):
+            self.store.execute_command(
+                "S1", "set_study_status", {"status": "concluded"},
+                idempotency_key="research-request-0001",
+                expected_version=first["state_version"], actor="test-user",
+                trace_id="trc_conflict001")
+
+    def test_command_receipt_tampering_is_detected_by_event_replay(self):
+        self.store.create_design(_design())
+        version = self.store.get("study", "S1")["state_version"]
+        self.store.execute_command(
+            "S1", "freeze_design", {"design_id": "D1"},
+            idempotency_key="research-request-tamper", expected_version=version,
+            actor="test-user", trace_id="trc_tamper001")
+        with self.store._unsafe_conn:
+            self.store._unsafe_conn.execute(
+                "UPDATE command_receipts SET actor = 'forged' "
+                "WHERE idempotency_key = 'research-request-tamper'")
+        check = self.store.verify()
+        self.assertFalse(check["ok"])
+        self.assertIn("命令收据", check["reason"])
+
+    def test_concurrent_commands_from_same_version_commit_only_once(self):
+        self.store.create_design(_design())
+        version = self.store.get("study", "S1")["state_version"]
+        barrier = threading.Barrier(2)
+        outcomes = []
+
+        def issue(suffix):
+            store = ResearchStore(self.dir / "research.sqlite")
+            try:
+                barrier.wait(timeout=5)
+                result = store.execute_command(
+                    "S1", "freeze_design", {"design_id": "D1"},
+                    idempotency_key=f"concurrent-request-{suffix}",
+                    expected_version=version, actor="test-user",
+                    trace_id=f"trc_concurrent{suffix}")
+                outcomes.append(("ok", result))
+            except Exception as error:
+                outcomes.append((type(error).__name__, str(error)))
+            finally:
+                store.close()
+
+        threads = [threading.Thread(target=issue, args=(suffix,))
+                   for suffix in ("001", "002")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(1, sum(kind == "ok" for kind, _ in outcomes))
+        self.assertEqual(1, sum(kind == "ResearchVersionConflict"
+                                for kind, _ in outcomes))
+        receipts = self.store._unsafe_conn.execute(
+            "SELECT COUNT(*) FROM command_receipts").fetchone()[0]
+        self.assertEqual(1, receipts)
+        self.assertTrue(self.store.verify()["ok"])
+
+    def test_command_cannot_write_run_or_observation(self):
+        version = self.store.get("study", "S1")["state_version"]
+        for action in ("add_observation", "register_run"):
+            with self.assertRaisesRegex(ProtocolError, "未知 research 命令"):
+                self.store.execute_command(
+                    "S1", action, {}, idempotency_key=f"blocked-{action}",
+                    expected_version=version, actor="test-user",
+                    trace_id="trc_blocked001")
 
 
 class AuthorityAndLedgerTests(ResearchStoreTestCase):

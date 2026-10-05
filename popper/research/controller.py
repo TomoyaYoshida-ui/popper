@@ -21,7 +21,7 @@ from .contracts import (Decision, DesignStatus, ExperimentDesign, Hypothesis,
                         StudyStatus)
 from .evaluation_service import IndependentEvaluator, scoring_code_hash
 from .models import EvidenceDrivenPolicy
-from .revisions import RevisionStore
+from .revisions import CodeEdit, RevisionStore, source_control_provenance
 from .store import ResearchStore
 from .workers import (JobSpec, LocalWorker, TERMINAL_JOB_STATUSES, Worker,
                       job_invocation, staged_input_artifacts)
@@ -34,6 +34,31 @@ class RevisionExecutionError(ProtocolError):
         self.revision_id = revision_id
         self.status = status
         super().__init__(f"CodeRevision 执行失败: {status}/{error_type}")
+
+
+def research_lifecycle_phase(study_status, core_phase, decisions, *,
+                             external_frozen=False, external_submitted=False):
+    """Pure presentation of the Controller lifecycle; never an authorization.
+
+    Both the executing Controller and the read-only workbench projection use
+    this ordering. Readers must not construct a Controller, whose initialization
+    reconciles reservations and worker state.
+    """
+    if study_status != StudyStatus.ACTIVE.value:
+        return study_status
+    if external_frozen:
+        return ("external_confirmation_pending" if external_submitted
+                else "external_preparation_incomplete")
+    if core_phase in {"confirming", "confirmation_failed"}:
+        return core_phase
+    if core_phase == "completed":
+        return "ready_for_confirmation"
+    if not isinstance(core_phase, str):
+        return "unavailable"
+    if decisions and decisions[-1]["action"] in {
+            REQUEST_CONFIRMATION, REQUEST_SCOPE_BOUNDARY_CONFIRMATION}:
+        return "ready_for_confirmation"
+    return "researching"
 
 
 class ResearchController:
@@ -61,10 +86,22 @@ class ResearchController:
             exp.close()
         if state["phase"] != "searching":
             raise ProtocolError("只能从尚未冻结、未消费确认集的实验初始化 research")
+        followup_lineage = None
+        if "followup-lineage.json" in spec.get("provenance_files", []):
+            from .followup import validate_followup_lineage
+            followup_lineage = validate_followup_lineage(
+                read_json(project / "followup-lineage.json"), spec,
+                state["input_hashes"][spec["test"]])
+        pack = evaluator_pack(state["evaluator_id"])
+        dev_rows = dataset(project / spec["dev"], state["evaluator_id"])
+        registered_repeat_values = repeat_values(pack, dev_rows, spec)
+        repeat_unit = pack.repeat_unit()
         external_confirmation = None
         if (confirmation_contract is None) != (confirmation_public_key is None):
             raise ProtocolError("确认合同与独立固定的服务公钥必须同时提供")
         if confirmation_contract is not None:
+            if getattr(pack, "units_from_data", False):
+                raise ProtocolError("数据内分析单元尚不能使用外部确认合同")
             from .confirmation_contracts import validate_contract
             contract = validate_contract(confirmation_contract, confirmation_public_key)
             expected = {"train_sha256": state["input_hashes"][spec["train"]],
@@ -107,7 +144,12 @@ class ResearchController:
             "family_id": family_id, "control_hypothesis_id": control_hypothesis_id,
             "candidate_hypothesis_ids": candidate_ids, "configs": configs,
             "metric": spec["metric"], "scorer_id": state["evaluator_id"],
-            "scorer_hash": state["evaluator_hash"], "seeds": spec["seeds"],
+            "scorer_hash": state["evaluator_hash"],
+            # seeds 为 1.0 兼容投影；repeat_* 才是领域中立语义。分析单元域包
+            # 在 dev 划分上冻结实际 block/unit ID，而不是伪造训练种子。
+            "seeds": registered_repeat_values,
+            "repeat_unit": repeat_unit,
+            "repeat_values": registered_repeat_values,
             "scoring_code_sha256": scoring_code_hash(),
             "min_meaningful_effect": spec["min_improvement"],
             "analysis_slices": spec.get("analysis_slices", []),
@@ -120,6 +162,8 @@ class ResearchController:
         }
         if external_confirmation is not None:
             manifest["external_confirmation"] = external_confirmation
+        if followup_lineage is not None:
+            manifest["followup_lineage"] = followup_lineage
         write_json(manifest_path, manifest)
         store = ResearchStore(run_dir / "research.sqlite")
         try:
@@ -296,6 +340,8 @@ class ResearchController:
             "kind": "registered_implementation_dev",
             "design_id": design_id,
             "source_input_hashes": state["input_hashes"],
+            "source_control": source_control_provenance(self.project, spec["code_files"]),
+            "diff_sha256": digest(""),
             "entrypoint": spec["entrypoint"],
             "files": {name: state["input_hashes"][name] for name in spec["code_files"]},
         }
@@ -322,6 +368,7 @@ class ResearchController:
                         "identity": identity, "entrypoint": spec["entrypoint"],
                         "registered_code_files": sorted(spec["code_files"]),
                         "added_code_files": [], "files": files,
+                        "diff": "",
                         "status": "immutable"}
             staging.mkdir(parents=True, exist_ok=True)
             write_json(staging / "revision.json", manifest)
@@ -354,7 +401,8 @@ class ResearchController:
                 raise ProtocolError(f"未支持的调用输入角色: {role!r}")
         return staged_input_artifacts(invocation, sources)
 
-    def _evaluate_registered_via_worker(self, config, design_id, sandboxed=True):
+    def _evaluate_registered_via_worker(self, config, design_id, sandboxed=True,
+                                        revision=None, should_cancel=None):
         """通过分离式 worker 执行已注册代码（dev split）。
 
         与 ``self.exp.evaluate()`` 的同步路径产出相同的核心 result 契约，只是把 seed 执行
@@ -369,10 +417,12 @@ class ResearchController:
         以便对齐 holdout 封读窗口并复用 dev 阶段已落盘的不可变 revision。
         """
         state = self.exp.verify_inputs()
-        revision = self._registered_revision(state, design_id)
-        return self._evaluate_via_worker(config, design_id, revision, "dev", sandboxed=sandboxed)
+        revision = revision or self._registered_revision(state, design_id)
+        return self._evaluate_via_worker(config, design_id, revision, "dev",
+                                         sandboxed=sandboxed, should_cancel=should_cancel)
 
-    def _evaluate_via_worker(self, config, design_id, revision, split="dev", sandboxed=True):
+    def _evaluate_via_worker(self, config, design_id, revision, split="dev", sandboxed=True,
+                             should_cancel=None):
         """通过分离式 worker 执行给定 CodeRevision，并把核心 run 注册/完成到 Experiment。
 
         与 ``self.exp.evaluate()`` 同步路径产出相同的核心 result 契约，只是把执行迁到
@@ -430,11 +480,42 @@ class ResearchController:
             sealed = [inside(self.project, spec["test"])] if sandboxed and split == "test" else []
             with sandbox.sealed_reads(sealed):
                 job_ids = [job.job_id for _, job, _ in seed_specs]
+                launched = []
+                def stop_launched(ids):
+                    pending = set(ids)
+                    for jid in list(pending):
+                        status = self.worker.poll(jid)
+                        if status["status"] in TERMINAL_JOB_STATUSES:
+                            pending.remove(jid)
+                        else:
+                            self.worker.cancel(jid)
+                    deadline = time.monotonic() + spec["timeout_seconds"] + 120.0
+                    while pending:
+                        for jid in list(pending):
+                            status = self.worker.poll(jid)
+                            if status["status"] in TERMINAL_JOB_STATUSES:
+                                pending.remove(jid)
+                        if not pending:
+                            return
+                        if time.monotonic() >= deadline:
+                            self.worker.reap_stale(list(pending))
+                            if any(self.worker.poll(jid)["status"] not in
+                                   TERMINAL_JOB_STATUSES for jid in pending):
+                                raise ProtocolError("取消已请求，但 Worker 未确认全部进入终态")
+                            return
+                        time.sleep(0.2)
                 for _, job, _ in seed_specs:
+                    if should_cancel is not None and should_cancel():
+                        stop_launched(launched)
+                        raise ProtocolError("设计执行已取消")
                     self.worker.launch(job)
+                    launched.append(job.job_id)
                 deadline = time.monotonic() + spec["timeout_seconds"] + 120.0
                 while True:
                     statuses = {job_id: self.worker.poll(job_id) for job_id in job_ids}
+                    if should_cancel is not None and should_cancel():
+                        stop_launched(job_ids)
+                        raise ProtocolError("设计执行已取消")
                     if all(status["status"] in TERMINAL_JOB_STATUSES
                            for status in statuses.values()):
                         break
@@ -465,8 +546,10 @@ class ResearchController:
             raise ProtocolError(
                 f"执行失败 {rid}: {type(error).__name__}: {error}") from error
 
-    def _execute_development(self, hypothesis_id, proposal, trusted_local, sandboxed):
-        design_id = self._current_design_id(hypothesis_id)
+    def _execute_development(self, hypothesis_id, proposal, trusted_local, sandboxed,
+                             *, design_id=None, config=None, should_cancel=None):
+        design_id = design_id or self._current_design_id(hypothesis_id)
+        config = self.manifest["configs"][hypothesis_id] if config is None else config
         existing = self._observation_for_design(design_id)
         if existing:
             return existing
@@ -478,6 +561,14 @@ class ResearchController:
         attempt = len(prior_runs) + (0 if recoverable else 1)
         run_id = (recoverable["run_id"] if recoverable
                   else f"RUN-{design_id}-{attempt}")
+        # Freeze the exact registered implementation before the Research Run is
+        # created.  The run event and snapshot then carry a cryptographic source
+        # binding instead of relying on a naming convention or mutable project
+        # files to reconstruct provenance later.
+        registered_revision = self._registered_revision(self._verify_inputs(), design_id)
+        registered_revision_id = registered_revision["revision_id"]
+        registered_revision_sha = file_hash(
+            self.revisions.path(registered_revision_id) / "revision.json")
         ledger = self.store.budget(self.manifest["study_id"])
         try:
             if recoverable is None:
@@ -486,7 +577,9 @@ class ResearchController:
                 with self.store.transaction():
                     reservation = ledger.reserve(self.manifest["family_id"], run_id, 1.0)
                     self._record(proposal, budget_request=1.0)
-                    self.store.runs.register(run_id, design_id)
+                    self.store.runs.register(
+                        run_id, design_id, revision_id=registered_revision_id,
+                        revision_manifest_sha256=registered_revision_sha)
                     self.store.runs.set_status(run_id, RunStatus.RUNNING)
             else:
                 reservation = ledger.reserve(self.manifest["family_id"], run_id, 1.0)
@@ -507,7 +600,9 @@ class ResearchController:
                     evaluated = self.evaluator.score_core_result(state, result)
                 else:
                     result = self._evaluate_registered_via_worker(
-                        self.manifest["configs"][hypothesis_id], design_id, sandboxed=sandboxed)
+                        config, design_id,
+                        sandboxed=sandboxed, revision=registered_revision,
+                        should_cancel=should_cancel)
                     evaluated = self.evaluator.score_core_result(state, result)
                 if abs(float(evaluated["mean"]) - float(result["mean"])) > 1e-12:
                     self.store.set_study_status(self.manifest["study_id"],
@@ -534,7 +629,78 @@ class ResearchController:
         finally:
             ledger.close()
 
-    def implement(self, hypothesis_id, parent_revision_id=None, gpu_count=0):
+    def execute_registered_design(self, design_id, *, sandboxed=True,
+                                  should_cancel=None):
+        """Execute a frozen Agent design against one already preregistered candidate.
+
+        This does not add a candidate to the core experiment or alter research.json.
+        The new design keeps its own Run/Observation identity while the core budget,
+        immutable registered-code snapshot and independent evaluator stay in force.
+        """
+        if not sandboxed:
+            raise ProtocolError("Agent 设计执行必须使用 sandbox")
+        self._require_sandbox_backend()
+        state = self._verify_inputs()
+        self._require_scoring_binding()
+        if state["phase"] != "searching" or self._external_is_frozen():
+            raise ProtocolError("开发搜索已关闭，不能执行新设计")
+        study = self.store.get("study", self.manifest["study_id"])
+        if study["status"] != StudyStatus.ACTIVE.value:
+            raise ProtocolError("只有 active study 可以执行设计")
+        design = self.store.get("design", design_id)
+        if design is None or design["study_id"] != self.manifest["study_id"]:
+            raise ProtocolError("设计不属于当前 study")
+        if design["status"] != DesignStatus.FROZEN.value:
+            raise ProtocolError("设计必须先冻结")
+        hypothesis_id = design["hypothesis_id"]
+        hypothesis = self.store.get("hypothesis", hypothesis_id)
+        if (hypothesis is None or hypothesis["study_id"] != self.manifest["study_id"]
+                or hypothesis["version"] != design["hypothesis_version"]):
+            raise ProtocolError("设计绑定的假设版本已过期")
+        if (hypothesis["status"] != HypothesisStatus.UNTESTED.value
+                and self._observation_for_design(design_id) is None):
+            raise ProtocolError("只有未检验假设可以启动新的设计实验")
+        configs = self.manifest["configs"]
+        candidate_id = next((candidate_id for candidate_id in
+                             self.manifest["candidate_hypothesis_ids"]
+                             if design["interventions"] == [canonical(configs[candidate_id])]), None)
+        if candidate_id is None:
+            raise ProtocolError("设计干预未匹配预注册候选")
+        config = configs[candidate_id]
+        if digest(config) not in {digest(item) for item in state["spec"]["candidates"]}:
+            raise ProtocolError("底层实验未预注册该候选")
+        has_own_run = any(run["design_id"] == design_id for run in self.store.list("run"))
+        if not has_own_run and self._observation_for_design(design_id) is None and any(
+                digest(result["config"]) == digest(config)
+                for result in self.exp.results("dev")):
+            raise ProtocolError("候选配置已有开发结果，不能作为新设计的独立证据重复登记")
+        control = canonical(configs[self.manifest["control_hypothesis_id"]])
+        if design["control"] != control or design["baseline"] != control:
+            raise ProtocolError("设计对照与预注册基线不一致")
+        metric = self.manifest["metric"]
+        if (design["metric"] != metric["name"]
+                or design["metric_direction"] != metric["direction"]
+                or design["scorer_id"] != self.manifest["scorer_id"]
+                or design["analysis_unit"] != self.manifest["repeat_unit"]
+                or design["seeds"] != self.manifest["repeat_values"]
+                or design["min_meaningful_effect"] != self.manifest["min_meaningful_effect"]
+                or "dev" not in design["splits"]):
+            raise ProtocolError("设计评估协议与预注册研究不一致")
+        proposal = ActionProposal(
+            RUN_EXPERIMENT, f"冻结设计 {design_id} 复用预注册候选 {candidate_id}",
+            hypothesis_id, alternatives=("保留未执行设计",),
+            source="research_controller")
+        observation = self._execute_development(
+            hypothesis_id, proposal, trusted_local=False, sandboxed=True,
+            design_id=design_id, config=config, should_cancel=should_cancel)
+        current = self.store.get("hypothesis", hypothesis_id)
+        if current["status"] == HypothesisStatus.UNTESTED.value:
+            self.store.set_hypothesis_status(
+                hypothesis_id, current["version"], HypothesisStatus.INCONCLUSIVE)
+        return observation
+
+    def implement(self, hypothesis_id, parent_revision_id=None, gpu_count=0,
+                  should_cancel=None):
         """Generate, freeze, execute and independently score one code revision.
 
         Generated code always goes through LocalWorker's OS sandbox. There is no
@@ -604,6 +770,7 @@ class ResearchController:
             self.project, hypothesis_id, design_id, proposed["edits"],
             actor=proposal_source, parent_revision_id=parent_revision_id)
         revision_id = revision["revision_id"]
+        revision_sha = file_hash(self.revisions.path(revision_id) / "revision.json")
         action = REPAIR_IMPLEMENTATION if parent_revision_id else IMPLEMENT_REVISION
         proposal = ActionProposal(
             action, f"{proposed['rationale']} CodeRevision={revision_id}", hypothesis_id,
@@ -631,7 +798,9 @@ class ResearchController:
                 reservation = ledger.reserve(self.manifest["family_id"], run_id, 1.0)
                 if existing_run is None:
                     self._record(proposal, budget_request=1.0)
-                    self.store.runs.register(run_id, design_id)
+                    self.store.runs.register(
+                        run_id, design_id, revision_id=revision_id,
+                        revision_manifest_sha256=revision_sha)
                     self.store.runs.set_status(run_id, RunStatus.RUNNING)
                 elif existing_run["status"] == RunStatus.QUEUED.value:
                     self.store.runs.set_status(run_id, RunStatus.RUNNING)
@@ -655,10 +824,9 @@ class ResearchController:
                 config, state["evaluator_id"])
             predictions = []
             receipts = []
-            revision_sha = file_hash(self.revisions.path(revision_id) / "revision.json")
             seed_specs = []
             seed_outputs = []
-            for seed in self.manifest["seeds"]:
+            for seed in repeat_values(pack, dev_rows, state["spec"]):
                 args, outputs = job_invocation(pack, seed)
                 output = outputs[0]
                 spec = JobSpec(
@@ -688,6 +856,10 @@ class ResearchController:
                     in_flight += 1
                 statuses = {}
                 while True:
+                    if should_cancel is not None and should_cancel():
+                        for jid in job_ids[:next_to_launch]:
+                            if self.worker.poll(jid)["status"] not in TERMINAL_JOB_STATUSES:
+                                self.worker.cancel(jid)
                     statuses = {jid: self.worker.poll(jid)
                                 for jid in job_ids[:next_to_launch]}
                     if any(s["status"] in TERMINAL_JOB_STATUSES
@@ -708,7 +880,8 @@ class ResearchController:
                 receipt = self.worker.collect(spec.job_id)
                 receipts.append(receipt)
                 if receipt["status"] != "succeeded":
-                    target = (RunStatus.INFRA_FAILED if receipt["status"] == "infrastructure_failed"
+                    target = (RunStatus.CANCELLED if receipt["status"] == "cancelled" else
+                              RunStatus.INFRA_FAILED if receipt["status"] == "infrastructure_failed"
                               else RunStatus.IMPLEMENTATION_FAILED)
                     self.store.runs.set_status(run_id, target)
                     ledger.settle(reservation["reservation_id"], 1.0)
@@ -757,6 +930,80 @@ class ResearchController:
             raise
         finally:
             ledger.close()
+
+    def execute_revision(self, revision_id, gpu_count=0, should_cancel=None):
+        """Execute an approved immutable revision through the normal gates.
+
+        The frozen revision is reconstructed as exact edits against its source and
+        fed through ``implement``.  This deliberately reuses the existing budget,
+        Run, sandbox, evaluator and Observation path instead of granting the
+        worktree subsystem a second execution authority.
+        """
+        revision = self.revisions.verify(revision_id)
+        identity = revision["identity"]
+        parent_id = identity.get("parent_revision_id")
+        if parent_id:
+            parent = self.revisions.verify(parent_id)
+            if (identity.get("hypothesis_id") != parent["identity"].get("hypothesis_id")
+                    or identity.get("design_id") != parent["identity"].get("design_id")):
+                raise ProtocolError("后继 revision 与父版本的 hypothesis/design 不一致")
+            source_files = parent["files"]
+        else:
+            state = self._verify_inputs()
+            source_files = {name: state["input_hashes"][name]
+                            for name in state["spec"]["code_files"]}
+            if identity.get("source_input_hashes") != state["input_hashes"]:
+                raise ProtocolError("初始 revision 的预注册输入摘要已变化")
+            from .revisions import source_control_provenance
+            if identity.get("source_control") != source_control_provenance(
+                    self.project, state["spec"]["code_files"]):
+                raise ProtocolError("初始 revision 的 Git 锚点已变化")
+        missing = sorted(set(source_files) - set(revision["files"]))
+        if missing:
+            raise ProtocolError("revision 删除了来源代码文件")
+        code_root = self.revisions.path(revision_id) / "code"
+        edits = []
+        for name, current_hash in sorted(revision["files"].items()):
+            original_hash = source_files.get(name)
+            if current_hash == original_hash:
+                continue
+            edits.append(CodeEdit(
+                name, (code_root / name).read_text(encoding="utf-8"), original_hash))
+        if not edits:
+            raise ProtocolError("revision 相对来源没有实际代码修改")
+        actor = identity.get("actor")
+        if not isinstance(actor, str) or not actor:
+            raise ProtocolError("后继 revision 缺少有效 actor")
+
+        class FrozenRevisionHarness:
+            name = actor
+            model = None
+
+            @staticmethod
+            def propose_revision(*_args, **_kwargs):
+                return {"rationale": "execute approved immutable revision",
+                        "edits": edits}
+
+        previous_harness = self.harness
+        self.harness = FrozenRevisionHarness()
+        try:
+            result = self.implement(
+                identity["hypothesis_id"], parent_revision_id=parent_id,
+                gpu_count=gpu_count, should_cancel=should_cancel)
+        finally:
+            self.harness = previous_harness
+        executed = result.get("revision")
+        if executed is not None and executed.get("revision_id") != revision_id:
+            raise ProtocolError("批准 revision 无法按冻结身份重建")
+        if result.get("status") == "already_observed":
+            run_id = "RUN-" + digest({"revision_id": revision_id, "split": "dev"})[:24]
+            run = self.store.get("run", run_id)
+            observation = self._observation_for_design(identity["design_id"], "dev")
+            if (run is None or run.get("revision_id") != revision_id
+                    or observation is None or observation.get("run_id") != run_id):
+                raise ProtocolError("该 design 已由不同 revision 产生观察，不能冒充当前执行")
+            result = {**result, "observation": observation}
+        return {**result, "requested_revision_id": revision_id}
 
     def _implement_with_repair(self, hypothesis_id):
         """Repair one worker implementation failure; never retry integrity/infra errors."""
@@ -835,7 +1082,12 @@ class ResearchController:
                               "见 docs/技术方案.md §2.2）")
 
     def run(self, trusted_local=False, sandboxed=False, max_steps=None, auto_confirm=False,
-            autonomous_code=False):
+            autonomous_code=False, should_cancel=None):
+        def check_cancelled():
+            if should_cancel is not None and should_cancel():
+                raise ProtocolError("研究执行已取消")
+
+        check_cancelled()
         if trusted_local == sandboxed:
             raise ProtocolError("research run 必须且只能选择 --trusted-local 或 --sandbox")
         if autonomous_code and not sandboxed:
@@ -875,7 +1127,7 @@ class ResearchController:
                 control_id,
                 ActionProposal(RUN_EXPERIMENT, "先执行预注册基线，建立方向统一效应的控制值。",
                                control_id, source="research_controller"),
-                trusted_local, sandboxed)
+                trusted_local, sandboxed, should_cancel=should_cancel)
             self.store.set_hypothesis_status(control_id, 1, HypothesisStatus.INCONCLUSIVE)
 
         steps = 0
@@ -886,6 +1138,7 @@ class ResearchController:
                 return (self.confirm(trusted_local, sandboxed)
                         if auto_confirm and status["phase"] == "ready_for_confirmation" else status)
         while max_steps is None or steps < max_steps:
+            check_cancelled()
             context = build_context(self.store, self.manifest["study_id"], self.manifest)
             latest = context["reflections"][-1] if context["reflections"] else None
             pending = next((candidate for candidate in context["candidates"]
@@ -912,8 +1165,10 @@ class ResearchController:
                     observation = self._implement_with_repair(hypothesis_id)["observation"]
                 else:
                     observation = self._execute_development(
-                        hypothesis_id, proposal, trusted_local, sandboxed)
+                        hypothesis_id, proposal, trusted_local, sandboxed,
+                        should_cancel=should_cancel)
             except ProtocolError as error:
+                check_cancelled()
                 self.store.set_hypothesis_status(
                     hypothesis_id, self.store.get("hypothesis", hypothesis_id)["version"],
                     HypothesisStatus.INCONCLUSIVE)
@@ -955,7 +1210,12 @@ class ResearchController:
                 return self.confirm(trusted_local, sandboxed) if auto_confirm else self.status()
         return self.status()
 
-    def confirm(self, trusted_local=False, sandboxed=False):
+    def confirm(self, trusted_local=False, sandboxed=False, should_cancel=None):
+        def check_cancelled():
+            if should_cancel is not None and should_cancel():
+                raise ProtocolError("独立确认已取消；已消费的确认资源不会重试")
+
+        check_cancelled()
         if trusted_local == sandboxed:
             raise ProtocolError("research confirm 必须且只能选择 --trusted-local 或 --sandbox")
         if sandboxed:
@@ -1002,6 +1262,15 @@ class ResearchController:
         state = self._verify_inputs()
         control_id = self.manifest["control_hypothesis_id"]
         pairs = [("control", control_id), ("candidate", selected["hypothesis_id"])]
+        confirmation_revisions = {}
+        for label, hypothesis_id in pairs:
+            design_id = self._current_design_id(hypothesis_id)
+            revision = (selected_revision if label == "candidate" and selected_revision is not None
+                        else self._registered_revision(state, design_id))
+            revision_id = revision["revision_id"]
+            confirmation_revisions[label] = (
+                revision_id,
+                file_hash(self.revisions.path(revision_id) / "revision.json"))
         ledger = self.store.budget(self.manifest["study_id"])
         reservations = {}
 
@@ -1083,7 +1352,11 @@ class ResearchController:
             for label, hypothesis_id in pairs:
                 run_id = run_ids[label]
                 if self.store.get("run", run_id) is None:
-                    self.store.runs.register(run_id, self._current_design_id(hypothesis_id))
+                    revision_id, revision_sha = confirmation_revisions[label]
+                    self.store.runs.register(
+                        run_id, self._current_design_id(hypothesis_id),
+                        revision_id=revision_id,
+                        revision_manifest_sha256=revision_sha)
                 if self.store.get("run", run_id)["status"] == RunStatus.QUEUED.value:
                     self.store.runs.set_status(run_id, RunStatus.RUNNING)
             phase = self.exp.state()["phase"]
@@ -1091,6 +1364,7 @@ class ResearchController:
                 self.exp.freeze()
                 phase = "frozen"
             if phase == "frozen":
+                check_cancelled()
                 # begin → evaluate(baseline) + (evaluate(candidate) | Worker(candidate))
                 # → finalize。candidate 经 Worker 路径的条件：其 dev observation
                 # 来自生成代码 revision（见 selected_revision 捕获）。其余候选
@@ -1101,6 +1375,7 @@ class ResearchController:
                 try:
                     baseline = self.exp.evaluate(
                         core_state["spec"]["baseline"], "test", trusted_local, sandboxed)
+                    check_cancelled()
                     if selected_revision is not None:
                         candidate = self._evaluate_via_worker(
                             core_state["selected"],
@@ -1109,6 +1384,7 @@ class ResearchController:
                     else:
                         candidate = self.exp.evaluate(
                             core_state["selected"], "test", trusted_local, sandboxed)
+                    check_cancelled()
                     self.exp.finalize_confirmation(baseline, candidate)
                 except Exception:
                     # begin 之后、finalize 之前的失败（执行中断、超时、scoring 不一致）
@@ -1170,6 +1446,13 @@ class ResearchController:
                           f"结论={'支持' if passed else '证据不足'}。",
                     alternatives=("新的独立数据复现",), source="confirmation_controller"),
                     observation_refs=observation_refs)
+            confirmation_decision = next(
+                d for d in self.store.list_with_ids("decision")
+                if d["actor"] == "confirmation_controller" and d["action"] == STOP
+                and tuple(d["observation_refs"]) == observation_refs)
+            self.store.claims.confirm(
+                self.manifest["study_id"], confirmation_decision["entity_id"],
+                observations[0]["observation_id"], observations[1]["observation_id"])
             if not passed and selected["status"] != HypothesisStatus.INCONCLUSIVE.value:
                 self.store.set_hypothesis_status(
                     selected["hypothesis_id"], selected["version"], HypothesisStatus.INCONCLUSIVE)
@@ -1185,21 +1468,13 @@ class ResearchController:
         core_state = self._verify_inputs()
         context = build_context(self.store, self.manifest["study_id"], self.manifest)
         decisions = context["decisions"]
-        study_status = context["study"]["status"]
-        if study_status != StudyStatus.ACTIVE.value:
-            phase = study_status
-        elif self._external_is_frozen():
-            phase = ("external_confirmation_pending" if self._external_submission_record()
-                     else "external_preparation_incomplete")
-        elif core_state["phase"] in {"confirming", "confirmation_failed"}:
-            phase = core_state["phase"]
-        elif core_state["phase"] == "completed":
-            phase = "ready_for_confirmation"
-        elif decisions and decisions[-1]["action"] in {
-                REQUEST_CONFIRMATION, REQUEST_SCOPE_BOUNDARY_CONFIRMATION}:
-            phase = "ready_for_confirmation"
-        else:
-            phase = "researching"
+        external_frozen = (self._external_is_frozen()
+                           if context["study"]["status"] == StudyStatus.ACTIVE.value else False)
+        phase = research_lifecycle_phase(
+            context["study"]["status"], core_state["phase"], decisions,
+            external_frozen=external_frozen,
+            external_submitted=(self._external_submission_record() is not None
+                                if external_frozen else False))
         revisions = []
         if (self.run_dir / "revisions").exists():
             for path in (self.run_dir / "revisions").glob("REV-*/revision.json"):
@@ -1218,6 +1493,7 @@ class ResearchController:
         return {"schema_version": "1.0", "phase": phase,
                 "study": context["study"], "candidates": context["candidates"],
                 "observations": context["observations"],
+                "claims": context["claims"],
                 "decisions": decisions, "budget": context["budget"],
                 "reflections": context["reflections"],
                 "integrity": self.store.verify(),
@@ -1316,7 +1592,15 @@ class ResearchController:
                 design_id = (self._current_design_id(hypothesis_id) if role == "control" else identity["design_id"])
                 run = self.store.get("run", run_id)
                 if run is None:
-                    self.store.runs.register(run_id, design_id)
+                    self.store.runs.register(
+                        run_id, design_id,
+                        external_source={
+                            "kind": "signed_confirmation_bundle",
+                            "submission_id": submission["submission_id"],
+                            "submission_sha256": digest(submission),
+                            "role": role,
+                            "files_sha256": digest(identity[role]["files"]),
+                        })
                     run = self.store.get("run", run_id)
                 if run["status"] == RunStatus.QUEUED.value:
                     self.store.runs.set_status(run_id, RunStatus.RUNNING)
@@ -1371,6 +1655,11 @@ class ResearchController:
                                                                          "positive_effect"),
                                          "trust": result["trust"]}),
                     actor="external_confirmation_controller"))
+            if result["status"] == "succeeded":
+                self.store.claims.confirm_signed(
+                    self.manifest["study_id"], decision_id, signed_result,
+                    enrollment["contract"], submission,
+                    enrollment["pinned_public_key"])
             if (result["status"] == "succeeded"
                     and (not result["passed"] or result.get("confirmation_kind") == "scope_boundary")):
                 selected = self.store.get("hypothesis", identity["hypothesis_id"])
@@ -1412,9 +1701,9 @@ def _create_hypothesis_and_design(store, manifest, hypothesis_id, content,
         baseline=canonical(manifest["configs"][manifest["control_hypothesis_id"]]),
         metric=manifest["metric"]["name"], scorer_id=manifest["scorer_id"],
         metric_direction=manifest["metric"]["direction"],
-        analysis_unit="training_seed_descriptive",
+        analysis_unit=manifest.get("repeat_unit", "train_seed"),
         splits=("dev", "confirmation") if not is_control else ("dev", "confirmation"),
-        seeds=tuple(manifest["seeds"]),
+        seeds=tuple(manifest.get("repeat_values", manifest["seeds"])),
         min_meaningful_effect=manifest["min_meaningful_effect"],
         status=DesignStatus.DRAFT)
     store.create_design(design)

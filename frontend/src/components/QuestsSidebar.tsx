@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { postWorkspaceOp } from '../api'
+import { postWorkspaceCommand, postWorkspaceOp } from '../api'
 import type { Folder, Quest, Workspace } from '../types'
 
 type Ctx = { x: number; y: number; folderId: string; taskId?: string } | null
@@ -26,12 +26,14 @@ export function QuestsSidebar({
   reload,
   onOpenQuest,
   onOpenMaterialize,
+  canChangeWorkspace,
 }: {
   workspace: Workspace | null
   seedActive: boolean
   reload: () => void
   onOpenQuest: (title: string) => void
   onOpenMaterialize: () => void
+  canChangeWorkspace?: () => boolean
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const [ctx, setCtx] = useState<Ctx>(null)
@@ -47,17 +49,25 @@ export function QuestsSidebar({
   const seedQuid = folders.length && folders[0].tasks.length ? folders[0].tasks[0].quid : null
 
   const run = async (op: Parameters<typeof postWorkspaceOp>[0]) => {
-    try { await postWorkspaceOp(op) } finally { reload() }
+    try {
+      if (op.op === 'workspace_switch' || op.op === 'workspace_remove') {
+        await postWorkspaceOp(op)
+      } else if (workspace) {
+        await postWorkspaceCommand(op, workspace.meta.state_version)
+      }
+    } finally { reload() }
   }
 
   /** 多工作区：切换当前根 / 从侧边栏移除非主根（磁盘数据保留），后端返回切换后的全量载荷 */
   const switchRoot = async (wid: string) => {
     setWsMenu(null)
     if (wid === workspace?.current_root) return
+    if (canChangeWorkspace && !canChangeWorkspace()) return
     await run({ op: 'workspace_switch', wid })
   }
   const removeRoot = async (wid: string) => {
     setWsMenu(null)
+    if (canChangeWorkspace && !canChangeWorkspace()) return
     await run({ op: 'workspace_remove', wid })
   }
 

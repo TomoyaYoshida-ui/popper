@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-/** 全屏画布星空（对齐设计稿 #stars）：~900 颗带漂移与闪烁相位的星点。 */
+/** 欢迎页的轻量品牌纹理；减少动画时只绘制静态画面。 */
 export function Stars() {
   const ref = useRef<HTMLCanvasElement>(null)
 
@@ -15,6 +15,7 @@ export function Stars() {
     type Star = { x: number; y: number; z: number; r: number; ph: number; sp: number }
     let stars: Star[] = []
     let raf = 0
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)')
 
     const rebuild = () => {
       width = window.innerWidth
@@ -25,7 +26,7 @@ export function Stars() {
       canvas.width = width * dpr
       canvas.height = height * dpr
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      stars = Array.from({ length: 900 }, () => ({
+      stars = Array.from({ length: 140 }, () => ({
         x: Math.random() * width,
         y: Math.random() * height,
         z: 1 + Math.random() * 0.8,
@@ -46,8 +47,10 @@ export function Stars() {
       readStarColor()
       const t = performance.now() / 1000
       for (const s of stars) {
-        s.x += Math.sin(t * 0.1 + s.ph) * 0.04 * s.sp
-        s.y -= 0.015 * s.sp * s.z
+        if (!motion.matches) {
+          s.x += Math.sin(t * 0.1 + s.ph) * 0.04 * s.sp
+          s.y -= 0.015 * s.sp * s.z
+        }
         if (s.y < -2) { s.y = height + 2; s.x = Math.random() * width }
         const tw = 0.55 + 0.45 * Math.sin(t * s.sp + s.ph * 5)
         const alpha = (0.25 + 0.6 * tw) * Math.min(s.z, 1.6)
@@ -56,16 +59,19 @@ export function Stars() {
         ctx.fillStyle = `rgba(${starColor},${alpha})`
         ctx.fill()
       }
-      raf = requestAnimationFrame(tick)
+      if (!motion.matches) raf = requestAnimationFrame(tick)
     }
 
     rebuild()
     tick()
-    const onResize = () => rebuild()
+    const onResize = () => { rebuild(); if (motion.matches) tick() }
+    const onMotionChange = () => { cancelAnimationFrame(raf); tick() }
     window.addEventListener('resize', onResize)
+    motion.addEventListener('change', onMotionChange)
     return () => {
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', onResize)
+      motion.removeEventListener('change', onMotionChange)
     }
   }, [])
 

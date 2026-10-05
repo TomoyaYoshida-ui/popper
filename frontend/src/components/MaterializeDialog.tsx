@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { fileUrl, materialize, type MaterializeDisclosure, type MaterializeTemplate } from '../api'
 import type { Deliverable, Section } from '../types'
+import { useConfirmation } from './ConfirmProvider'
 
 export function MaterializeDialog({
   deliverables,
@@ -17,6 +18,8 @@ export function MaterializeDialog({
   onClose: () => void
   onReload: () => void
 }) {
+  const confirm = useConfirmation()
+  const inFlight = useRef(false)
   const [title, setTitle] = useState('')
   const [abstract, setAbstract] = useState('')
   const [sections, setSections] = useState<Section[]>([{ heading: '', body: '' }])
@@ -30,6 +33,8 @@ export function MaterializeDialog({
     setSections((s) => s.map((sec, idx) => (idx === i ? { ...sec, [key]: value } : sec)))
 
   const submit = async () => {
+    if (inFlight.current) return
+    inFlight.current = true
     setBusy(true)
     setError(null)
     try {
@@ -44,17 +49,27 @@ export function MaterializeDialog({
     } catch (e) {
       setError((e as Error).message)
     } finally {
+      inFlight.current = false
       setBusy(false)
     }
   }
 
+  const close = async () => {
+    if (inFlight.current) return
+    if (!result && (title.trim() || abstract.trim() || sections.some((item) => item.heading.trim() || item.body.trim()))
+      && !await confirm({ title: '放弃导出稿件输入？', description: '尚未生成的标题、摘要与章节将被丢弃。已有稿件及证据绑定快照不受影响。', confirmLabel: '放弃并关闭', danger: true })) return
+    onClose()
+  }
+
   return (
-    <div className="mask" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+    <div className="mask" onClick={() => { void close() }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="export-manuscript-title" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <h2>稿件物化</h2>
-          <button className="modal-close" onClick={onClose}>✕</button>
+          <h2 id="export-manuscript-title">生成可编辑导出稿件</h2>
+          <button className="modal-close" disabled={busy} aria-label="关闭导出稿件" onClick={() => { void close() }}>✕</button>
         </div>
+
+        <p className="notice">这是独立导出产物，不是证据绑定快照。科研结论仍需在 Study 稿件中绑定 Claim 并人工审校。</p>
 
         <div className="fld">
           <label>标题</label>
@@ -101,7 +116,7 @@ export function MaterializeDialog({
 
         <div className="actions">
           <button className="btn primary" disabled={busy} onClick={submit}>
-            {busy ? '物化中…' : '物化稿件'}
+            {busy ? '正在生成…' : '生成导出稿件'}
           </button>
         </div>
 
@@ -120,7 +135,7 @@ export function MaterializeDialog({
 
         {deliverables.length > 0 && (
           <div className="section">
-            <h3 style={{ fontSize: 15, marginBottom: 8 }}>已物化产物</h3>
+            <h3 style={{ fontSize: 15, marginBottom: 8 }}>已有独立导出产物</h3>
             {deliverables.map((d) => (
               <div className="row" key={d.id}>
                 <div>

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from ..core import (EVALUATORS, ProtocolError, canonical, dataset, digest, evaluator_metric,
-                    evaluator_pack, file_hash, read_json, score, write_json)
+                    evaluator_pack, file_hash, read_json, repeat_values, score, write_json)
 
 
 SERVICE_VERSION = "research-evaluator-v3"
@@ -93,9 +93,11 @@ def _slice_rows(rows, rule):
     return selected
 
 
-def _slice_score(rows, predictions, evaluator_id):
+def _slice_score(rows, predictions, evaluator_id, unit=None):
     ids = {row["id"] for row in rows}
-    return score(rows, [item for item in predictions if item["id"] in ids], evaluator_id)
+    if isinstance(predictions, list):
+        predictions = [item for item in predictions if item["id"] in ids]
+    return score(rows, predictions, evaluator_id, unit=unit)
 
 
 def _validate_points(points, seeds, spec, label):
@@ -202,12 +204,15 @@ def evaluate_request(request):
         if not path.is_file() or file_hash(path) != item["sha256"]:
             raise ProtocolError("预测制品缺失或摘要变化")
         prediction_rows = read_json(path)
-        points.append({"seed": item["seed"], "value": score(rows, prediction_rows, evaluator_id)})
+        points.append({"seed": item["seed"],
+                       "value": score(rows, prediction_rows, evaluator_id,
+                                      unit=item["seed"])})
         for registered in slices:
             slice_id = registered["slice_id"]
             slice_points[slice_id].append({
                 "seed": item["seed"],
-                "value": _slice_score(selected_rows[slice_id], prediction_rows, evaluator_id),
+                "value": _slice_score(selected_rows[slice_id], prediction_rows, evaluator_id,
+                                      unit=item["seed"]),
             })
     values = [point["value"] for point in points]
     response = {"schema_version": request["schema_version"],
@@ -253,11 +258,14 @@ class IndependentEvaluator:
         _request_id(request_id)
         if split not in {"dev", "test"}:
             raise ProtocolError("independent evaluator only accepts dev/test")
-        predictions = _prediction_manifest(predictions, state["spec"]["seeds"])
         data_path = (self.project / state["spec"][split]).resolve()
         expected_hash = state["input_hashes"][state["spec"][split]]
         if not data_path.is_relative_to(self.project) or file_hash(data_path) != expected_hash:
             raise ProtocolError("evaluation dataset differs from preregistration")
+        rows = dataset(data_path, state["evaluator_id"])
+        expected_units = repeat_values(
+            evaluator_pack(state["evaluator_id"]), rows, state["spec"])
+        predictions = _prediction_manifest(predictions, expected_units)
         for item in predictions:
             if not Path(item["path"]).is_file() or file_hash(item["path"]) != item["sha256"]:
                 raise ProtocolError("预测制品缺失或摘要变化")
@@ -266,7 +274,9 @@ class IndependentEvaluator:
                    "dataset": str(data_path), "dataset_sha256": expected_hash,
                    "evaluator_id": state["evaluator_id"],
                    "evaluator_hash": state["evaluator_hash"],
-                   "predictions": predictions, "expected_seeds": state["spec"]["seeds"],
+                   # v2/v3 wire name remains expected_seeds for compatibility; values are
+                   # domain repeat units and may be analysis-unit IDs.
+                   "predictions": predictions, "expected_seeds": expected_units,
                    "scoring_code_sha256": scoring_code_hash()}
         if slices:
             request["analysis_slices"] = slices

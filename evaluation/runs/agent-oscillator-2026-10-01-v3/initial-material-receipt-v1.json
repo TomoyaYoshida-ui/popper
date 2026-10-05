@@ -1,0 +1,20 @@
+{
+  "kind": "initial_material_source_receipt",
+  "version": 1,
+  "original_protocol_sha256": "078608d0539e065af9ff6169115fa7f516dee40047ee14315638a84759a77abe",
+  "same_source_material_for_both_model_arms": true,
+  "study_artifacts_sha256": {
+    "agent-visible/initial-material-v1.json": "f4ee31f6f37d74b21690afc75fe85202014ca0e52be34c924609d4b64f29e64b",
+    "agent-visible/train.json": "c8ec5e840a323775218c2aebe9df5c50ba0a4463708bb539d7584301dfcf4b66",
+    "agent-visible/dev.json": "eddf69ea5cd6cf9601bb8a83313780a6aa595a16f50ecda2bbbfb0148a00549b"
+  },
+  "repository_artifacts_sha256": {
+    "popper/research/oscillator_baseline.py": "c6de1d2915391afe96a3115b50577fee3b6bc52dd0a2f55158661163b696be2d"
+  },
+  "copy_rule": "Only these public artifacts and the fixed control solver may seed Agent-visible projects; never copy evaluator-private files into visible materials. Actual score references remain host-only.",
+  "assembled_model_input_snapshot": "not yet dispatched; the Workstation must persist the exact system/messages/tools snapshot and reserve against it",
+  "candidate_slot_bindings": "not yet created; must be explicit preregistered objects, not inferred from titles",
+  "formal_model_requests": 0,
+  "confirmation_executions": 0,
+  "formal_run_ready": false
+}

@@ -420,16 +420,22 @@ def execution_mode_line(results):
 
 
 class Experiment:
-    def __init__(self, root):
+    def __init__(self, root, *, readonly=False):
         self.root = Path(root).resolve()
         self.home = self.root / ".popper"
         if not (self.home / "state.db").is_file():
             raise ProtocolError("未初始化，请先运行 init")
-        self.db = sqlite3.connect(self.home / "state.db", timeout=5)
+        self.readonly = readonly
+        self.db = (sqlite3.connect(f"{(self.home / 'state.db').as_uri()}?mode=ro",
+                                   uri=True, timeout=5)
+                   if readonly else sqlite3.connect(self.home / "state.db", timeout=5))
         self.db.row_factory = sqlite3.Row
+        if readonly:
+            self.db.execute("PRAGMA query_only=ON")
         self.db.execute("PRAGMA foreign_keys=ON")
         # 打开即迁移：缺表的老库在这里补齐，并写明 schema 版本。
-        _migrate_state(self.db)
+        if not readonly:
+            _migrate_state(self.db)
 
     def close(self):
         self.db.close()
@@ -513,7 +519,7 @@ class Experiment:
         return {"status": "adjudicated", "risk_id": risk_id,
                 "verdict": verdict, "reason": reason}
 
-    def verify_inputs(self):
+    def verify_inputs(self, *, portable_replay=False):
         state = self.state()
         for name, expected in state["input_hashes"].items():
             if file_hash(inside(self.root, name)) != expected:
@@ -523,7 +529,7 @@ class Experiment:
                 or evaluator_for_metric(state["spec"]["metric"]) != evaluator_id):
             raise ProtocolError("评估器版本已改变；旧实验不能静默继续")
         current = {"python": sys.version, "platform": platform.platform(), "executable": sys.executable}
-        if current != state["environment"]:
+        if not portable_replay and current != state["environment"]:
             raise ProtocolError("运行环境与初始化时不同")
         return state
 
@@ -898,8 +904,8 @@ class Experiment:
             self.mark_confirmation_failed()
             raise
 
-    def replay(self):
-        """Recompute metrics/claim from saved predictions; never re-executes code or LLM."""
+    def replay(self, portable=False):
+        """Recompute saved evidence; portable mode skips only host identity, not hashes."""
         previous = "0" * 64
         completions = {}
         confirmed = None
@@ -915,7 +921,7 @@ class Experiment:
                 confirmed = payload
             elif row["kind"] == "candidate_proposed":
                 decisions.append(payload)
-        state = self.verify_inputs()
+        state = self.verify_inputs(portable_replay=portable)
         recomputed = {}
         recomputed_points = {}
         for rid, event in completions.items():
@@ -978,6 +984,7 @@ class Experiment:
         if decisions and len(decisions) != nonbase_dev:
             raise ProtocolError("决策选择链与开发集候选运行不一致")
         return {"status": "verified", "runs_recomputed": len(recomputed), "claim_recomputed": bool(confirmed),
+                "portable_replay": bool(portable), "original_environment": state["environment"],
                 "decisions_replayed": decisions_replayed,
                 "event_head": previous, "scope": "离线证据重算；非实验重跑，非防恶意篡改证明"}
 

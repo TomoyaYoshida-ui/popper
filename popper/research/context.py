@@ -9,6 +9,7 @@ def build_context(store, study_id, manifest):
     runs = [r for r in store.list("run") if r.get("study_id") == study_id]
     observations = [o for o in store.list("observation") if o.get("study_id") == study_id]
     decisions = [d for d in store.list("decision") if d.get("study_id") == study_id]
+    claims = [c for c in store.list("claim") if c.get("study_id") == study_id]
     candidate_ids = set(manifest["candidate_hypothesis_ids"])
     candidates = []
     for hypothesis in hypotheses:
@@ -29,7 +30,7 @@ def build_context(store, study_id, manifest):
     # 账本与研究库共用连接，不拥有资源，因此不需要关闭。
     budget = store.budget(study_id).balance(study["family_id"])
     return {"study_id": study_id, "study": study, "candidates": candidates, "runs": runs,
-            "observations": observations, "decisions": decisions,
+            "observations": observations, "decisions": decisions, "claims": claims,
             "reflections": [r for r in store.list("reflection") if r["study_id"] == study_id],
             "budget": budget,
             "metric": manifest["metric"],

@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _STATE_TABLES = """
 CREATE TABLE IF NOT EXISTS state(
@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS study_versions(
     version INTEGER NOT NULL CHECK(version >= 1));
 CREATE TABLE IF NOT EXISTS store_meta(
     key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS command_receipts(
+    idempotency_key TEXT PRIMARY KEY,
+    study_id TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    trace_id TEXT NOT NULL,
+    command_hash TEXT NOT NULL,
+    result TEXT NOT NULL,
+    created TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_command_receipts_study
+    ON command_receipts(study_id);
 """
 
 _BUDGET_TABLES = """
@@ -110,16 +120,32 @@ def migrate_state(conn):
 
 def migrate_research(conn):
     """研究库：状态、事件链、study 版本、链头，以及（同库的）预算总账。"""
-    with conn:
-        conn.executescript(_RESEARCH_TABLES)
-    migrate_budget(conn)
+    scope = conn.transaction(write=True) if hasattr(conn, "transaction") else conn
+    with scope:
+        if hasattr(conn, "apply_schema"):
+            conn.apply_schema(_RESEARCH_TABLES)
+        else:
+            conn.executescript(_RESEARCH_TABLES)
+        _add_missing_columns(conn, "command_receipts", {
+            "actor": "TEXT NOT NULL DEFAULT 'legacy'",
+            "trace_id": "TEXT NOT NULL DEFAULT 'legacy'",
+        })
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        # Research state and its budget ledger form one authoritative store.
+        # The adapter uses a savepoint here, so a later migration failure rolls
+        # back both schemas and the version marker together.
+        migrate_budget(conn)
     return SCHEMA_VERSION
 
 
 def migrate_budget(conn):
     """预算总账：与 study 同库，因此预留可以与状态写入同事务提交。"""
-    with conn:
-        conn.executescript(_BUDGET_TABLES)
+    scope = conn.transaction(write=True) if hasattr(conn, "transaction") else conn
+    with scope:
+        if hasattr(conn, "apply_schema"):
+            conn.apply_schema(_BUDGET_TABLES)
+        else:
+            conn.executescript(_BUDGET_TABLES)
         # 预算预留需要区分用途：只有开发集预留可以在启动对账时回收。
         _add_missing_columns(conn, "reservations", {"kind": "TEXT NOT NULL DEFAULT 'dev'"})
         conn.execute(

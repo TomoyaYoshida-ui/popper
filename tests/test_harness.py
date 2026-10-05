@@ -5,6 +5,9 @@ from unittest.mock import Mock, patch
 from popper.core import ProtocolError
 from popper.harness import (Harness, JSONAgentHarness, PolicyHarness, for_policy,
                             harnesses, names, parse_revision_proposal, resolve)
+from popper.harness.conversation import (
+    CONVERSATION_HARNESS_PROTOCOL, CallableConversationHarness,
+    ConversationHarnessDescriptor, adapt_conversation_harness)
 from popper.research.controller import ResearchController
 from popper.research.models import DeepSeekResearchPolicy, EvidenceDrivenPolicy
 
@@ -21,6 +24,28 @@ class HarnessRegistryTests(unittest.TestCase):
 
     def test_policy_without_proposal_has_no_harness(self):
         self.assertIsNone(for_policy(EvidenceDrivenPolicy()))
+
+    def test_conversation_harness_descriptor_is_versioned_and_discoverable(self):
+        descriptor = ConversationHarnessDescriptor(
+            name="test_chat", display_name="Test Chat",
+            protocol_version=CONVERSATION_HARNESS_PROTOCOL,
+            capabilities=frozenset({"text", "streaming_text"}), model="m")
+        self.assertEqual("1.0", descriptor.as_dict()["protocol_version"])
+        self.assertEqual(["streaming_text", "text"],
+                         descriptor.as_dict()["capabilities"])
+        with self.assertRaises(ProtocolError):
+            ConversationHarnessDescriptor(
+                name="bad", display_name="Bad", protocol_version="2.0",
+                capabilities=frozenset({"text"}))
+
+    def test_legacy_callable_is_adapted_at_the_protocol_boundary(self):
+        calls = []
+        harness = adapt_conversation_harness(
+            lambda system, messages: calls.append((system, messages)) or "ok")
+        self.assertIsInstance(harness, CallableConversationHarness)
+        self.assertEqual({"text"}, set(harness.descriptor.capabilities))
+        self.assertEqual("ok", harness.invoke("system", []))
+        self.assertEqual(1, len(calls))
 
     def test_json_agent_satisfies_the_protocol(self):
         harness = JSONAgentHarness(Mock(), model="m")

@@ -13,6 +13,7 @@ from ...core import ProtocolError, file_hash, portable_path, read_json, write_js
 from ..revisions import RevisionStore
 from ..execution import PROBE_SOURCE, assess_execution
 from .base import TERMINAL_JOB_STATUSES, JobSpec, WorkerReceipt
+from .json_io import read_job_json
 
 
 # supervisor 心跳判活阈值：超过该秒数未收到心跳即视为 supervisor 丢失。
@@ -60,7 +61,7 @@ class LocalWorker:
             raise ProtocolError("worker job 目录越界")
         manifest_path = job_dir / "job.json"
         if manifest_path.is_file():
-            current = read_json(manifest_path)
+            current = read_job_json(manifest_path)
             if current.get("spec") != spec.payload():
                 raise ProtocolError("同一 job_id 对应不同 JobSpec")
             return current
@@ -100,7 +101,7 @@ class LocalWorker:
         job_dir = (self.root / job_id).resolve()
         if not job_dir.is_relative_to(self.root):
             raise ProtocolError("job_id 越界")
-        manifest = read_json(job_dir / "job.json")
+        manifest = read_job_json(job_dir / "job.json")
         return {"job_id": job_id, "status": manifest["status"],
                 "receipt_sha256": manifest.get("receipt_sha256")}
 
@@ -108,7 +109,7 @@ class LocalWorker:
         job_dir = (self.root / job_id).resolve()
         if not job_dir.is_relative_to(self.root):
             raise ProtocolError("job_id 越界")
-        manifest = read_json(job_dir / "job.json")
+        manifest = read_job_json(job_dir / "job.json")
         if manifest["status"] in TERMINAL_JOB_STATUSES:
             return manifest
         write_json(job_dir / "cancel_requested", {"requested_at": time.time()})
@@ -175,12 +176,12 @@ class LocalWorker:
             manifest_path = job_dir / "job.json"
             if not manifest_path.is_file():
                 continue
-            manifest = read_json(manifest_path)
+            manifest = read_job_json(manifest_path)
             if manifest["status"] != "running":
                 continue
             marker = job_dir / "supervisor.json"
             if marker.is_file():
-                heartbeat = read_json(marker).get("heartbeat", 0)
+                heartbeat = read_job_json(marker).get("heartbeat", 0)
                 if time.time() - float(heartbeat) < stale_seconds:
                     continue
             self._finalize_manual(job_dir, manifest, "infrastructure_failed",
@@ -190,13 +191,13 @@ class LocalWorker:
         """按 job_id 排序的 [{job_id, status}]，供控制器重连扫描（不再依赖 .root）。"""
         jobs = []
         for path in self.root.glob("JOB-*/job.json"):
-            manifest = read_json(path)
+            manifest = read_job_json(path)
             jobs.append({"job_id": manifest["job_id"], "status": manifest["status"]})
         return sorted(jobs, key=lambda item: item["job_id"])
 
     def list_receipts(self):
         """按 job_id 排序的回执列表（含 execution_gate），供状态快照（不再依赖 .root）。"""
-        receipts = [read_json(path) for path in self.root.glob("JOB-*/receipt.json")]
+        receipts = [read_job_json(path) for path in self.root.glob("JOB-*/receipt.json")]
         return sorted(receipts, key=lambda item: item["job_id"])
 
     def read_artifact(self, job_id, name):
@@ -206,7 +207,7 @@ class LocalWorker:
             raise ProtocolError("job_id 越界")
         path = (job_dir / name if name in {"stdout.log", "stderr.log"}
                 else job_dir / "workspace" / name)
-        receipt = read_json(job_dir / "receipt.json")
+        receipt = read_job_json(job_dir / "receipt.json")
         expected = receipt.get("artifacts", {}).get(name)
         if expected is None:
             raise ProtocolError(f"Job 未声明制品: {name}")
@@ -226,7 +227,7 @@ class LocalWorker:
         job_dir = (self.root / job_id).resolve()
         if not job_dir.is_relative_to(self.root):
             raise ProtocolError("job_id 越界")
-        return read_json(job_dir / "job.json")
+        return read_job_json(job_dir / "job.json")
 
     def read_workspace_file(self, job_id, name):
         """返回 workspace 内任意相对路径的原始字节（路径受限，不做制品摘要校验）。"""
@@ -398,8 +399,8 @@ class LocalWorker:
         job_dir = (self.root / job_id).resolve()
         if not job_dir.is_relative_to(self.root):
             raise ProtocolError("job_id 越界")
-        manifest = read_json(job_dir / "job.json")
-        receipt = read_json(job_dir / "receipt.json")
+        manifest = read_job_json(job_dir / "job.json")
+        receipt = read_job_json(job_dir / "receipt.json")
         if file_hash(job_dir / "receipt.json") != manifest.get("receipt_sha256"):
             raise ProtocolError("WorkerReceipt 已变化")
         for name, expected in receipt["artifacts"].items():

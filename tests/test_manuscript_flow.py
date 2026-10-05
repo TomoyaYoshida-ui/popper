@@ -6,8 +6,9 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from popper.core import Experiment, ProtocolError, initialize, read_json
+from popper.core import Experiment, ProtocolError, initialize, read_json, write_json
 from popper.cli import main
 from popper.evidence import EvidenceStore
 from popper.manuscript_flow import ManuscriptFlow
@@ -160,6 +161,70 @@ class ManuscriptFlowTests(unittest.TestCase):
         # replay 会校验事件链完整性；manuscript_flow 事件不破坏之
         verified = exp.replay()
         self.assertEqual("verified", verified["status"])
+
+    def test_explicit_recovery_of_single_json_only_transition(self):
+        exp = self.start()
+        manuscript = str(self.ms)
+        flow = ManuscriptFlow(exp)
+        with patch.object(exp, "_event", side_effect=RuntimeError("simulated crash")):
+            with self.assertRaisesRegex(RuntimeError, "simulated crash"):
+                flow.transition(manuscript, "reviewed")
+        self.assertEqual("reviewed", read_json(flow.path)["manuscripts"][manuscript]["state"])
+        reopened = ManuscriptFlow(exp)
+        with self.assertRaisesRegex(ProtocolError, "状态投影"):
+            reopened._verify_projection(manuscript)
+        # A second crash after the recovery event but before rewriting JSON is
+        # safe to resume: the same audit receipt is reused.
+        with patch.object(reopened, "_save", side_effect=RuntimeError("second crash")):
+            with self.assertRaisesRegex(RuntimeError, "second crash"):
+                reopened.recover_interrupted_projection(manuscript, "恢复测试")
+        retry = ManuscriptFlow(exp)
+        result = retry.recover_interrupted_projection(manuscript, "重复恢复测试")
+        self.assertTrue(result["replayed"])
+        self.assertEqual("draft", result["restored_state"])
+        self.assertEqual("draft", read_json(flow.path)["manuscripts"][manuscript]["state"])
+        recovery_rows = exp.db.execute(
+            "SELECT COUNT(*) FROM events WHERE kind='manuscript_projection_recovery'").fetchone()[0]
+        self.assertEqual(1, recovery_rows)
+        retry._verify_projection(manuscript)
+        self.assertEqual("reviewed", retry.transition(manuscript, "reviewed")["status"])
+        second = self._write_ms("第二份待恢复稿件")
+        with patch.object(exp, "_event", side_effect=RuntimeError("simulated crash")):
+            with self.assertRaisesRegex(RuntimeError, "simulated crash"):
+                retry.transition(second, "reviewed")
+        via_cli = self._paper("research", "paper", "recover-projection",
+                              str(self.root), "--manuscript", second,
+                              "--reason", "人工确认中断窗口")
+        self.assertEqual("draft", via_cli["restored_state"])
+
+    def test_projection_recovery_rejects_divergence_and_db_ahead(self):
+        exp = self.start()
+        manuscript = str(self.ms)
+        flow = ManuscriptFlow(exp)
+        flow.transition(manuscript, "reviewed")
+        recorded = read_json(flow.path)
+        entry = recorded["manuscripts"][manuscript]
+        entry["transitions"].append({"from": "reviewed", "to": "submitted",
+                                     "at": "test", "reason": None})
+        entry["transitions"].append({"from": "submitted", "to": "published",
+                                     "at": "test", "reason": None})
+        entry["state"] = "published"
+        write_json(flow.path, recorded)
+        # Two JSON-only transitions do not form an accepted single-tail
+        # recovery, nor does an altered prefix.
+        with self.assertRaisesRegex(ProtocolError, "单个"):
+            ManuscriptFlow(exp).recover_interrupted_projection(manuscript, "拒绝")
+        entry["transitions"].pop()
+        entry["transitions"][0]["reason"] = "forged prefix"
+        entry["state"] = "submitted"
+        write_json(flow.path, recorded)
+        with self.assertRaisesRegex(ProtocolError, "单个"):
+            ManuscriptFlow(exp).recover_interrupted_projection(manuscript, "拒绝")
+        entry["transitions"].clear()
+        entry["state"] = "draft"
+        write_json(flow.path, recorded)
+        with self.assertRaisesRegex(ProtocolError, "单个"):
+            ManuscriptFlow(exp).recover_interrupted_projection(manuscript, "拒绝")
 
     def test_paper_cli_submit_publish_revert_status_share(self):
         initialize(self.root)

@@ -14,6 +14,9 @@ Domain Pack = 任务形状 + 数据契约 + 指标集 + 切分策略 + 重复单
 from __future__ import annotations
 
 import os
+import hashlib
+import json
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
@@ -278,13 +281,42 @@ class DomainPack(Protocol):
 
 
 _PACKS: dict = {}
+_EXTERNAL_SOURCES: dict = {}
+_EXTERNAL_DISTRIBUTIONS: dict = {}
+
+
+def _distribution_payload_sha256(distribution):
+    """Hash installed distribution payload, excluding installer metadata/bytecode."""
+    files = distribution.files
+    if not files:
+        raise ValueError("外部域包发行包缺少可枚举文件清单")
+    root = Path(distribution.locate_file("")).resolve()
+    members = []
+    for item in sorted(files, key=lambda value: str(value).replace("\\", "/")):
+        name = str(item).replace("\\", "/")
+        parts = name.split("/")
+        if (any(part.endswith(".dist-info") or part == "__pycache__" for part in parts)
+                or name.endswith((".pyc", ".pyo"))):
+            continue
+        path = Path(distribution.locate_file(item)).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError(f"外部域包发行文件缺失或越界: {name}")
+        hasher = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
+        members.append((name, hasher.hexdigest()))
+    if not members:
+        raise ValueError("外部域包发行包没有可核对的有效载荷")
+    payload = json.dumps(members, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _primary(specs):
     return next(spec for spec in specs if spec.role == "primary")
 
 
-def register(pack):
+def register(pack, *, source_path=None, distribution=None):
     """注册域包，并在导入期做完所有可静态检查的校验。"""
     if not isinstance(pack.pack_id, str) or not pack.pack_id:
         raise ValueError("域包必须有非空 pack_id")
@@ -320,6 +352,20 @@ def register(pack):
             f"域包 {pack.pack_id} 的 repeat_unit 不属于受控词汇表 REPEAT_UNITS: "
             f"{pack.repeat_unit()!r}")
     _PACKS[pack.evaluator_id] = pack
+    if source_path is not None:
+        path = Path(source_path).resolve()
+        if not path.is_file():
+            _PACKS.pop(pack.evaluator_id, None)
+            raise ValueError(f"外部域包实现源码不可读取: {path}")
+        _EXTERNAL_SOURCES[pack.evaluator_id] = path
+    if distribution is not None:
+        try:
+            _distribution_payload_sha256(distribution)
+        except Exception:
+            _PACKS.pop(pack.evaluator_id, None)
+            _EXTERNAL_SOURCES.pop(pack.evaluator_id, None)
+            raise
+        _EXTERNAL_DISTRIBUTIONS[pack.evaluator_id] = distribution
     return pack
 
 
@@ -348,7 +394,20 @@ def packs():
 
 def registered_evaluators():
     """``popper.core.EVALUATORS`` 的数据来源：评估器 ID → 冻结身份记录。"""
-    return {pack.evaluator_id: pack.evaluator_entry() for pack in _PACKS.values()}
+    identities = {}
+    for pack in _PACKS.values():
+        entry = dict(pack.evaluator_entry())
+        source = _EXTERNAL_SOURCES.get(pack.evaluator_id)
+        if source is not None:
+            try:
+                entry["implementation_source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
+            except OSError as error:
+                raise ValueError(f"外部域包实现源码不可读取: {source}") from error
+        distribution = _EXTERNAL_DISTRIBUTIONS.get(pack.evaluator_id)
+        if distribution is not None:
+            entry["implementation_distribution_sha256"] = _distribution_payload_sha256(distribution)
+        identities[pack.evaluator_id] = entry
+    return identities
 
 
 def registered_metrics():

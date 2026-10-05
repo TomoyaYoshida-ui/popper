@@ -12,17 +12,23 @@ from __future__ import annotations
 
 import json
 import math
-import sqlite3
+import re
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 from ..core import ProtocolError, digest, file_hash, read_json
+from ..eventlog import GENESIS_HASH, chained_body, verify_hash_chain
+from ..identity import EntityKind, content_id, new_id
+from ..storage import SQLiteStorageAdapter
 from .budget import BudgetLedger
 from .contracts import (Decision, DesignStatus, ExperimentDesign, Hypothesis,
                         HypothesisStatus, Observation, RunStatus, Study,
                         StudyStatus, TransitionError, validate_design_transition,
+                        validate_design_proposal,
                         validate_hypothesis_revision, validate_hypothesis_transition,
-                        validate_run_transition, validate_study_transition)
+                        validate_hypothesis_proposal, validate_run_transition,
+                        validate_study_transition)
 from .schema import migrate_research
 
 # 实体 → 权威写入方。写入方由代码路径决定，不再由调用方作为参数传入。
@@ -34,9 +40,11 @@ AUTHORITY = {
     "hypothesis": "research_store",
     "design": "research_store",
     "decision": "research_store",
+    "claim": "research_controller",
     "reflection": "research_store",
     "observation": "evaluation_service",
     "run": "research_controller",
+    "audit_event": "research_store",
 }
 
 # 已退役的权威名 → 当前名。历史研究库里 run 事件记录为 experiment_service，
@@ -57,6 +65,16 @@ _TRANSITION_VALIDATORS = {
     "design": validate_design_transition,
     "run": validate_run_transition,
 }
+
+_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
+
+
+class ResearchVersionConflict(TransitionError):
+    """A command was based on a stale study state version."""
+
+
+class ResearchIdempotencyConflict(ProtocolError):
+    """An idempotency key was reused for a different research command."""
 
 
 class ObservationWriter:
@@ -83,26 +101,185 @@ class RunWriter:
             raise ProtocolError("RunWriter 只能由 ResearchStore 签发")
         self._store = store
 
-    def register(self, run_id, design_id):
-        return self._store._register_run(run_id, design_id)
+    def register(self, run_id, design_id, *, revision_id=None,
+                 revision_manifest_sha256=None, external_source=None):
+        return self._store._register_run(
+            run_id, design_id, revision_id=revision_id,
+            revision_manifest_sha256=revision_manifest_sha256,
+            external_source=external_source)
 
     def set_status(self, run_id, target: RunStatus):
         return self._store._set_run_status(run_id, target)
 
 
+class ClaimWriter:
+    """Only the Controller may publish a computed confirmation claim."""
+
+    def __init__(self, store, token):
+        if token is not _CAPABILITY:
+            raise ProtocolError("ClaimWriter 只能由 ResearchStore 签发")
+        self._store = store
+
+    def confirm(self, study_id, decision_id, baseline_observation_id,
+                candidate_observation_id):
+        return self._store._record_confirmation_claim(
+            study_id, decision_id, baseline_observation_id,
+            candidate_observation_id)
+
+    def confirm_signed(self, study_id, decision_id, signed_result,
+                       contract_envelope, submission, pinned_public_key):
+        return self._store._record_signed_confirmation_claim(
+            study_id, decision_id, signed_result, contract_envelope,
+            submission, pinned_public_key)
+
+
+def _signed_claim_from_evidence(study_id, decision_id, decision, observations,
+                                designs, runs, signed_result):
+    """Derive the exact external Claim from a signed receipt and stored evidence."""
+    from .actions import CONCLUDE_SCOPE_BOUNDARY, STOP
+
+    result = signed_result["payload"]
+    if result["status"] != "succeeded" or len(observations) < 2:
+        raise ProtocolError("签名确认未成功，不能生成 Claim")
+    kind = result.get("confirmation_kind", "positive_effect")
+    if kind not in {"positive_effect", "scope_boundary"}:
+        raise ProtocolError("签名确认类型不合法")
+    baseline, candidate = observations[:2]
+    base_design, candidate_design = designs[:2]
+    refs = [obs["observation_id"] for obs in observations]
+    receipt_hash = digest(signed_result)
+    if (decision["study_id"] != study_id
+            or decision["actor"] != "external_confirmation_controller"
+            or decision["observation_refs"] != refs
+            or decision["action"] != (CONCLUDE_SCOPE_BOUNDARY
+                                       if kind == "scope_boundary" and result["passed"]
+                                       else STOP)):
+        raise ProtocolError("签名 Claim 的决策与确认依据不一致")
+    rationale = json.loads(decision["rationale"])
+    if rationale != {"external_receipt_sha256": receipt_hash,
+                     "status": result["status"], "passed": result["passed"],
+                     "effect": result["effect"], "confirmation_kind": kind,
+                     "trust": result["trust"]}:
+        raise ProtocolError("签名 Claim 的决策回执不一致")
+    if (base_design["study_id"] != study_id
+            or candidate_design["study_id"] != study_id
+            or base_design["status"] != DesignStatus.FROZEN.value
+            or candidate_design["status"] != DesignStatus.FROZEN.value
+            or base_design["design_id"] == candidate_design["design_id"]
+            or base_design["interventions"] != [base_design["control"]]
+            or candidate_design["interventions"] == [candidate_design["control"]]
+            or base_design["control"] != candidate_design["control"]
+            or base_design["metric"] != candidate_design["metric"]
+            or base_design["metric_direction"] != candidate_design["metric_direction"]
+            or base_design["scorer_id"] != candidate_design["scorer_id"]
+            or base_design["min_meaningful_effect"] !=
+               candidate_design["min_meaningful_effect"]):
+        raise ProtocolError("签名 Claim 的冻结设计不一致")
+    source_ids = set()
+    artifact_paths = set()
+    for index, (obs, design, run) in enumerate(zip(observations, designs, runs)):
+        source = run.get("external_source")
+        role = "control" if index % 2 == 0 else "candidate"
+        expected_design = base_design if role == "control" else candidate_design
+        if (obs["study_id"] != study_id or obs["design_id"] != expected_design["design_id"]
+                or design["design_id"] != expected_design["design_id"]
+                or obs["run_id"] != run["run_id"]
+                or run["status"] != RunStatus.SUCCEEDED.value
+                or run["study_id"] != study_id
+                or run["design_id"] != design["design_id"]
+                or not isinstance(source, dict)
+                or source.get("kind") != "signed_confirmation_bundle"
+                or source.get("role") != role
+                or obs["scorer_id"] != candidate_design["scorer_id"]
+                or obs["unit"] != candidate_design["metric"]
+                or obs.get("artifact_sha256") != file_hash(obs["artifact_id"])):
+            raise ProtocolError("签名 Claim 的外部 Run 或 Observation 不一致")
+        source_ids.add((source["submission_id"], source["submission_sha256"]))
+        artifact_paths.add(obs["artifact_id"])
+    if len(source_ids) != 1 or len(artifact_paths) != 1:
+        raise ProtocolError("签名 Claim 必须来自同一冻结提交和回执")
+    receipt_path = Path(next(iter(artifact_paths)))
+    if read_json(receipt_path) != signed_result:
+        raise ProtocolError("签名 Claim 回执已变化")
+    direction = candidate_design["metric_direction"]
+    effect = (baseline["value"] - candidate["value"] if direction == "min"
+              else candidate["value"] - baseline["value"])
+    threshold = candidate_design["min_meaningful_effect"]
+    if (baseline["scope"] != "confirmation" or candidate["scope"] != "confirmation"
+            or not math.isclose(effect, result["effect"], rel_tol=1e-12,
+                                abs_tol=1e-12)
+            or baseline["value"] != result["control"]["mean"]
+            or candidate["value"] != result["candidate"]["mean"]):
+        raise ProtocolError("签名 Claim 的整体效应与回执不一致")
+    slice_effects = []
+    if kind == "scope_boundary":
+        registered = result["control"]["slices"]
+        if (len(registered) < 2 or len(observations) != 2 + 2 * len(registered)
+                or len(result["candidate"]["slices"]) != len(registered)):
+            raise ProtocolError("边界 Claim 的预注册切片不完整")
+        for index, control_slice in enumerate(registered):
+            candidate_slice = result["candidate"]["slices"][index]
+            slice_id = control_slice["slice_id"]
+            b_obs, c_obs = observations[2 + 2 * index:4 + 2 * index]
+            if (candidate_slice["slice_id"] != slice_id
+                    or b_obs["scope"] != f"confirmation:slice:{slice_id}"
+                    or c_obs["scope"] != b_obs["scope"]
+                    or b_obs["value"] != control_slice["mean"]
+                    or c_obs["value"] != candidate_slice["mean"]):
+                raise ProtocolError("边界 Claim 的切片证据不一致")
+            raw = c_obs["value"] - b_obs["value"]
+            slice_effects.append({"slice_id": slice_id,
+                                  "oriented_delta": -raw if direction == "min" else raw})
+        passed = (abs(effect) < threshold
+                  and max(row["oriented_delta"] for row in slice_effects) >= threshold
+                  and min(row["oriented_delta"] for row in slice_effects) < threshold)
+        scope = "signed_external_scope_boundary"
+        status = ("boundary_supported_in_scope" if passed else
+                  "boundary_not_supported_in_scope")
+    else:
+        if len(observations) != 2:
+            raise ProtocolError("整体效应 Claim 只能引用两项确认观察")
+        passed = effect >= threshold
+        scope = "signed_external_positive_effect"
+        status = "supported_in_scope" if passed else "not_supported_in_scope"
+    if result["passed"] is not passed:
+        raise ProtocolError("签名 Claim 裁定与证据不一致")
+    claim_id = content_id(EntityKind.CLAIM, {
+        "study_id": study_id, "decision_id": decision_id,
+        "observation_refs": refs})
+    payload = {"claim_id": claim_id, "study_id": study_id,
+               "decision_id": decision_id,
+               "hypothesis_id": candidate_design["hypothesis_id"],
+               "hypothesis_version": candidate_design["hypothesis_version"],
+               "design_id": candidate_design["design_id"],
+               "observation_refs": refs, "metric": candidate_design["metric"],
+               "metric_direction": direction, "oriented_delta": effect,
+               "min_meaningful_effect": threshold, "scope": scope,
+               "limitations": ["engineering_same_account_not_institutionally_independent",
+                               "does_not_establish_mechanism",
+                               "not_generalizable_beyond_registered_scope"],
+               "confirmation_kind": kind, "receipt_sha256": receipt_hash,
+               "trust": result["trust"], "slice_effects": slice_effects}
+    return payload, status
+
+
 class ResearchStore:
     """研究决策存储：快照表 + 追加事件链，单写事务。"""
 
-    def __init__(self, path):
+    def __init__(self, path, *, readonly=False):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.path))
+        self._storage = SQLiteStorageAdapter(self.path)
+        self._readonly = readonly
+        self._conn = (self._storage.connect_readonly() if readonly
+                      else self._storage.connect())
         self._terminal_confirmation_allowed = False
         self._in_transaction = False
-        migrate_research(self._conn)
+        if not readonly:
+            migrate_research(self._conn)
         # 窄接口写入能力：observation 归评估服务，run 归实验服务。
         self.observations = ObservationWriter(self, _CAPABILITY)
         self.runs = RunWriter(self, _CAPABILITY)
+        self.claims = ClaimWriter(self, _CAPABILITY)
 
     def close(self):
         self._conn.close()
@@ -119,10 +296,10 @@ class ResearchStore:
                 f"权威写入方冲突: {kind} 只能由 {AUTHORITY.get(kind)} 写入（收到 {writer}）")
         row = self._conn.execute(
             "SELECT hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
-        previous = row[0] if row else "0" * 64
-        body = {"kind": kind, "entity_id": entity_id, "event_type": event_type,
-                "payload": payload, "writer": writer, "previous": previous}
-        event_hash = digest(body)
+        previous = row[0] if row else GENESIS_HASH
+        body, event_hash = chained_body(
+            {"kind": kind, "entity_id": entity_id, "event_type": event_type,
+             "payload": payload, "writer": writer}, previous, previous_key="previous")
         self._conn.execute(
             "INSERT INTO events(kind, entity_id, event_type, payload, writer,"
             " previous_hash, hash) VALUES(?,?,?,?,?,?,?)",
@@ -216,11 +393,13 @@ class ResearchStore:
                 "research store 链头校验失败：事件表被外部改动，请运行 verify() 审计")
 
     def _transaction(self, fn):
-        self._check_chain_head()
+        if self._readonly:
+            raise ProtocolError("只读 ResearchStore 禁止写入")
         owner = not self._in_transaction
         if owner:
             self._begin()
         try:
+            self._check_chain_head()
             result = fn()
         except Exception:
             if owner:
@@ -237,11 +416,13 @@ class ResearchStore:
         事务内部再调用公开写方法是安全的（不重复提交），因此控制器不再需要
         「先记账、失败后手工回滚」的跨库补偿。
         """
-        self._check_chain_head()
+        if self._readonly:
+            raise ProtocolError("只读 ResearchStore 禁止写入")
         owner = not self._in_transaction
         if owner:
             self._begin()
         try:
+            self._check_chain_head()
             yield self
         except Exception:
             if owner:
@@ -252,7 +433,7 @@ class ResearchStore:
 
     def _begin(self):
         # BEGIN IMMEDIATE：先取写锁再校验，避免验证与写入之间被别的写入方插入。
-        self._conn.execute("BEGIN IMMEDIATE")
+        self._conn.begin(write=True)
         self._in_transaction = True
 
     def _end(self, failed):
@@ -261,6 +442,146 @@ class ResearchStore:
             self._conn.rollback()
         else:
             self._conn.commit()
+
+    # ---- 统一命令入口 ---------------------------------------------------
+    def execute_command(self, study_id, action, payload, *, idempotency_key,
+                        expected_version, actor, trace_id):
+        """Execute one externally requested governance command exactly once.
+
+        The command receipt is committed in the same SQLite transaction as the
+        resulting event, snapshot and study-version update. Observation and Run
+        writes are deliberately absent: only their capability holders may write
+        scientific measurements and execution facts.
+        """
+        if (not isinstance(study_id, str) or not study_id
+                or not isinstance(action, str) or not action
+                or not isinstance(payload, dict)):
+            raise ProtocolError("research 命令字段不合法")
+        if (not isinstance(idempotency_key, str)
+                or not _IDEMPOTENCY_KEY.fullmatch(idempotency_key)):
+            raise ProtocolError("idempotency_key 格式不合法")
+        if type(expected_version) is not int or expected_version < 1:
+            raise ProtocolError("expected_version 必须是正整数")
+        if not isinstance(actor, str) or not actor.strip():
+            raise ProtocolError("actor 必须是非空字符串")
+        if (not isinstance(trace_id, str) or not trace_id.startswith("trc_")
+                or len(trace_id) < 8):
+            raise ProtocolError("trace_id 格式不合法")
+        command_hash = digest({"study_id": study_id, "action": action,
+                               "payload": payload, "actor": actor})
+
+        def _do():
+            previous = self._conn.execute(
+                "SELECT command_hash, result FROM command_receipts "
+                "WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
+            if previous is not None:
+                if previous[0] != command_hash:
+                    raise ResearchIdempotencyConflict(
+                        "相同 idempotency_key 对应不同 research 命令")
+                return json.loads(previous[1])
+            current_version = self._study_version(study_id)
+            if current_version != expected_version:
+                raise ResearchVersionConflict(
+                    f"study 版本冲突：期望 {expected_version}，当前 {current_version}")
+
+            if action == "create_hypothesis":
+                validate_hypothesis_proposal(payload)
+                entity_id = new_id(EntityKind.HYPOTHESIS)
+                entity = self.add_hypothesis(Hypothesis(
+                    hypothesis_id=entity_id, study_id=study_id,
+                    version=1, parent_version=None,
+                    mechanism=payload["mechanism"],
+                    applicability=payload["applicability"],
+                    predictions=tuple(payload["predictions"]),
+                    falsification=tuple(payload["falsification"]),
+                    alternatives=tuple(payload["alternatives"])))
+                entity_kind = "hypothesis"
+            elif action == "create_design":
+                validate_design_proposal(payload)
+                hypothesis = self.get("hypothesis", payload["hypothesis_id"])
+                if hypothesis is None or hypothesis.get("study_id") != study_id:
+                    raise ProtocolError("hypothesis 不属于目标 study 或不存在")
+                if hypothesis["version"] != payload["expected_hypothesis_version"]:
+                    raise ResearchVersionConflict(
+                        "hypothesis 版本冲突：期望 "
+                        f"{payload['expected_hypothesis_version']}，"
+                        f"当前 {hypothesis['version']}")
+                if hypothesis["status"] != HypothesisStatus.UNTESTED.value:
+                    raise TransitionError("只有 untested 假设可新增实验设计草稿")
+                entity_id = new_id(EntityKind.DESIGN)
+                entity = self.create_design(ExperimentDesign(
+                    design_id=entity_id,
+                    hypothesis_id=payload["hypothesis_id"],
+                    interventions=tuple(payload["interventions"]),
+                    control=payload["control"], baseline=payload["baseline"],
+                    metric=payload["metric"], scorer_id=payload["scorer_id"],
+                    metric_direction=payload["metric_direction"],
+                    analysis_unit=payload["analysis_unit"],
+                    splits=tuple(payload["splits"]),
+                    seeds=tuple(payload["repeat_values"]),
+                    min_meaningful_effect=payload["min_meaningful_effect"]))
+                entity_kind = "design"
+            elif action == "freeze_design":
+                if set(payload) != {"design_id"}:
+                    raise ProtocolError("freeze_design payload 字段不合法")
+                entity = self.freeze_design(payload["design_id"])
+                if entity.get("study_id") != study_id:
+                    raise ProtocolError("design 不属于目标 study")
+                entity_kind, entity_id = "design", payload["design_id"]
+            elif action == "set_hypothesis_status":
+                if set(payload) != {"hypothesis_id", "version", "status"}:
+                    raise ProtocolError("set_hypothesis_status payload 字段不合法")
+                current = self.get("hypothesis", payload["hypothesis_id"])
+                if current is None or current.get("study_id") != study_id:
+                    raise ProtocolError("hypothesis 不属于目标 study")
+                try:
+                    target = HypothesisStatus(payload["status"])
+                except (TypeError, ValueError):
+                    raise ProtocolError("hypothesis status 不合法") from None
+                entity = self.set_hypothesis_status(
+                    payload["hypothesis_id"], payload["version"], target)
+                entity_kind, entity_id = "hypothesis", payload["hypothesis_id"]
+            elif action == "set_study_status":
+                if set(payload) != {"status"}:
+                    raise ProtocolError("set_study_status payload 字段不合法")
+                try:
+                    target = StudyStatus(payload["status"])
+                except (TypeError, ValueError):
+                    raise ProtocolError("study status 不合法") from None
+                entity = self.set_study_status(study_id, target)
+                entity_kind, entity_id = "study", study_id
+            else:
+                raise ProtocolError("未知 research 命令")
+
+            result = {"operation": action, "study_id": study_id,
+                      "state_version": self._study_version(study_id),
+                      "entity": {"kind": entity_kind, "id": entity_id},
+                      "status": entity["status"]}
+            if action == "create_design":
+                result["execution_ready"] = False
+                result["execution_readiness_reason"] = (
+                    "草稿尚未绑定领域适配器的可执行配置与不可变源码修订")
+            created = datetime.now().astimezone().isoformat(timespec="seconds")
+            audit_payload = {
+                "idempotency_key": idempotency_key,
+                "study_id": study_id,
+                "actor": actor,
+                "trace_id": trace_id,
+                "command_hash": command_hash,
+                "result": result,
+                "created": created,
+            }
+            self._append("audit_event", idempotency_key, "command_applied",
+                         audit_payload, AUTHORITY["audit_event"])
+            self._conn.execute(
+                "INSERT INTO command_receipts(idempotency_key, study_id, actor, trace_id, "
+                "command_hash, result, created) VALUES(?,?,?,?,?,?,?)",
+                (idempotency_key, study_id, actor, trace_id, command_hash,
+                 json.dumps(result, ensure_ascii=False, sort_keys=True),
+                 created))
+            return result
+
+        return self._transaction(_do)
 
     # ---- Study ----
     def create_study(self, study: Study):
@@ -528,6 +849,166 @@ class ResearchStore:
             return {"status": "recorded", "decision_id": decision.decision_id}
         return self._transaction(_do)
 
+    def _record_confirmation_claim(self, study_id, decision_id,
+                                   baseline_observation_id, candidate_observation_id):
+        """Derive an immutable, scope-bound claim from authoritative evidence."""
+        writer = AUTHORITY["claim"]
+
+        def _do():
+            if baseline_observation_id == candidate_observation_id:
+                raise ProtocolError("Claim 必须引用不同的基线和候选确认观察")
+            decision = self.get("decision", decision_id)
+            if (decision is None or decision.get("study_id") != study_id
+                    or decision.get("actor") != "confirmation_controller"
+                    or decision.get("action") != "stop"
+                    or decision.get("observation_refs") != [
+                        baseline_observation_id, candidate_observation_id]):
+                raise ProtocolError("Claim 缺少匹配的独立确认决策")
+            evidence = [self.get("observation", oid) for oid in
+                        (baseline_observation_id, candidate_observation_id)]
+            if any(obs is None or obs.get("scope") != "confirmation"
+                   or obs.get("study_id") != study_id for obs in evidence):
+                raise ProtocolError("Claim 必须绑定同一 Study 的两项独立确认观察")
+            designs = [self.get("design", obs["design_id"]) for obs in evidence]
+            runs = [self.get("run", obs["run_id"]) for obs in evidence]
+            baseline_design, candidate_design = designs
+            if (any(item is None for item in [*designs, *runs])
+                    or any(run["design_id"] != obs["design_id"]
+                           for run, obs in zip(runs, evidence))
+                    or any(design["study_id"] != study_id for design in designs)
+                    or any(run["status"] != RunStatus.SUCCEEDED.value for run in runs)
+                    or any(run.get("external_source") is not None for run in runs)
+                    or any(design["status"] != DesignStatus.FROZEN.value for design in designs)
+                    or baseline_design["design_id"] == candidate_design["design_id"]
+                    or baseline_design["interventions"] != [baseline_design["control"]]
+                    or candidate_design["interventions"] == [candidate_design["control"]]
+                    or baseline_design["control"] != candidate_design["control"]
+                    or baseline_design["metric"] != candidate_design["metric"]
+                    or baseline_design["metric_direction"] != candidate_design["metric_direction"]
+                    or baseline_design["scorer_id"] != candidate_design["scorer_id"]
+                    or baseline_design["min_meaningful_effect"] !=
+                       candidate_design["min_meaningful_effect"]
+                    or any(obs["scorer_id"] != candidate_design["scorer_id"]
+                           or obs["unit"] != candidate_design["metric"] for obs in evidence)):
+                raise ProtocolError("Claim 确认 Run、设计或评分协议不一致")
+            for obs in evidence:
+                artifact = obs.get("artifact_id")
+                if (not artifact or not Path(artifact).is_file()
+                        or file_hash(artifact) != obs.get("artifact_sha256")):
+                    raise ProtocolError("Claim 确认证据制品缺失或已变化")
+                try:
+                    selected = read_json(artifact)
+                    for part in obs["selector"].split("."):
+                        selected = (selected[int(part)] if isinstance(selected, list)
+                                    else selected[part])
+                except (OSError, ValueError, KeyError, IndexError, TypeError):
+                    raise ProtocolError("Claim 观察 selector 无法重算") from None
+                if str(selected) != str(obs["value"]):
+                    raise ProtocolError("Claim 观察值与制品不一致")
+            direction = candidate_design["metric_direction"]
+            delta = (evidence[0]["value"] - evidence[1]["value"]
+                     if direction == "min" else
+                     evidence[1]["value"] - evidence[0]["value"])
+            threshold = candidate_design["min_meaningful_effect"]
+            status = ("supported_in_scope" if delta >= threshold
+                      else "not_supported_in_scope")
+            claim_id = content_id(EntityKind.CLAIM, {
+                "study_id": study_id, "decision_id": decision_id,
+                "observation_refs": [baseline_observation_id,
+                                     candidate_observation_id]})
+            payload = {
+                "claim_id": claim_id, "study_id": study_id,
+                "decision_id": decision_id,
+                "hypothesis_id": candidate_design["hypothesis_id"],
+                "hypothesis_version": candidate_design["hypothesis_version"],
+                "design_id": candidate_design["design_id"],
+                "observation_refs": [baseline_observation_id,
+                                     candidate_observation_id],
+                "metric": candidate_design["metric"], "metric_direction": direction,
+                "oriented_delta": delta, "min_meaningful_effect": threshold,
+                "scope": "registered_independent_confirmation",
+                "limitations": ["does_not_establish_mechanism",
+                                "not_generalizable_beyond_registered_scope"],
+            }
+            current = self.get("claim", claim_id)
+            if current is not None:
+                if current["status"] == status and self._same_payload(current, payload):
+                    return current
+                raise ProtocolError("相同 Claim ID 对应不同证据或结论")
+            self._require_study_active(study_id)
+            seq = self._conn.execute(
+                "SELECT COALESCE(MAX(seq),0)+1 FROM events").fetchone()[0]
+            self._append("claim", claim_id, "created", {**payload, "status": status}, writer)
+            self._upsert("claim", claim_id, status, payload, writer, seq)
+            self._touch_study(study_id)
+            return self.get("claim", claim_id)
+
+        return self._transaction(_do)
+
+    def _record_signed_confirmation_claim(self, study_id, decision_id,
+                                          signed_result, contract_envelope,
+                                          submission, pinned_public_key):
+        from .confirmation_contracts import validate_result
+
+        result = validate_result(signed_result, contract_envelope, submission,
+                                 pinned_public_key)
+        if result["status"] != "succeeded" or submission["identity"]["study_id"] != study_id:
+            raise ProtocolError("只有同一 Study 的成功签名确认可生成 Claim")
+
+        def _do():
+            decision = self.get("decision", decision_id)
+            if decision is None:
+                raise ProtocolError("签名 Claim 缺少确认决策")
+            refs = decision["observation_refs"]
+            observations = [self.get("observation", ref) for ref in refs]
+            if any(obs is None for obs in observations):
+                raise ProtocolError("签名 Claim 缺少确认观察")
+            designs = [self.get("design", obs["design_id"]) for obs in observations]
+            runs = [self.get("run", obs["run_id"]) for obs in observations]
+            if any(item is None for item in [*designs, *runs]):
+                raise ProtocolError("签名 Claim 缺少冻结设计或 Run")
+            payload, status = _signed_claim_from_evidence(
+                study_id, decision_id, decision, observations, designs, runs,
+                signed_result)
+            expected = {
+                "receipt_sha256": digest(signed_result),
+                "min_meaningful_effect": contract_envelope["payload"]["min_effect"],
+                "metric": submission["identity"]["metric"]["name"],
+                "metric_direction": submission["identity"]["metric"]["direction"],
+                "design_id": submission["identity"]["design_id"],
+                "hypothesis_id": submission["identity"]["hypothesis_id"],
+                "hypothesis_version": submission["identity"]["hypothesis_version"],
+                "trust": contract_envelope["payload"]["trust"],
+            }
+            mismatches = [name for name, value in expected.items()
+                          if payload[name] != value]
+            for run in runs:
+                source = run["external_source"]
+                if (source["submission_id"] != submission["submission_id"]
+                        or source["submission_sha256"] != digest(submission)
+                        or source["files_sha256"] !=
+                           digest(submission["identity"][source["role"]]["files"])):
+                    mismatches.append("external_source")
+            if mismatches:
+                raise ProtocolError("签名 Claim 与冻结合同或提交不一致: "
+                                    + ", ".join(mismatches))
+            claim_id = payload["claim_id"]
+            current = self.get("claim", claim_id)
+            if current is not None:
+                if current["status"] == status and self._same_payload(current, payload):
+                    return current
+                raise ProtocolError("相同 Claim ID 对应不同外部证据或结论")
+            self._require_study_active(study_id)
+            seq = self._conn.execute(
+                "SELECT COALESCE(MAX(seq),0)+1 FROM events").fetchone()[0]
+            self._append("claim", claim_id, "created", {**payload, "status": status},
+                         AUTHORITY["claim"])
+            self._upsert("claim", claim_id, status, payload, AUTHORITY["claim"], seq)
+            self._touch_study(study_id)
+            return self.get("claim", claim_id)
+
+        return self._transaction(_do)
+
     def apply_reflection(self, reflection_id, study_id, result,
                          expected_state_version, actor, model=None):
         """Atomically record evidence-driven reflection and its pending control.
@@ -760,9 +1241,37 @@ class ResearchStore:
             return self.get("run", run_id)
         return self._transaction(_do)
 
-    def _register_run(self, run_id, design_id):
+    def _register_run(self, run_id, design_id, *, revision_id=None,
+                      revision_manifest_sha256=None, external_source=None):
         """仅供 RunWriter 调用：Run 的权威写入方是实验服务。"""
         writer = AUTHORITY["run"]
+
+        if (revision_id is None) != (revision_manifest_sha256 is None):
+            raise ProtocolError("Run 的 revision_id 与 manifest SHA-256 必须同时提供")
+        if revision_id is not None:
+            if (not isinstance(revision_id, str)
+                    or not re.fullmatch(r"REV-[0-9a-f]{24}", revision_id)):
+                raise ProtocolError("Run revision_id 格式不合法")
+            if (not isinstance(revision_manifest_sha256, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", revision_manifest_sha256)):
+                raise ProtocolError("Run revision manifest SHA-256 格式不合法")
+        if external_source is not None:
+            if revision_id is not None:
+                raise ProtocolError("Run 不能同时绑定本地 revision 与外部源码快照")
+            if (not isinstance(external_source, dict)
+                    or set(external_source) != {"kind", "submission_id",
+                                                "submission_sha256", "role",
+                                                "files_sha256"}
+                    or external_source.get("kind") != "signed_confirmation_bundle"
+                    or not isinstance(external_source.get("submission_id"), str)
+                    or not external_source["submission_id"].startswith("SUB-")
+                    or external_source.get("role") not in {"control", "candidate"}):
+                raise ProtocolError("Run 外部源码快照字段不合法")
+            for name in ("submission_sha256", "files_sha256"):
+                value = external_source.get(name)
+                if (not isinstance(value, str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", value)):
+                    raise ProtocolError("Run 外部源码快照摘要不合法")
 
         def _do():
             design = self.get("design", design_id)
@@ -774,12 +1283,18 @@ class ResearchStore:
             if self._entity_exists("run", run_id):
                 raise ProtocolError(f"run 已存在: {run_id}")
             seq = self._conn.execute("SELECT COALESCE(MAX(seq),0)+1 FROM events").fetchone()[0]
+            provenance = ({"revision_id": revision_id,
+                           "revision_manifest_sha256": revision_manifest_sha256}
+                          if revision_id is not None else {})
+            if external_source is not None:
+                provenance["external_source"] = external_source
             self._append("run", run_id, "registered",
-                         {"run_id": run_id, "design_id": design_id, "study_id": design["study_id"],
-                          "status": RunStatus.QUEUED.value}, writer)
+                         {"run_id": run_id, "design_id": design_id,
+                          "study_id": design["study_id"],
+                          "status": RunStatus.QUEUED.value, **provenance}, writer)
             self._upsert("run", run_id, RunStatus.QUEUED,
                          {"run_id": run_id, "design_id": design_id,
-                          "study_id": design["study_id"]}, writer, seq)
+                          "study_id": design["study_id"], **provenance}, writer, seq)
             self._touch_study(design["study_id"])
             return self.get("run", run_id)
         return self._transaction(_do)
@@ -804,6 +1319,22 @@ class ResearchStore:
         return [{"seq": r[0], "event_type": r[1], "payload": json.loads(r[2]),
                  "writer": r[3], "hash": r[4]} for r in rows]
 
+    def event_cursor(self):
+        """Return the durable cursor of the latest committed research event."""
+        return self._conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
+
+    def command_receipt(self, idempotency_key):
+        """Return immutable request provenance without exposing internal hashes."""
+        row = self._conn.execute(
+            "SELECT study_id, actor, trace_id, result, created FROM command_receipts "
+            "WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
+        if row is None:
+            return None
+        return {"idempotency_key": idempotency_key, "study_id": row[0],
+                "actor": row[1], "trace_id": row[2],
+                "result": json.loads(row[3]), "created": row[4]}
+
     def list(self, kind):
         """按实体 ID 返回一种实体的只读快照，用于控制器构建可恢复上下文。"""
         if kind not in AUTHORITY:
@@ -813,12 +1344,21 @@ class ResearchStore:
             (kind,)).fetchall()
         return [self.get(kind, row[0]) for row in rows]
 
+    def list_with_ids(self, kind):
+        """Read-only snapshot listing with stable entity IDs for references."""
+        if kind not in AUTHORITY:
+            raise ProtocolError(f"未知实体类型: {kind}")
+        rows = self._conn.execute(
+            "SELECT entity_id FROM snapshots WHERE kind = ? ORDER BY updated_seq, entity_id",
+            (kind,)).fetchall()
+        return [{"entity_id": row[0], **self.get(kind, row[0])} for row in rows]
+
     def verify(self):
         """校验事件链，并确认快照和 study 版本可由事件精确重放。"""
-        previous = "0" * 64
         count = 0
         expected_snapshots = {}
         expected_versions = {}
+        expected_receipts = {}
 
         def fail(reason):
             return {"ok": False, "events": count, "reason": reason}
@@ -827,22 +1367,177 @@ class ResearchStore:
             snapshot = expected_snapshots.get(key)
             return snapshot["payload"].get("study_id") if snapshot else None
 
-        for row in self._conn.execute("SELECT * FROM events ORDER BY seq"):
+        rows = list(self._conn.execute("SELECT * FROM events ORDER BY seq"))
+        integrity = verify_hash_chain(
+            rows,
+            lambda row: {"kind": row[1], "entity_id": row[2], "event_type": row[3],
+                         "payload": json.loads(row[4]), "writer": row[5]},
+            lambda row: row[6], lambda row: row[7], label="research 事件链",
+            previous_key="previous", seq_for=lambda row: row[0])
+        if not integrity["ok"]:
+            return {"ok": False, "events": integrity["events"],
+                    "reason": integrity["reason"]}
+        for row in rows:
             kind, entity_id, event_type, payload, writer, prev, event_hash = row[1:]
             authority = AUTHORITY.get(kind)
             if writer != authority and RETIRED_WRITERS.get((kind, writer)) != authority:
                 return fail(
                     f"事件写入方与权威不一致 @seq={row[0]}: {kind} 只能由 "
                     f"{authority} 写入（记录为 {writer}）")
-            if prev != previous:
-                return fail(f"事件链断裂 @seq={row[0]}")
             decoded = json.loads(payload)
-            expected = digest({"kind": kind, "entity_id": entity_id,
-                               "event_type": event_type,
-                               "payload": decoded,
-                               "writer": writer, "previous": previous})
-            if expected != event_hash:
-                return fail(f"事件哈希不匹配 @seq={row[0]}")
+
+            signed_scopes = {"signed_external_positive_effect",
+                             "signed_external_scope_boundary"}
+            if (kind == "claim" and event_type == "created"
+                    and decoded.get("scope") in signed_scopes):
+                try:
+                    refs = decoded["observation_refs"]
+                    decision_state = expected_snapshots[("decision", decoded["decision_id"])]
+                    observations = [expected_snapshots[("observation", ref)]
+                                    for ref in refs]
+                    designs = [expected_snapshots[("design", item["payload"]["design_id"])]
+                               for item in observations]
+                    runs = [expected_snapshots[("run", item["payload"]["run_id"])]
+                            for item in observations]
+                    def unpack(snapshot):
+                        return {**snapshot["payload"], "status": snapshot["status"]}
+                    receipt = read_json(observations[0]["payload"]["artifact_id"])
+                    from .confirmation_bundle import verify_bundle
+                    from .confirmation_contracts import validate_result
+                    manifest = read_json(self.path.parent / "research.json")
+                    enrollment = manifest["external_confirmation"]
+                    submission, _ = verify_bundle(
+                        self.path.parent / "external-confirmation" / "bundle",
+                        enrollment["pinned_public_key"])
+                    validated = validate_result(
+                        receipt, enrollment["contract"], submission,
+                        enrollment["pinned_public_key"])
+                    if (validated["status"] != "succeeded"
+                            or submission["identity"]["study_id"] != decoded["study_id"]
+                            or submission["identity"]["design_id"] != decoded["design_id"]
+                            or submission["identity"]["hypothesis_id"] !=
+                               decoded["hypothesis_id"]
+                            or decoded["min_meaningful_effect"] !=
+                               enrollment["contract"]["payload"]["min_effect"]
+                            or any(item["payload"]["external_source"]["submission_id"] !=
+                                   submission["submission_id"]
+                                   or item["payload"]["external_source"]["submission_sha256"] !=
+                                   digest(submission)
+                                   or item["payload"]["external_source"]["files_sha256"] !=
+                                   digest(submission["identity"][
+                                       item["payload"]["external_source"]["role"]]["files"])
+                                   for item in runs)):
+                        return fail(f"签名 Claim 与冻结提交不一致 @seq={row[0]}")
+                    expected_payload, expected_status = _signed_claim_from_evidence(
+                        decoded["study_id"], decoded["decision_id"],
+                        unpack(decision_state), [unpack(item) for item in observations],
+                        [unpack(item) for item in designs],
+                        [unpack(item) for item in runs], receipt)
+                    if (entity_id != expected_payload["claim_id"]
+                            or decoded != {**expected_payload, "status": expected_status}
+                            or ("claim", entity_id) in expected_snapshots):
+                        return fail(f"签名 Claim 与确认依据不一致 @seq={row[0]}")
+                except (KeyError, TypeError, ValueError, OSError, ProtocolError):
+                    return fail(f"签名 Claim 引用缺失或证据不一致 @seq={row[0]}")
+
+            if (kind == "claim" and event_type == "created"
+                    and decoded.get("scope") not in signed_scopes):
+                try:
+                    expected_fields = {
+                        "claim_id", "study_id", "decision_id", "hypothesis_id",
+                        "hypothesis_version", "design_id", "observation_refs",
+                        "metric", "metric_direction", "oriented_delta",
+                        "min_meaningful_effect", "scope", "limitations", "status"}
+                    if (not isinstance(decoded, dict) or set(decoded) != expected_fields
+                            or ("claim", entity_id) in expected_snapshots):
+                        return fail(f"Claim 创建载荷或唯一性不合法 @seq={row[0]}")
+                    refs = decoded["observation_refs"]
+                    if (not isinstance(refs, list) or len(refs) != 2
+                            or refs[0] == refs[1]):
+                        return fail(f"Claim 观察引用不合法 @seq={row[0]}")
+                    decision_snapshot = expected_snapshots[("decision", decoded["decision_id"])]
+                    observations = [expected_snapshots[("observation", ref)]["payload"]
+                                    for ref in refs]
+                    designs = [expected_snapshots[("design", obs["design_id"])]
+                               for obs in observations]
+                    runs = [expected_snapshots[("run", obs["run_id"])]
+                            for obs in observations]
+                    baseline_design = designs[0]["payload"]
+                    candidate_design = designs[1]["payload"]
+                    decision = decision_snapshot["payload"]
+                    direction = candidate_design["metric_direction"]
+                    delta = (observations[0]["value"] - observations[1]["value"]
+                             if direction == "min" else
+                             observations[1]["value"] - observations[0]["value"])
+                    expected_status = ("supported_in_scope" if delta >=
+                                       candidate_design["min_meaningful_effect"]
+                                       else "not_supported_in_scope")
+                    expected_id = content_id(EntityKind.CLAIM, {
+                        "study_id": decoded["study_id"],
+                        "decision_id": decoded["decision_id"],
+                        "observation_refs": refs})
+                    if (entity_id != expected_id or decoded["claim_id"] != entity_id
+                            or decoded["status"] != expected_status
+                            or decoded["oriented_delta"] != delta
+                            or decoded["min_meaningful_effect"] !=
+                               candidate_design["min_meaningful_effect"]
+                            or decoded["metric_direction"] != direction
+                            or decoded["metric"] != candidate_design["metric"]
+                            or decoded["design_id"] != candidate_design["design_id"]
+                            or decoded["hypothesis_id"] != candidate_design["hypothesis_id"]
+                            or decoded["hypothesis_version"] !=
+                               candidate_design["hypothesis_version"]
+                            or decoded["scope"] != "registered_independent_confirmation"
+                            or decoded["limitations"] != [
+                                "does_not_establish_mechanism",
+                                "not_generalizable_beyond_registered_scope"]
+                            or any(run["status"] != RunStatus.SUCCEEDED.value
+                                   or run["payload"]["design_id"] != obs["design_id"]
+                                   or run["payload"]["study_id"] != decoded["study_id"]
+                                   or run["payload"].get("external_source") is not None
+                                   for run, obs in zip(runs, observations))
+                            or any(design["status"] != DesignStatus.FROZEN.value
+                                   or design["payload"]["study_id"] != decoded["study_id"]
+                                   for design in designs)
+                            or baseline_design["design_id"] == candidate_design["design_id"]
+                            or baseline_design["interventions"] != [baseline_design["control"]]
+                            or candidate_design["interventions"] == [candidate_design["control"]]
+                            or baseline_design["control"] != candidate_design["control"]
+                            or baseline_design["metric"] != candidate_design["metric"]
+                            or baseline_design["metric_direction"] != direction
+                            or baseline_design["scorer_id"] != candidate_design["scorer_id"]
+                            or baseline_design["min_meaningful_effect"] !=
+                               candidate_design["min_meaningful_effect"]
+                            or any(obs["scorer_id"] != candidate_design["scorer_id"]
+                                   or obs["unit"] != candidate_design["metric"]
+                                   for obs in observations)
+                            or any(obs["study_id"] != decoded["study_id"]
+                                   or obs["scope"] != "confirmation" for obs in observations)
+                            or decision["study_id"] != decoded["study_id"]
+                            or decision["actor"] != "confirmation_controller"
+                            or decision["action"] != "stop"
+                            or decision["observation_refs"] != refs):
+                        return fail(f"Claim 与确认依据不一致 @seq={row[0]}")
+                except (KeyError, TypeError, ValueError):
+                    return fail(f"Claim 引用缺失或字段不合法 @seq={row[0]}")
+
+            if kind == "audit_event":
+                if event_type != "command_applied":
+                    return fail(f"未知审计事件 {event_type} @seq={row[0]}")
+                required = {"idempotency_key", "study_id", "actor", "trace_id",
+                            "command_hash", "result", "created"}
+                if set(decoded) != required or decoded["idempotency_key"] != entity_id:
+                    return fail(f"命令审计事件字段不合法 @seq={row[0]}")
+                if entity_id in expected_receipts:
+                    return fail(f"重复命令审计事件: {entity_id} @seq={row[0]}")
+                expected_receipts[entity_id] = {
+                    "study_id": decoded["study_id"], "actor": decoded["actor"],
+                    "trace_id": decoded["trace_id"],
+                    "command_hash": decoded["command_hash"],
+                    "result": decoded["result"], "created": decoded["created"],
+                }
+                count += 1
+                continue
 
             key = (kind, entity_id)
             current = expected_snapshots.get(key)
@@ -855,6 +1550,7 @@ class ResearchStore:
                     ("run", "registered"): RunStatus.QUEUED.value,
                     ("observation", "created"): "computed",
                     ("decision", "created"): "recorded",
+                    ("claim", "created"): decoded.get("status"),
                     ("reflection", "created"): "recorded",
                 }
                 status = statuses.get((kind, event_type))
@@ -889,7 +1585,6 @@ class ResearchStore:
                     return fail(f"事件无法绑定已创建 study @seq={row[0]}")
                 expected_versions[study_id] += 1
 
-            previous = event_hash
             count += 1
 
         actual_snapshots = {}
@@ -911,6 +1606,18 @@ class ResearchStore:
             "SELECT study_id, version FROM study_versions"))
         if actual_versions != expected_versions:
             return fail("study 状态版本与事件重放不一致")
+        actual_receipts = {}
+        for key, study_id, actor, trace_id, command_hash, result, created in \
+                self._conn.execute(
+                    "SELECT idempotency_key, study_id, actor, trace_id, command_hash, "
+                    "result, created FROM command_receipts"):
+            actual_receipts[key] = {
+                "study_id": study_id, "actor": actor, "trace_id": trace_id,
+                "command_hash": command_hash, "result": json.loads(result),
+                "created": created,
+            }
+        if actual_receipts != expected_receipts:
+            return fail("命令收据与审计事件链不一致")
         for key, snapshot in expected_snapshots.items():
             if key[0] != "observation" or not snapshot["payload"].get("artifact_id"):
                 continue

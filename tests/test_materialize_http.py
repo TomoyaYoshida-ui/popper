@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from popper.core import initialize
+from popper.core import file_hash, initialize
 from popper.server import Workstation
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "quadratic"
@@ -95,6 +95,8 @@ class MaterializeHttpTests(unittest.TestCase):
         self.assertEqual(200, status2)
         self.assertIn("attachment", headers.get("Content-Disposition", ""))
         self.assertIn("AI 使用披露", body_bytes.decode("utf-8"))
+        self.assertEqual(file_hash(self.root / "deliverables" / item["filename"]),
+                         headers.get("X-Popper-Content-SHA256"))
         # 产物出现在 GET /api/workspace 的 deliverables 列表
         _, ws = self._get("/api/workspace")
         self.assertEqual(1, len(ws["deliverables"]))
@@ -107,7 +109,10 @@ class MaterializeHttpTests(unittest.TestCase):
             "manuscript": manuscript, "template": "md", "disclosure": "nature"})
         item_id = res["item"]["id"]
         # 合法写回已存在的 md → 200
-        code, body = self._post("/api/file", {"item": item_id, "content": "# 修改后"})
+        _, headers, _ = self._get_bytes(f"/api/file?item={item_id}")
+        original_hash = headers["X-Popper-Content-SHA256"]
+        code, body = self._post("/api/file", {"item": item_id, "content": "# 修改后",
+                                                "expected_sha256": original_hash})
         self.assertEqual(200, code)
         self.assertGreater(body["bytes"], 0)
         ws_path = self.root / ".popper" / "workspace.json"
@@ -116,15 +121,28 @@ class MaterializeHttpTests(unittest.TestCase):
         # 内容真实落盘
         fp = self.root / "deliverables" / entry["filename"]
         self.assertEqual("# 修改后", fp.read_text(encoding="utf-8"))
+        self.assertEqual(file_hash(fp), body["sha256"])
+        code_stale, stale = self._post(
+            "/api/file", {"item": item_id, "content": "# 覆盖他人修改",
+                          "expected_sha256": original_hash}, expect_error=True)
+        self.assertEqual(409, code_stale)
+        self.assertIn("别处修改", stale["error"])
+        self.assertEqual("# 修改后", fp.read_text(encoding="utf-8"))
+        code_missing, missing = self._post(
+            "/api/file", {"item": item_id, "content": "# 无版本"}, expect_error=True)
+        self.assertEqual(409, code_missing)
+        self.assertIn("SHA-256", missing["error"])
         # 篡改登记文件名越界（../）→ 409 拒绝
         entry["filename"] = "../secret.md"
         ws_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        code2, body2 = self._post("/api/file", {"item": item_id, "content": "x"},
+        code2, body2 = self._post("/api/file", {"item": item_id, "content": "x",
+                                                   "expected_sha256": body["sha256"]},
                                   expect_error=True)
         self.assertEqual(409, code2)
         self.assertIn("产物路径越界", body2["error"])
         # 未登记 item → 拒绝
-        code3, body3 = self._post("/api/file", {"item": "d_forged", "content": "x"},
+        code3, body3 = self._post("/api/file", {"item": "d_forged", "content": "x",
+                                                   "expected_sha256": body["sha256"]},
                                   expect_error=True)
         self.assertEqual(409, code3)
         self.assertIn("产物不存在", body3["error"])

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { WorkbenchIcon } from './WorkbenchIcon'
 
 const THEMES = [
   { key: 'warm', label: '暖黑' },
@@ -6,21 +7,25 @@ const THEMES = [
   { key: 'bright', label: '纯白' },
   { key: 'light', label: '象牙白' },
 ]
-const LANGS = ['简体中文', 'English']
 
 function applyTheme(key: string) {
   if (key === 'warm') document.documentElement.removeAttribute('data-theme')
   else document.documentElement.setAttribute('data-theme', key)
-  localStorage.setItem('theme', key)
+  try { localStorage.setItem('theme', key) } catch { /* Theme still works without storage. */ }
 }
 
-/** 齿轮弹出的设置菜单：主题 / 界面语言，写 localStorage 并即时生效。 */
-export function SettingsMenu() {
+/** Only expose the theme setting that the workbench actually implements. */
+export function SettingsMenu({ placement = 'top' }: { placement?: 'top' | 'rail' }) {
   const [open, setOpen] = useState(false)
-  const [theme, setTheme] = useState(() => (localStorage.getItem('theme') || 'warm') as string)
-  const [lang, setLang] = useState(() => localStorage.getItem('lang') || '简体中文')
+  const [theme, setTheme] = useState(() => {
+    let saved: string | null = null
+    try { saved = localStorage.getItem('theme') } catch { /* Use the default theme. */ }
+    return THEMES.some((item) => item.key === saved) ? saved! : 'bright'
+  })
   const boxRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
+  useEffect(() => { applyTheme(theme) }, [theme])
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false)
@@ -28,42 +33,34 @@ export function SettingsMenu() {
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
+  useEffect(() => {
+    if (!open) return
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); setOpen(false); triggerRef.current?.focus() }
+    }
+    document.addEventListener('keydown', close)
+    return () => document.removeEventListener('keydown', close)
+  }, [open])
 
   const pickTheme = (key: string) => {
     setTheme(key)
-    applyTheme(key)
-  }
-  const pickLang = (l: string) => {
-    setLang(l)
-    localStorage.setItem('lang', l)
+    setOpen(false)
   }
 
   return (
     <div ref={boxRef} style={{ position: 'relative' }}>
-      <span className="gear" title="设置" onClick={() => setOpen((v) => !v)}>⚙</span>
+      <button ref={triggerRef} className="gear" type="button" title="设置主题" aria-label="设置主题" aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}><WorkbenchIcon kind="settings" /></button>
       {open && (
-        <div className="ctx-menu popout settings" style={{ right: 0, top: 'calc(100% + 6px)' }}>
-          <div className="ctx-item" style={{ pointerEvents: 'none', color: 'var(--faint)', fontSize: 11 }}>
-            界面语言 <span style={{ marginLeft: 'auto' }}>{lang}</span>
-          </div>
-          {LANGS.map((l) => (
-            <div key={l} className="ctx-item" onClick={() => pickLang(l)}>
-              {l} {lang === l ? <span className="ok" style={{ marginLeft: 'auto' }}>✓</span> : null}
-            </div>
-          ))}
-          <div className="ctx-sep" />
+        <div className="ctx-menu popout settings" role="group" aria-label="主题选择" style={placement === 'rail' ? { left: 'calc(100% + 10px)', bottom: 0 } : { right: 0, top: 'calc(100% + 6px)' }}>
           <div className="ctx-item" style={{ pointerEvents: 'none', color: 'var(--faint)', fontSize: 11 }}>
             主题 <span style={{ marginLeft: 'auto' }}>{THEMES.find((t) => t.key === theme)?.label}</span>
           </div>
           {THEMES.map((t) => (
-            <div key={t.key} className="ctx-item" onClick={() => pickTheme(t.key)}>
-              {t.label} {theme === t.key ? <span className="ok" style={{ marginLeft: 'auto' }}>✓</span> : null}
-            </div>
+            <button key={t.key} type="button" className="ctx-item" aria-pressed={theme === t.key} onClick={() => pickTheme(t.key)}>
+              <span className={`theme-swatch ${t.key}`} aria-hidden="true" />{t.label} {theme === t.key ? <span className="ok" style={{ marginLeft: 'auto' }}>✓</span> : null}
+            </button>
           ))}
-          <div className="ctx-sep" />
-          <div className="ctx-item danger" onClick={() => setOpen(false)}>
-            退出登录
-          </div>
         </div>
       )}
     </div>

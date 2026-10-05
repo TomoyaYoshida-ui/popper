@@ -1,0 +1,92 @@
+{
+  "schema_version": "1.0",
+  "kind": "oscillator_execution_supplement",
+  "frozen_at": "2026-10-01",
+  "original_protocol_sha256": "078608d0539e065af9ff6169115fa7f516dee40047ee14315638a84759a77abe",
+  "git_head": "6051dd9483977c679b9c2d63bb0a6c6680de382c",
+  "dirty_worktree": true,
+  "status": "versions_and_material_sources_frozen_formal_run_not_armed",
+  "code_sha256": {
+    "popper/server.py": "7d656eef7312a65901bcfbe7e8a90496287b434d297431ed382c2fa0e404c36a",
+    "popper/research/oscillator_baseline.py": "c6de1d2915391afe96a3115b50577fee3b6bc52dd0a2f55158661163b696be2d",
+    "popper/research/revision_archive.py": "81aa832ad0cf0dd54e78ecd3dbc123fb40997cab01af44ead2ef90195711cb22",
+    "popper/research/oscillator_study.py": "2e1f4bef0c6946356cf0453290a14d405cd76ec34666b3105e3fc2c8f86c235b",
+    "popper/research/oscillator_worker.py": "3f2159b565894366f28acc667651572c4d56ea8b7f0f043ce9be8b161ca364cb",
+    "popper/sandbox/win_lowil.py": "4a0dc29cedb4c8973210d78675cf2502b928bef4124a796079ccff13122d410f",
+    "popper/research/oscillator_proposals.py": "098733696cf1697ee9471f5a4f46fa20b18e2d5f8b346054c52a294de1702e8d",
+    "popper/task_context.py": "6efc8d26aaf5e3ca4411eecf59eacae11cdd00e4c278f071ae43d0c9b280596f",
+    "popper/research/oscillator_driver.py": "39c25283c42f989333268dba0b4b8e2c0eda1938c36ccb1a1f624fa102a94fa4",
+    "popper/research/oscillator_broker.py": "27d4d42ed74e9d4d253441d5d2313b1c2bc45e0df70acac2011e62e34662195d",
+    "popper/research/revision_drafts.py": "d644f210fc5f618254b012cb18eb7aa6d098a0f7f7409d0c90fc53783cc77545",
+    "popper/chat.py": "9bd4922233a7c7a52160814904ee23eec4b21656c975e6a983e504b196a62f8c",
+    "popper/revision_tools.py": "cecf2d66277cee3bac74dd4ca8079daaf78f7837473893d42744bd24d7ea57ec",
+    "popper/research/agent_evaluation_budget.py": "002cd93a7c422f54c47627bb7db2b97d07cd73f4d6dba1adfe7ba20bbeb85746",
+    "popper/research/evaluation_service.py": "4713fc1f4f320b145340b178b9f8bcdefb614a9c6ce6e7594728176b4d9e4002",
+    "popper/research/oscillator_client.py": "98f62019feb8a8c1a019bf2f8f377e155f65805f9f431d2fdb6eb8e1c0531195",
+    "tests/test_oscillator_proposals.py": "a63513b1344d8ce7d3ecd75de3f73b0d7b69463c8d82574ab45d8539734d9dd0",
+    "popper/research/oscillator_execution.py": "054a43812d7a780f758169454b4808e8a4770a1cebce95848eb72d11219c83b0",
+    "popper/domains/oscillator_trajectory.py": "fc63c9549f4aed50d710bd0a26989d40f9b04edc40687b44b072dc7ece534a36",
+    "popper/research/agent_revisions.py": "c6e37756f10ca83c1354c0fee25185447a2a122dfc1fe706c0c35fd00298c5b4"
+  },
+  "evaluator": "oscillator-trajectory-v1",
+  "reference_methods": [
+    "DOP853_8e-14",
+    "RK45_3e-14",
+    "DOP853_2.3e-14"
+  ],
+  "reference_normalized_disagreement_limit": 1e-8,
+  "query_budget_scope": "host-counted RHS oracle queries, not total arithmetic or equal model cost",
+  "boundary": {
+    "platform": "Windows",
+    "mechanism": "low integrity + host named pipe",
+    "kernel_network_block": false
+  },
+  "campaign": {
+    "max_requests": 60,
+    "max_tokens": 400000,
+    "unknown_usage": "stop",
+    "ambiguous_dispatch": "stop; no automatic resend",
+    "independent_confirmation": "separate user approval required"
+  },
+  "model_config": {
+    "model": "mimo-v2.5-pro",
+    "base_url": "https://api.xiaomimimo.com/v1",
+    "temperature": 0.7,
+    "max_output_tokens": 4096,
+    "tools_sha256": "2a53abe85f8b1af33d614ff5e0e912cb0e7885e5d26bf08e988e8d722fa5b3a5"
+  },
+  "gates": {
+    "actual_v3_reference_source_and_cached_bytecode_read_probe": {
+      "passed": true,
+      "protected_files": 11,
+      "receipt": "acceptance/actual-read-probe-v2.json",
+      "sha256": "ba68e9dab1dedafd4e45ba60ed5b436a9df5a29f8ed0c26e2641607b01dfbed2"
+    },
+    "full_regression": {
+      "passed": 1102,
+      "skipped": 5,
+      "subtests_passed": 581,
+      "seconds": 646.59,
+      "exit_code": 0,
+      "log": ".pytest_cache/agent-oscillator-provenance-regression.log",
+      "sha256": "746058c4a2772918684e16105d61bac3af44bc2ef1778cc1bd7c85a33e38577d"
+    },
+    "initial_material_source": {
+      "receipt": "initial-material-receipt-v1.json",
+      "sha256": "50294db97529c6aed3717e5cac545d0c3718e645762085a56315d962313fdcb9"
+    },
+    "assembled_model_input_snapshot": "not dispatched; must be persisted by Workstation",
+    "agent_authored_protocol_to_study": "application adapter tested with synthetic conversation; formal runner and UI approval integration pending",
+    "repair_revision_conversation_tools": "not implemented",
+    "formal_model_requests": 0,
+    "confirmation_executions": 0
+  },
+  "no_claims": [
+    "not an Agent research result",
+    "not a hermetic sandbox",
+    "not third-party reproduction",
+    "not a completed evaluation"
+  ],
+  "version": 2,
+  "previous_supplement_sha256": "b911c377c6cdf109a0ec5ddc8f236867a87e69a365021487fdade3a21790311a"
+}

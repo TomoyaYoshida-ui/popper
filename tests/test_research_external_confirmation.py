@@ -8,13 +8,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 from popper.capabilities import extra_available
+from popper import sandbox
 from popper.core import ProtocolError, digest, initialize, read_json, write_json
-from popper.research.actions import REQUEST_CONFIRMATION, RUN_EXPERIMENT, ActionProposal
+from popper.research.actions import (REQUEST_CONFIRMATION,
+                                     REQUEST_SCOPE_BOUNDARY_CONFIRMATION,
+                                     RUN_EXPERIMENT, ActionProposal)
 from popper.research.confirmation_contracts import load_private_key, public_key_b64, sign_payload
 from popper.research.confirmation_service import HoldoutService
+from popper.research.confirmation_runner import BACKEND, run_confirmation_bundle
 from popper.research.contracts import HypothesisStatus
 from popper.research.controller import ResearchController
+from popper.research.evidence_binding import (export_research_evidence,
+                                              verify_research_evidence)
 from popper.research.models import EvidenceDrivenPolicy
+from popper.research.readout import read_research_state
 from popper.research.revisions import CodeEdit
 from tests.test_research_confirmation_bundle import EXAMPLE
 
@@ -32,6 +39,13 @@ class ExternalConfirmationControllerTests(unittest.TestCase):
             shutil.copyfile(EXAMPLE / name, self.project / name)
         spec = read_json(self.project / "experiment.json")
         spec["seeds"] = [11, 29]
+        boundary = getattr(self, "scope_boundary_fixture", False)
+        if boundary:
+            spec["min_improvement"] = 5.0
+            spec["analysis_slices"] = [
+                {"slice_id": "s0", "rule": {"kind": "abs_x_le", "value": 0.5}},
+                {"slice_id": "s1", "rule": {"kind": "abs_x_gt", "value": 0.5}},
+            ]
         write_json(self.project / "experiment.json", spec)
         runpy.run_path(str(EXAMPLE / "generate_data.py"))["generate"](self.project)
         initialize(self.project)
@@ -42,7 +56,9 @@ class ExternalConfirmationControllerTests(unittest.TestCase):
             train_path=self.project / "train.json", dev_path=self.project / "dev.json",
             holdout_path=self.project / "test.json", evaluator_id="mse-v1", seeds=spec["seeds"],
             min_effect=spec["min_improvement"], runtime_id="fixture-runtime",
-            runner_public_key=public_key_b64(self.runner_key), allowed_backend="injected_test_executor")
+            runner_public_key=public_key_b64(self.runner_key),
+            allowed_backend=BACKEND if boundary else "injected_test_executor",
+            analysis_slices=spec.get("analysis_slices", []))
 
         class Policy(EvidenceDrivenPolicy):
             name = "external_confirmation_fixture"
@@ -71,11 +87,31 @@ class ExternalConfirmationControllerTests(unittest.TestCase):
         self.controller.store.set_hypothesis_status(control_id, 1, HypothesisStatus.INCONCLUSIVE)
         self.selected = next(row for row in self.controller.status()["candidates"] if row["config"] == {"degree": 2})
         self.generated = self.controller.implement(self.selected["hypothesis_id"])
-        self.controller.store.set_hypothesis_status(self.selected["hypothesis_id"], 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
-        self.controller._record(
-            ActionProposal(REQUEST_CONFIRMATION, "The generated candidate passed development screening.",
-                           self.selected["hypothesis_id"]),
-            (baseline["observation_id"], self.generated["observation"]["observation_id"]))
+        if boundary:
+            self.controller.store.set_hypothesis_status(
+                self.selected["hypothesis_id"], 1, HypothesisStatus.INCONCLUSIVE)
+            status = self.controller.status()
+            refs = []
+            for scope in ("dev", "dev:slice:s0", "dev:slice:s1"):
+                for hypothesis_id in (control_id, self.selected["hypothesis_id"]):
+                    matched = [row for row in status["observations"]
+                               if row["scope"] == scope
+                               and row["hypothesis_id"] == hypothesis_id]
+                    self.assertEqual(1, len(matched))
+                    refs.append(matched[0]["observation_id"])
+            self.controller._record(
+                ActionProposal(REQUEST_SCOPE_BOUNDARY_CONFIRMATION,
+                               "Registered slices show a boundary candidate.",
+                               self.selected["hypothesis_id"]), tuple(refs))
+        else:
+            self.controller.store.set_hypothesis_status(
+                self.selected["hypothesis_id"], 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
+            self.controller._record(
+                ActionProposal(REQUEST_CONFIRMATION,
+                               "The generated candidate passed development screening.",
+                               self.selected["hypothesis_id"]),
+                (baseline["observation_id"],
+                 self.generated["observation"]["observation_id"]))
 
     def tearDown(self):
         self.controller.close()
@@ -133,6 +169,13 @@ class ExternalConfirmationControllerTests(unittest.TestCase):
         final = self.controller.accept_external_confirmation(result)
         self.assertEqual("concluded", final["phase"])
         self.assertTrue(final["integrity"]["ok"])
+        self.assertEqual(1, len(final["claims"]))
+        claim = final["claims"][0]
+        self.assertEqual("signed_external_positive_effect", claim["scope"])
+        self.assertEqual("supported_in_scope", claim["status"])
+        self.assertEqual("engineering_same_account", claim["trust"])
+        self.assertEqual(digest(result), claim["receipt_sha256"])
+        self.assertEqual(2, len(claim["observation_refs"]))
         confirmations = [row for row in final["observations"] if row["scope"] == "confirmation"]
         self.assertEqual(2, len(confirmations))
         self.assertEqual(before["observations"], [row for row in final["observations"] if row["scope"] == "dev"])
@@ -145,6 +188,22 @@ class ExternalConfirmationControllerTests(unittest.TestCase):
         self.assertEqual(before["budget"]["cap"], final["budget"]["cap"])
         self.assertEqual(before["budget"]["family_id"], final["budget"]["family_id"])
         self.assertEqual([], self.controller.exp.results("test"))
+        external_runs = [row for row in self.controller.store.list("run")
+                         if row["run_id"].startswith("RUN-ext-")]
+        self.assertEqual(2, len(external_runs))
+        self.assertTrue(all(row["external_source"]["submission_id"]
+                            == prepared["submission"]["submission_id"]
+                            for row in external_runs))
+        graph = read_research_state(self.run_dir)["experiment_graph"]
+        self.assertTrue(graph["integrity"]["ok"], graph["integrity"]["issues"])
+        self.assertEqual(2, sum(node["kind"] == "external_source"
+                                for node in graph["nodes"]))
+        self.assertEqual(1, sum(node["kind"] == "claim" for node in graph["nodes"]))
+        appendix = self.root / "evidence-appendix"
+        self.assertEqual(1, export_research_evidence(
+            self.project, self.run_dir, appendix)["claim_count"])
+        self.assertTrue(verify_research_evidence(
+            self.project, self.run_dir, appendix)["ok"])
 
         final_events = self.events()
         self.controller.close()
@@ -212,6 +271,133 @@ class ExternalConfirmationControllerTests(unittest.TestCase):
             self.assertFalse((other_dir / "external-confirmation").exists())
         finally:
             other.close()
+
+
+@unittest.skipUnless(extra_available("confirmation"),
+                     "confirmation extra 未安装（cryptography）")
+class ScopeBoundarySignedConfirmationTests(unittest.TestCase):
+    def setUp(self):
+        self.fixture = ExternalConfirmationControllerTests(
+            "test_registered_generated_revision_confirms_and_resumes_idempotently")
+        self.fixture.scope_boundary_fixture = True
+        self.fixture.setUp()
+
+    def tearDown(self):
+        self.fixture.tearDown()
+
+    def _complete_boundary(self, *, no_candidate_effect=False):
+        case = self.fixture
+        prepared = case.controller.prepare_external_confirmation()
+        submission = prepared["submission"]
+        self.assertEqual("2.0", submission["schema_version"])
+        self.assertEqual("scope_boundary", submission["identity"]["confirmation_kind"])
+        ticket = case.service.begin(submission)
+        features = case.service.features(ticket)
+        train = read_json(case.project / "train.json")
+        solve = runpy.run_path(str(case.project / "model.py"))["solve"]
+
+        def fit(degree):
+            basis = [[row["x"] ** power for power in range(degree + 1)]
+                     for row in train]
+            matrix = [[sum(row[left] * row[right] for row in basis)
+                       for right in range(degree + 1)]
+                      for left in range(degree + 1)]
+            rhs = [sum(row[power] * sample["y"]
+                       for row, sample in zip(basis, train))
+                   for power in range(degree + 1)]
+            return solve(matrix, rhs)
+
+        weights = {"control": fit(1),
+                   "candidate": fit(1) if no_candidate_effect else fit(2)}
+        predictions = {role: [
+            {"seed": seed, "rows": [{"id": row["id"], "prediction":
+                sum(weight * row["x"] ** power
+                    for power, weight in enumerate(weights[role]))}
+                for row in features]}
+            for seed in case.contract["payload"]["seeds"]]
+            for role in ("control", "candidate")}
+        payload = {"schema_version": "1.0", "kind": "confirmation_runner_receipt",
+                   "ticket_id": ticket["payload"]["ticket_id"],
+                   "contract_id": ticket["payload"]["contract_id"],
+                   "submission_id": submission["submission_id"],
+                   "submission_sha256": digest(submission),
+                   "runtime_id": case.contract["payload"]["runtime_id"],
+                   "backend": case.contract["payload"]["allowed_backend"],
+                   "status": "succeeded",
+                   "code_hashes": {role: submission["identity"][role]["files"]
+                                   for role in ("control", "candidate")},
+                   "predictions_sha256": digest(predictions), "error_type": None}
+        receipt = sign_payload(payload, case.runner_key)
+        result = case.service.complete(ticket, receipt, predictions)
+        return result
+
+    def test_v2_signed_boundary_end_to_end_and_replay(self):
+        case = self.fixture
+        result = self._complete_boundary()
+        self.assertTrue(result["payload"]["passed"])
+        self.assertLess(abs(result["payload"]["effect"]),
+                        case.contract["payload"]["min_effect"])
+        final = case.controller.accept_external_confirmation(result)
+        self.assertEqual("concluded", final["phase"])
+        self.assertTrue(final["integrity"]["ok"])
+        self.assertEqual(1, len(final["claims"]))
+        claim = final["claims"][0]
+        self.assertEqual("signed_external_scope_boundary", claim["scope"])
+        self.assertEqual("boundary_supported_in_scope", claim["status"])
+        self.assertEqual(6, len(claim["observation_refs"]))
+        self.assertEqual(2, len(claim["slice_effects"]))
+        self.assertEqual("engineering_same_account", claim["trust"])
+        selected = next(row for row in final["candidates"]
+                        if row["hypothesis_id"] == case.selected["hypothesis_id"])
+        self.assertEqual("inconclusive", selected["status"])
+        graph = read_research_state(case.run_dir)["experiment_graph"]
+        self.assertTrue(graph["integrity"]["ok"], graph["integrity"]["issues"])
+        appendix = case.root / "boundary-evidence"
+        self.assertEqual(1, export_research_evidence(
+            case.project, case.run_dir, appendix)["claim_count"])
+        self.assertTrue(verify_research_evidence(
+            case.project, case.run_dir, appendix)["ok"])
+
+        events = case.events()
+        case.controller.close()
+        case.controller = ResearchController(case.run_dir, policy=case.policy)
+        self.assertEqual(final, case.controller.accept_external_confirmation(result))
+        self.assertEqual(events, case.events())
+
+    def test_v2_failed_boundary_does_not_become_positive_claim(self):
+        case = self.fixture
+        result = self._complete_boundary(no_candidate_effect=True)
+        self.assertFalse(result["payload"]["passed"])
+        final = case.controller.accept_external_confirmation(result)
+        self.assertTrue(final["integrity"]["ok"])
+        self.assertEqual(1, len(final["claims"]))
+        claim = final["claims"][0]
+        self.assertEqual("signed_external_scope_boundary", claim["scope"])
+        self.assertEqual("boundary_not_supported_in_scope", claim["status"])
+        self.assertEqual(0.0, claim["oriented_delta"])
+        self.assertEqual("stop", final["decisions"][-1]["action"])
+        graph = read_research_state(case.run_dir)["experiment_graph"]
+        self.assertTrue(graph["integrity"]["ok"], graph["integrity"]["issues"])
+
+    @unittest.skipUnless(sandbox.available(),
+                         "本平台没有可用的真实确认沙箱后端")
+    def test_v2_boundary_real_runner_service_and_controller(self):
+        case = self.fixture
+        prepared = case.controller.prepare_external_confirmation()
+        submission = prepared["submission"]
+        ticket = case.service.begin(submission)
+        features = case.service.features(ticket)
+        runner_result = run_confirmation_bundle(
+            case.run_dir / "external-confirmation" / "bundle", ticket, features,
+            case.service.public_key, case.runner_key, case.root / "real-runner-output")
+        self.assertEqual("succeeded", runner_result["runner_receipt"]["payload"]["status"])
+        signed = case.service.complete(
+            ticket, runner_result["runner_receipt"], runner_result["predictions"])
+        self.assertTrue(signed["payload"]["passed"])
+        final = case.controller.accept_external_confirmation(signed)
+        self.assertTrue(final["integrity"]["ok"])
+        self.assertEqual("boundary_supported_in_scope", final["claims"][0]["status"])
+        self.assertEqual(6, len(final["claims"][0]["observation_refs"]))
 
 
 if __name__ == "__main__":

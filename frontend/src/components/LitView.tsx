@@ -1,17 +1,20 @@
 import { useEffect, useState } from 'react'
 import { fetchLiterature, type Literature } from '../api'
 
-export function LitView() {
+export function LitView({ workspaceKey }: { workspaceKey: string | null }) {
   const [data, setData] = useState<Literature | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [reloadSeq, setReloadSeq] = useState(0)
 
   useEffect(() => {
     let alive = true
+    setData(null)
+    setError(null)
     fetchLiterature()
       .then((d) => { if (alive) { setData(d); setError(null) } })
       .catch((e) => { if (alive) setError((e as Error).message) })
     return () => { alive = false }
-  }, [])
+  }, [workspaceKey, reloadSeq])
 
   const papers = data?.papers ?? []
 
@@ -19,14 +22,15 @@ export function LitView() {
     <>
       <p className="eyebrow">LITERATURE / 文献库</p>
       <h1>文献库</h1>
+      <button type="button" onClick={() => setReloadSeq((value) => value + 1)}>刷新检索产物</button>
       {error && <div className="notice err">{error}</div>}
 
       {!data && !error && <div className="notice">正在读取 paper-search 检索产物…</div>}
 
       {data && papers.length === 0 && (
         <div className="notice">
-          未发现检索产物。运行 <span className="metric">popper vendor paper-search</span> 后，
-          真实论文会自动出现在这里（跨源去重、[ref:] 锚点、Real/Potential/Hallucinated 三态）。
+          当前工作区未发现检索产物。将 <span className="metric">popper vendor paper-search</span> 的运行目录放在当前工作区的 <span className="metric">integrations/runs</span> 下后，
+          然后刷新本页读取检索结果。跨源去重、[ref:] 锚点与引用核验仍以 vendor 产物为准。
         </div>
       )}
 

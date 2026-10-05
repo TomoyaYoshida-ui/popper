@@ -1,0 +1,39 @@
+{
+  "version": 3,
+  "kind": "oscillator_execution_supplement",
+  "previous_supplement_sha256": "654b03e88e2c525dc695db6e752aab70559140423f9a9ca3b3ff6d08194efabc",
+  "original_protocol_sha256": "078608d0539e065af9ff6169115fa7f516dee40047ee14315638a84759a77abe",
+  "campaign_manifest_sha256": "aec2c3995bae6100995cd087c4ebe241d0aad84e6aba9282c62d98b1f323b91a",
+  "armed_receipt_sha256": "6f8e618f5868b25fb2d0c7a0df5ae6e74ddd1f306bb75adc9c5c91c05042e0c4",
+  "source_binding_count": 120,
+  "model_config": {
+    "model": "mimo-v2.5-pro",
+    "base_url": "https://api.xiaomimimo.com/v1",
+    "temperature": 0.7,
+    "max_output_tokens": 4096,
+    "tools_sha256": "094b22b2cb27c7fa1ec8a0dae56e3fce4426b97eba5ed998a380deeafee1c685"
+  },
+  "environment": {
+    "python": "3.10.6",
+    "executable": "C:\\Users\\wangj\\AppData\\Local\\Programs\\Python\\Python310\\python.exe",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "scipy": "1.15.3",
+    "numpy": "2.2.6"
+  },
+  "gates": {
+    "full_regression_passed": 1111,
+    "full_regression_skipped": 5,
+    "subtests_passed": 581,
+    "regression_sha256": "ff29eaac7714fb7ed01d61bc08956ce0afe8c239a773e509bb5b296c7902b922",
+    "frontend_tests_passed": 111,
+    "frontend_assets": 20,
+    "actual_protected_files_denied": 29,
+    "host_read_verified": true,
+    "network_block": false,
+    "formal_model_requests_before_freeze": 0,
+    "independent_confirmation_executions": 0
+  },
+  "status": "armed_for_initial_proposals_only",
+  "approvals": "Study, Revision creation, experiment execution and independent confirmation are separate user approvals",
+  "scope_warning": "No autonomous research capability or gain established yet; no fully hermetic sandbox or independent reproduction claimed"
+}

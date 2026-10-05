@@ -9,6 +9,8 @@ from __future__ import annotations
 from ..core import ProtocolError
 from .base import Harness, PolicyHarness, parse_revision_proposal
 from .json_agent import JSONAgentHarness
+from .conversation import (CONVERSATION_HARNESS_PROTOCOL, ConversationHarness,
+                           ConversationHarnessDescriptor, adapt_conversation_harness)
 
 # 新增 harness = 实现 base.Harness + 在这里加一项（顺序即选择优先级）。
 _HARNESSES = (JSONAgentHarness,)
@@ -40,4 +42,6 @@ def for_policy(policy):
 
 
 __all__ = ["Harness", "JSONAgentHarness", "PolicyHarness", "for_policy", "harnesses",
-           "names", "parse_revision_proposal", "resolve"]
+           "names", "parse_revision_proposal", "resolve", "ConversationHarness",
+           "ConversationHarnessDescriptor", "CONVERSATION_HARNESS_PROTOCOL",
+           "adapt_conversation_harness"]

@@ -12,7 +12,9 @@ from .actions import ActionProposal
 from .controller import ResearchController
 from .evaluation_service import IndependentEvaluator
 from .models import DeepSeekResearchPolicy, EvidenceDrivenPolicy
-from .revisions import CodeEdit, RevisionStore
+from .revisions import CodeEdit, RevisionDiffArchive, RevisionStore
+from .worktrees import RevisionWorktreeManager
+from .execution_jobs import RevisionExecutionJobStore
 from .workers import InputArtifact, JobSpec, LocalWorker, RemoteWorker, WorkerReceipt
 
 __all__ = [
@@ -20,6 +22,7 @@ __all__ = [
     "Hypothesis", "HypothesisStatus", "Observation", "ResearchStore",
     "RunStatus", "Study", "StudyStatus", "TransitionError", "ActionProposal",
     "ResearchController", "IndependentEvaluator", "DeepSeekResearchPolicy",
-    "EvidenceDrivenPolicy", "CodeEdit", "RevisionStore", "InputArtifact",
+    "EvidenceDrivenPolicy", "CodeEdit", "RevisionStore", "RevisionDiffArchive", "RevisionWorktreeManager",
+    "RevisionExecutionJobStore", "InputArtifact",
     "JobSpec", "LocalWorker", "RemoteWorker", "WorkerReceipt",
 ]

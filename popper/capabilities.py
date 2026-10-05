@@ -22,6 +22,7 @@ EXTRA_IMPORTS = {
     "research": ("requests", "pypdf"),
     "orchestration": ("langgraph",),
     "confirmation": ("cryptography",),
+    "workstation": ("winpty",),
 }
 
 

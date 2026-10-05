@@ -21,6 +21,8 @@ from popper.core import Experiment, ProtocolError, initialize, read_json, valida
 from popper.domains import protocol
 from popper.gates import (GateError, claim_outcome, claim_stats, l1_significance)
 from popper.research.confirmation_runner import require_supported_shape
+from popper.research.controller import ResearchController
+from popper.research.readout import read_research_state
 
 PILOT = Path(__file__).resolve().parents[1] / "examples" / "treatment-effect"
 PILOT_FILES = ("experiment.json", "model.py", "train.json", "dev.json", "test.json")
@@ -288,7 +290,35 @@ class PilotTreatmentEffectEndToEndTests(unittest.TestCase):
         self.assertIn("未支持的任务形状", str(caught.exception))
         self.assertIn("重复单位取自数据", str(caught.exception))
 
+    def test_same_research_kernel_runs_analysis_units_without_fake_seeds(self):
+        """非 ML 分析单元走完整 Research Kernel，而不只走底层 Experiment。"""
+        initialize(self.root)
+        run_dir = self.root / "research-run"
+        ResearchController.initialize(self.root, run_dir)
+        controller = ResearchController(run_dir)
+        try:
+            self.assertEqual("analysis_unit", controller.manifest["repeat_unit"])
+            self.assertEqual(list(range(9, 17)), controller.manifest["repeat_values"])
+            self.assertTrue(all(design["analysis_unit"] == "analysis_unit"
+                                for design in controller.store.list("design")))
+            development = controller.run(trusted_local=True, max_steps=1)
+            self.assertEqual("ready_for_confirmation", development["phase"])
+            self.assertEqual(2, len(development["observations"]))
+            concluded = controller.confirm(trusted_local=True)
+            self.assertEqual("concluded", concluded["phase"])
+            self.assertEqual(4, len(concluded["observations"]))
+            self.assertEqual({"dev", "confirmation"},
+                             {row["scope"] for row in concluded["observations"]})
+        finally:
+            controller.close()
+        projection = read_research_state(run_dir)
+        self.assertTrue(projection["experiment_graph"]["integrity"]["ok"])
+        requests = sorted((run_dir / "evaluations").glob("*/request.json"))
+        self.assertEqual(4, len(requests))
+        units = [read_json(path)["expected_seeds"] for path in requests]
+        self.assertEqual(2, units.count(list(range(9, 17))))
+        self.assertEqual(2, units.count(list(range(17, 25))))
+
 
 if __name__ == "__main__":
     unittest.main()
-

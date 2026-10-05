@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from popper.core import ProtocolError, write_json
-from popper.workspace import Workspace
+from popper.core import ProtocolError, file_hash, write_json
+from popper.workspace import Workspace, WorkspaceIdempotencyConflict
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -27,9 +27,39 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual("推进实验搜索", data["folders"][0]["tasks"][0]["title"])
         self.assertEqual("searching", data["meta"]["seed"]["phase"])
         self.assertEqual([], data["deliverables"])
+        self.assertEqual(1, data["meta"]["state_version"])
         # 幂等：第二次不重播
         self.assertFalse(fresh.seed_if_empty("别的名字", "completed"))
         self.assertEqual(1, len(fresh.read()["folders"]))
+
+    def test_versioned_command_is_atomic_idempotent_and_concurrency_safe(self):
+        data = self.ws.read()
+        fid = data["folders"][0]["fid"]
+        command = {"op": "task_create", "fid": fid, "title": "幂等任务"}
+        first = self.ws.apply_command(command, idempotency_key="request-0001",
+                                      expected_version=1)
+        self.assertEqual(2, first["state_version"])
+        replay = self.ws.apply_command(command, idempotency_key="request-0001",
+                                       expected_version=1)
+        self.assertEqual(first, replay)
+        self.assertEqual(first, self.ws.command_receipt(
+            command, idempotency_key="request-0001"))
+        self.assertIsNone(self.ws.command_receipt(
+            command, idempotency_key="request-missing"))
+        with self.assertRaises(WorkspaceIdempotencyConflict):
+            self.ws.command_receipt(
+                {"op": "task_create", "fid": fid, "title": "伪造任务"},
+                idempotency_key="request-0001")
+        tasks = [task for task in self.ws.read()["folders"][0]["tasks"]
+                 if task["title"] == "幂等任务"]
+        self.assertEqual(1, len(tasks))
+
+        with self.assertRaisesRegex(ProtocolError, "版本冲突"):
+            self.ws.apply_command({"op": "task_create", "fid": fid, "title": "过期"},
+                                  idempotency_key="request-0002", expected_version=1)
+        with self.assertRaisesRegex(ProtocolError, "不同命令"):
+            self.ws.apply_command({"op": "task_create", "fid": fid, "title": "冲突"},
+                                  idempotency_key="request-0001", expected_version=2)
 
     def test_folder_crud_and_persistence(self):
         data = self.ws.read()
@@ -117,9 +147,14 @@ class WorkspaceTests(unittest.TestCase):
         (deliverables / "manuscript.md").write_text("旧内容", encoding="utf-8")
 
         # 合法写回：覆写已存在 md → 内容更新
-        path = self.ws.write_deliverable(item["id"], "# 新内容")
+        old_hash = file_hash(deliverables / "manuscript.md")
+        path = self.ws.write_deliverable(item["id"], "# 新内容",
+                                         expected_sha256=old_hash)
         self.assertEqual("manuscript.md", path.name)
         self.assertEqual("# 新内容", (deliverables / "manuscript.md").read_text(encoding="utf-8"))
+        with self.assertRaisesRegex(ProtocolError, "别处修改"):
+            self.ws.write_deliverable(item["id"], "过期写入",
+                                      expected_sha256=old_hash)
 
         # 中途：注册第二个产物用于后续负例
         data = self.ws.read()
@@ -131,11 +166,11 @@ class WorkspaceTests(unittest.TestCase):
         reloaded["deliverables"][0]["filename"] = "../secret.md"
         self.ws.save(reloaded)
         with self.assertRaisesRegex(ProtocolError, "产物路径越界"):
-            self.ws.write_deliverable(item["id"], "x")
+            self.ws.write_deliverable(item["id"], "x", expected_sha256=old_hash)
 
         # 非存在文件（已登记但文件缺失）→ 拒绝新建
         with self.assertRaisesRegex(ProtocolError, "仅允许覆写已生成的物化文件"):
-            self.ws.write_deliverable(extern["id"], "x")
+            self.ws.write_deliverable(extern["id"], "x", expected_sha256=old_hash)
 
         # 错误扩展名（docx 不可写回文本）→ 拒绝
         data = self.ws.read()
@@ -144,7 +179,7 @@ class WorkspaceTests(unittest.TestCase):
         (deliverables2 / "poster.docx").write_text("binary", encoding="utf-8")
         self.ws.save(data)
         with self.assertRaisesRegex(ProtocolError, "仅支持写回文本稿件"):
-            self.ws.write_deliverable(docx["id"], "x")
+            self.ws.write_deliverable(docx["id"], "x", expected_sha256=old_hash)
 
 
 if __name__ == "__main__":

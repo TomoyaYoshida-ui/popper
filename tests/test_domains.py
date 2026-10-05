@@ -18,7 +18,7 @@ FROZEN_HASHES = {
 }
 BUILTIN = sorted(["algorithm-throughput-v1", "binary-accuracy-v1", "binary-f1-v1",
                   "convergence-order-v1", "mae-v1", "mse-v1", "multiclass-macro-f1-v1",
-                  "treatment-effect-v1"])
+                  "oscillator-trajectory-v1", "treatment-effect-v1"])
 
 REGRESSION_ROWS = [{"id": "a", "x": 1, "y": 3}, {"id": "b", "x": 2, "y": 5}]
 CLASSIFICATION_ROWS = [{"id": "a", "features": [0.0], "label": 1},

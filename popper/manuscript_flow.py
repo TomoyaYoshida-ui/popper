@@ -12,10 +12,11 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .core import ProtocolError, read_json, write_json
+from .core import ProtocolError, file_hash, read_json, write_json
 from .evidence import EvidenceStore, check_consistency, check_references
 
 
@@ -91,16 +92,39 @@ class ManuscriptFlow:
                 "manuscripts": self.data.get("manuscripts", {})}
 
     # ---- 状态机迁移 ---------------------------------------------------------
-    def transition(self, manuscript, to, reason=None):
-        """前向单步迁移（执行合法迁移表校验；非法迁移抛 ProtocolError）。"""
+    @staticmethod
+    def _bound_directory(manuscript):
+        path = Path(manuscript) if manuscript is not None else Path("")
+        if path.name == "manuscript.md" and (path.parent / "binding-manifest.json").is_file():
+            return path.parent
+        return None
+
+    def _transition(self, manuscript, to, reason=None, bound_verification=None):
+        """Apply a forward transition; bound drafts require an internal proof."""
         if to not in self.ALLOWED:
             raise ProtocolError(f"未知目标状态: {to}")
         entry = self._entry(manuscript)
+        bound_now = self._bound_directory(manuscript) is not None
+        if bound_now:
+            entry["binding_required"] = True
+        if (to == "reviewed" and (bound_now or entry.get("binding_required"))
+                and bound_verification is None):
+            raise ProtocolError("证据绑定草稿须使用 review-bound 登记人工审校")
+        if (to in {"submitted", "published"}
+                and (bound_now or entry.get("binding_required"))
+                and bound_verification is None):
+            raise ProtocolError("证据绑定草稿须使用 submit-bound/publish-bound 重新校验")
         from_state = entry["state"]
         if to not in self.FORWARD.get(from_state, set()):
             raise ProtocolError(f"非法迁移: {from_state} -> {to}")
-        self._record(entry, from_state, to, reason)
+        self._record(entry, from_state, to, reason,
+                     {"bound_verification": bound_verification}
+                     if bound_verification is not None else None)
         return {"status": to, "from": from_state, "manuscript": entry["manuscript"]}
+
+    def transition(self, manuscript, to, reason=None):
+        """Forward transition for ordinary manuscripts; bound drafts use strict APIs."""
+        return self._transition(manuscript, to, reason)
 
     def revert(self, manuscript, to, reason):
         """回退到更早状态；必须携带原因，且仅允许退到全序更靠前状态。"""
@@ -138,6 +162,8 @@ class ManuscriptFlow:
 
     def submit(self, manuscript, evidence_dir=None, reason=None):
         """reviewed -> submitted；迁移前生成 gap 报告并随结果返回，不阻断。"""
+        if self._bound_directory(manuscript) is not None:
+            raise ProtocolError("证据绑定草稿须使用 submit-bound 重新校验")
         report = self.gap_report(manuscript, evidence_dir)
         result = self.transition(manuscript, "submitted", reason)
         result["gap_report"] = report
@@ -146,6 +172,160 @@ class ManuscriptFlow:
     def publish(self, manuscript, reason=None):
         """submitted -> published。"""
         return self.transition(manuscript, "published", reason)
+
+    def _verify_bound(self, manuscript, research_run_dir, evidence_dir,
+                      draft_spec_path):
+        from .research.bound_manuscript import verify_bound_draft
+
+        bound_dir = self._bound_directory(manuscript)
+        if bound_dir is None or Path(manuscript).resolve() != (bound_dir / "manuscript.md").resolve():
+            raise ProtocolError("提交目标不是证据绑定草稿的 manuscript.md")
+        verified = verify_bound_draft(
+            self.experiment.root, research_run_dir, evidence_dir,
+            draft_spec_path, bound_dir)
+        return {
+            "verification_level": verified["verification_level"],
+            "claim_count": verified["claim_count"],
+            "research_run_dir": str(Path(research_run_dir).resolve()),
+            "evidence_dir": str(Path(evidence_dir).resolve()),
+            "draft_spec_sha256": file_hash(draft_spec_path),
+            "binding_manifest_sha256": file_hash(bound_dir / "binding-manifest.json"),
+            "manuscript_sha256": file_hash(manuscript),
+            "publication_attested": False,
+        }
+
+    def _verify_projection(self, manuscript):
+        """Detect a file/DB split after a crash before a strict transition."""
+        self.experiment.replay()
+        key = self._key(manuscript)
+        entry = self._entry(manuscript)
+        recorded = self._recorded_transitions(key)
+        projected = self._projected_transitions(key, entry)
+        if (recorded != projected
+                or entry["state"] != (recorded[-1]["to"] if recorded else "draft")):
+            raise ProtocolError("稿件状态投影与审计事件链不一致")
+
+    def _recorded_transitions(self, key):
+        rows = self.experiment.db.execute(
+            "SELECT payload FROM events WHERE kind='manuscript_flow' ORDER BY seq")
+        return [payload for row in rows
+                if (payload := json.loads(row["payload"])).get("manuscript") == key
+                and "to" in payload]
+
+    @staticmethod
+    def _projected_transitions(key, entry):
+        result = []
+        for item in entry["transitions"]:
+            value = {"manuscript": key, "from": item["from"],
+                     "to": item["to"], "reason": item["reason"]}
+            if "bound_verification" in item:
+                value["bound_verification"] = item["bound_verification"]
+            result.append(value)
+        return result
+
+    def recover_interrupted_projection(self, manuscript, reason):
+        """Explicitly undo one JSON-only tail after a verified interrupted write.
+
+        A recovery event is committed first. Retrying after a crash between that
+        event and the JSON correction reuses the event instead of duplicating it.
+        Arbitrary divergence or a DB-ahead projection remains fail-closed.
+        """
+        if not isinstance(reason, str) or not reason.strip():
+            raise ProtocolError("恢复稿件状态必须填写原因")
+        if not self.path.is_file():
+            raise ProtocolError("稿件状态投影文件不存在")
+        self.experiment.replay()
+        self.data = self._load()
+        key = self._key(manuscript)
+        entry = self.data.get("manuscripts", {}).get(key)
+        if not isinstance(entry, dict):
+            raise ProtocolError("没有可恢复的稿件状态")
+        recorded = self._recorded_transitions(key)
+        projected = self._projected_transitions(key, entry)
+        if (len(projected) != len(recorded) + 1
+                or projected[:-1] != recorded
+                or entry["state"] != projected[-1]["to"]):
+            raise ProtocolError("仅允许恢复单个未写入事件链的尾部迁移")
+        previous = recorded[-1]["to"] if recorded else "draft"
+        discarded = projected[-1]
+        if (discarded["from"] != previous
+                or discarded["to"] not in self.ALLOWED
+                or discarded["to"] == previous):
+            raise ProtocolError("尾部迁移与事件链状态不一致")
+        prior_hash = file_hash(self.path)
+        existing = None
+        for row in self.experiment.db.execute(
+                "SELECT payload FROM events "
+                "WHERE kind='manuscript_projection_recovery' ORDER BY seq DESC"):
+            candidate = json.loads(row["payload"])
+            if (candidate.get("manuscript") == key
+                    and candidate.get("projection_sha256") == prior_hash
+                    and candidate.get("discarded_transition") == discarded):
+                existing = candidate
+                break
+        if existing is None:
+            payload = {"manuscript": key, "projection_sha256": prior_hash,
+                       "discarded_transition": discarded, "reason": reason.strip()}
+            with self.experiment.db:
+                self.experiment._event("manuscript_projection_recovery", payload)
+        entry["transitions"].pop()
+        entry["state"] = previous
+        self._save()
+        self._verify_projection(manuscript)
+        return {"status": "recovered", "manuscript": key,
+                "restored_state": previous, "discarded_state": discarded["to"],
+                "replayed": existing is not None}
+
+    def submit_bound(self, manuscript, research_run_dir, evidence_dir,
+                     draft_spec_path, reason=None):
+        """Record a reviewed bound draft only after live authority verification."""
+        self._verify_projection(manuscript)
+        entry = self._entry(manuscript)
+        if entry["state"] != "reviewed":
+            raise ProtocolError("证据绑定草稿必须先通过 review-bound")
+        reviewed = next((item.get("bound_verification") for item in
+                         reversed(entry["transitions"]) if item["to"] == "reviewed"), None)
+        if reviewed is None:
+            raise ProtocolError("缺少人工审校时的证据绑定校验记录；请先回退到 draft 再 review-bound")
+        proof = self._verify_bound(manuscript, research_run_dir, evidence_dir,
+                                   draft_spec_path)
+        if proof != reviewed:
+            raise ProtocolError("证据绑定草稿与人工审校时的冻结校验记录不同")
+        result = self._transition(manuscript, "submitted", reason, proof)
+        result["bound_verification"] = proof
+        return result
+
+    def review_bound(self, manuscript, research_run_dir, evidence_dir,
+                     draft_spec_path, reason=None):
+        """Record an explicit human review only after checking the bound draft."""
+        if not isinstance(reason, str) or not reason.strip():
+            raise ProtocolError("人工审校记录必须填写说明")
+        self._verify_projection(manuscript)
+        proof = self._verify_bound(manuscript, research_run_dir, evidence_dir,
+                                   draft_spec_path)
+        result = self._transition(manuscript, "reviewed", reason.strip(), proof)
+        result["bound_verification"] = proof
+        return result
+
+    def publish_bound(self, manuscript, research_run_dir, evidence_dir,
+                      draft_spec_path, reason=None):
+        """Revalidate the same bound draft before recording local publication state."""
+        self._verify_projection(manuscript)
+        entry = self._entry(manuscript)
+        if entry["state"] != "submitted":
+            raise ProtocolError("证据绑定草稿必须先通过 submit-bound")
+        prior = next((item.get("bound_verification") for item in
+                      reversed(entry["transitions"]) if item["to"] == "submitted"), None)
+        if prior is None:
+            raise ProtocolError("缺少先前提交的证据绑定校验记录")
+        current = self._verify_bound(manuscript, research_run_dir, evidence_dir,
+                                     draft_spec_path)
+        if current != prior:
+            raise ProtocolError("证据绑定草稿与提交时的冻结校验记录不同")
+        result = self._transition(manuscript, "published", reason, current)
+        result["bound_verification"] = current
+        result["publication_attested"] = False
+        return result
 
     # ---- 传播/共享登记 ------------------------------------------------------
     def share(self, manuscript, destination=None, community_dir=None):

@@ -1,0 +1,5 @@
+[
+  {"id": "dev-16", "steps": 16, "rate": 2.0, "t_end": 1.0},
+  {"id": "dev-32", "steps": 32, "rate": 2.0, "t_end": 1.0},
+  {"id": "dev-64", "steps": 64, "rate": 2.0, "t_end": 1.0}
+]

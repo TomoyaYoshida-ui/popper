@@ -37,6 +37,10 @@ class BudgetLedger:
         独立调用（没有外层事务）时，SAVEPOINT 只会开启一个事务、RELEASE 并不提交，
         因此这里显式接管最外层事务的提交与回滚，避免「调用成功但没落盘」。
         """
+        if hasattr(self._conn, "transaction"):
+            with self._conn.transaction(write=True):
+                yield
+            return
         # 保存点名字必须是合法标识符：连字符会触发 SQL 语法错误，用下划线。
         name = "budget_" + uuid.uuid4().hex
         outermost = not self._conn.in_transaction

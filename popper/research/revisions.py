@@ -2,13 +2,50 @@
 from __future__ import annotations
 
 import hashlib
+import difflib
 import shutil
+import subprocess
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from ..core import (Experiment, ProtocolError, digest, file_hash, portable_path,
                     read_json, write_json)
 from .execution import changed_statement_lines
+
+
+def source_control_provenance(project, source_files):
+    """Return a portable Git anchor for the exact revision source set.
+
+    The immutable file hashes remain authoritative.  Git adds human-reviewable
+    ancestry without making Git a runtime dependency: projects outside a
+    repository are explicitly represented as unversioned.
+    """
+    project = Path(project).resolve()
+    files = sorted(portable_path(name) for name in source_files)
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(project), *args], capture_output=True,
+            check=True, timeout=5).stdout.decode("utf-8", errors="strict").strip()
+
+    try:
+        root = Path(git("rev-parse", "--show-toplevel")).resolve()
+        if not project.is_relative_to(root):
+            return {"kind": "unversioned"}
+        commit = git("rev-parse", "--verify", "HEAD")
+        if len(commit) != 40 or any(ch not in "0123456789abcdef" for ch in commit):
+            return {"kind": "unversioned"}
+        status = git("-c", "core.quotepath=false", "status", "--porcelain=v1",
+                     "--untracked-files=all", "--", *files)
+        project_path = project.relative_to(root).as_posix() or "."
+        return {"kind": "git", "head_commit": commit,
+                "project_path": project_path,
+                "source_files_clean": not bool(status),
+                "source_status_sha256": hashlib.sha256(
+                    status.encode("utf-8")).hexdigest()}
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
+        return {"kind": "unversioned"}
 
 
 @dataclass(frozen=True)
@@ -42,7 +79,7 @@ class RevisionStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def create(self, project, hypothesis_id, design_id, edits, actor,
-               parent_revision_id=None):
+               parent_revision_id=None, expected_source_control=None):
         project = Path(project).resolve()
         if not hypothesis_id or not design_id or not actor:
             raise ProtocolError("revision 必须绑定 hypothesis/design/actor")
@@ -90,6 +127,15 @@ class RevisionStore:
             edit_payload = [{"path": edit.path,
                              "original_sha256": edit.original_sha256,
                              "replacement_sha256": digest(edit.replacement)} for edit in edits]
+            edit_by_path = {edit.path: edit for edit in edits}
+            diff_parts = []
+            for name in sorted(edit_by_path):
+                before = source_files.get(name, {}).get("content", "")
+                after = edit_by_path[name].replacement
+                diff_parts.extend(difflib.unified_diff(
+                    before.splitlines(keepends=True), after.splitlines(keepends=True),
+                    fromfile=f"a/{name}", tofile=f"b/{name}"))
+            frozen_diff = "".join(diff_parts)
             # Compare the full repaired revision to the frozen project, not merely
             # its failed parent: removing an injected fault is not a new algorithm.
             resulting = {name: item["content"] for name, item in source_files.items()}
@@ -98,9 +144,17 @@ class RevisionStore:
                 name: changed_statement_lines(
                     (project / name).read_text(encoding="utf-8") if name in registered else "", content)
                 for name, content in resulting.items()}
+            source_control = (parent["identity"].get(
+                "source_control", {"kind": "unversioned"})
+                if parent_revision_id else source_control_provenance(project, registered))
+            if (expected_source_control is not None
+                    and source_control != expected_source_control):
+                raise ProtocolError("源码 Git 锚点已变化，请重新预览修订提案")
             identity = {"hypothesis_id": hypothesis_id, "design_id": design_id,
                         "parent_revision_id": parent_revision_id,
                         "source_input_hashes": state["input_hashes"],
+                        "source_control": source_control,
+                        "diff_sha256": digest(frozen_diff),
                         "source_revision_sha256": (file_hash(
                             self.root / parent_revision_id / "revision.json")
                             if parent_revision_id else None),
@@ -134,6 +188,7 @@ class RevisionStore:
                             "identity": identity, "entrypoint": state["spec"]["entrypoint"],
                             "registered_code_files": sorted(registered),
                             "added_code_files": sorted(additions), "files": files,
+                            "diff": frozen_diff,
                             "status": "immutable"}
                 staging.mkdir(parents=True, exist_ok=True)
                 write_json(staging / "revision.json", manifest)
@@ -158,6 +213,11 @@ class RevisionStore:
             raise ProtocolError("CodeRevision manifest 身份错误")
         if "REV-" + digest(manifest.get("identity"))[:24] != revision_id:
             raise ProtocolError("CodeRevision identity 摘要已变化")
+        identity = manifest.get("identity") or {}
+        if "diff_sha256" in identity:
+            if (not isinstance(manifest.get("diff"), str)
+                    or digest(manifest["diff"]) != identity["diff_sha256"]):
+                raise ProtocolError("CodeRevision diff 摘要已变化")
         code_dir = target / "code"
         actual = {str(path.relative_to(code_dir)).replace("\\", "/"): file_hash(path)
                   for path in sorted(code_dir.rglob("*.py"))}
@@ -214,3 +274,132 @@ class RevisionStore:
             if staging.exists() and staging.is_relative_to(self.root):
                 shutil.rmtree(staging)
             raise
+
+
+class RevisionDiffArchive:
+    """Auditable sidecars for legacy revisions whose identity predates frozen diffs.
+
+    A sidecar never edits ``revision.json`` and therefore never pretends the
+    reconstructed diff was part of the original content identity.  Reconstruction
+    is allowed only from an immutable parent snapshot, not from the mutable project.
+    """
+
+    def __init__(self, revisions):
+        self.revisions = revisions if isinstance(revisions, RevisionStore) else RevisionStore(revisions)
+        self.root = self.revisions.root / ".diff-attestations"
+
+    def _path(self, revision_id):
+        path = (self.root / f"{revision_id}.json").resolve()
+        if path.parent != self.root:
+            raise ProtocolError("Diff attestation 路径越界")
+        return path
+
+    def _reconstruct(self, revision_id):
+        current = self.revisions.verify(revision_id)
+        parent_id = (current.get("identity") or {}).get("parent_revision_id")
+        if not parent_id:
+            raise ProtocolError(
+                "旧 root revision 缺少不可变父快照，不能从当前工作目录推测 Diff")
+        parent = self.revisions.verify(parent_id)
+        missing = sorted(set(parent["files"]) - set(current["files"]))
+        if missing:
+            raise ProtocolError("旧 revision 删除了父版本文件，无法按现行 Diff 契约迁移")
+        parent_code = self.revisions.path(parent_id) / "code"
+        current_code = self.revisions.path(revision_id) / "code"
+        parts = []
+        for name in sorted(current["files"]):
+            before = ((parent_code / name).read_text(encoding="utf-8")
+                      if name in parent["files"] else "")
+            after = (current_code / name).read_text(encoding="utf-8")
+            if before == after:
+                continue
+            parts.extend(difflib.unified_diff(
+                before.splitlines(keepends=True), after.splitlines(keepends=True),
+                fromfile=f"a/{name}", tofile=f"b/{name}"))
+        diff_text = "".join(parts)
+        if not diff_text:
+            raise ProtocolError("旧 child revision 相对父快照没有可证明的差异")
+        return current, parent, diff_text
+
+    def migrate(self, revision_id):
+        current = self.revisions.verify(revision_id)
+        identity = current.get("identity") or {}
+        if "diff_sha256" in identity:
+            return {"revision_id": revision_id, "source": "frozen_identity",
+                    "diff": current["diff"], "diff_sha256": identity["diff_sha256"],
+                    "attestation_id": None}
+        path = self._path(revision_id)
+        if path.is_file():
+            return self.verify(revision_id)
+        current, parent, diff_text = self._reconstruct(revision_id)
+        parent_id = current["identity"]["parent_revision_id"]
+        body = {
+            "schema_version": "1.0",
+            "kind": "legacy_revision_diff_attestation",
+            "revision_id": revision_id,
+            "revision_manifest_sha256": file_hash(
+                self.revisions.path(revision_id) / "revision.json"),
+            "parent_revision_id": parent_id,
+            "parent_manifest_sha256": file_hash(
+                self.revisions.path(parent_id) / "revision.json"),
+            "diff": diff_text,
+            "diff_sha256": digest(diff_text),
+            "created": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "method": "immutable_parent_snapshot_v1",
+        }
+        record = {**body, "attestation_id": "DFA-" + digest(body)[:24]}
+        self.root.mkdir(parents=True, exist_ok=True)
+        write_json(path, record)
+        return self.verify(revision_id)
+
+    def verify(self, revision_id):
+        path = self._path(revision_id)
+        if not path.is_file():
+            raise ProtocolError("Diff attestation 不存在")
+        record = read_json(path)
+        attestation_id = record.get("attestation_id")
+        body = {key: value for key, value in record.items() if key != "attestation_id"}
+        if attestation_id != "DFA-" + digest(body)[:24]:
+            raise ProtocolError("Diff attestation 身份摘要已变化")
+        current, parent, expected = self._reconstruct(revision_id)
+        parent_id = current["identity"]["parent_revision_id"]
+        if (record.get("revision_id") != revision_id
+                or record.get("parent_revision_id") != parent_id
+                or record.get("revision_manifest_sha256") != file_hash(
+                    self.revisions.path(revision_id) / "revision.json")
+                or record.get("parent_manifest_sha256") != file_hash(
+                    self.revisions.path(parent_id) / "revision.json")
+                or record.get("diff") != expected
+                or record.get("diff_sha256") != digest(expected)):
+            raise ProtocolError("Diff attestation 与不可变 revision 快照不一致")
+        return {**record, "source": "migrated_attestation"}
+
+    def resolve(self, revision_id):
+        manifest = self.revisions.verify(revision_id)
+        identity = manifest.get("identity") or {}
+        if "diff_sha256" in identity:
+            return {"source": "frozen_identity", "diff": manifest["diff"],
+                    "diff_sha256": identity["diff_sha256"], "attestation_id": None}
+        if self._path(revision_id).is_file():
+            record = self.verify(revision_id)
+            return {"source": record["source"], "diff": record["diff"],
+                    "diff_sha256": record["diff_sha256"],
+                    "attestation_id": record["attestation_id"]}
+        return {"source": "unavailable", "diff": None, "diff_sha256": None,
+                "attestation_id": None}
+
+    def migrate_all(self):
+        results = []
+        for manifest_path in sorted(self.revisions.root.glob("REV-*/revision.json")):
+            revision_id = manifest_path.parent.name
+            try:
+                migrated = self.migrate(revision_id)
+                results.append({key: migrated.get(key) for key in (
+                    "revision_id", "source", "diff_sha256", "attestation_id")})
+            except ProtocolError as error:
+                results.append({"revision_id": revision_id, "source": "unavailable",
+                                "error": str(error)})
+        return {"results": results,
+                "migrated": sum(row["source"] == "migrated_attestation" for row in results),
+                "native": sum(row["source"] == "frozen_identity" for row in results),
+                "unavailable": sum(row["source"] == "unavailable" for row in results)}

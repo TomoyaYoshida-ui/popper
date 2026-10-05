@@ -20,9 +20,10 @@ import time
 from pathlib import Path
 
 from ... import sandbox
-from ...core import read_json, write_json
+from ...core import write_json
 from .base import TERMINAL_JOB_STATUSES, JobSpec
 from .local import LocalWorker
+from .json_io import read_job_json
 
 _HEARTBEAT_SECONDS = 5.0
 
@@ -43,7 +44,7 @@ def _watch_cancel(job_dir, done):
             continue
         pid_file = job_dir / "sandbox.pid"
         if pid_file.is_file():
-            sandbox.terminate_tree(read_json(pid_file)["pid"])
+            sandbox.terminate_tree(read_job_json(pid_file)["pid"])
             break
         time.sleep(0.2)
 
@@ -58,7 +59,7 @@ def supervise_job(root, job_id, revisions_root=None):
     if not job_dir.is_relative_to(worker.root):
         raise ValueError("job_id 越界")
     manifest_path = job_dir / "job.json"
-    manifest = read_json(manifest_path)
+    manifest = read_job_json(manifest_path)
     if manifest["status"] in TERMINAL_JOB_STATUSES:
         return {"job_id": job_id, "status": manifest["status"]}
     if (job_dir / "cancel_requested").is_file():
@@ -76,7 +77,7 @@ def supervise_job(root, job_id, revisions_root=None):
         done.set()
         heart.join(timeout=2)
         watch.join(timeout=2)
-    return {"job_id": job_id, "status": read_json(manifest_path)["status"]}
+    return {"job_id": job_id, "status": read_job_json(manifest_path)["status"]}
 
 
 def main(argv=None):

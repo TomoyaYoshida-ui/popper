@@ -6,6 +6,62 @@ on:
   workflow_dispatch:
 
 jobs:
+  frontend-wheel:
+    name: build / workbench wheel assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Reject tracked credentials and local state
+        run: python .github/scripts/check_tracked_secrets.py
+      - name: Build frontend and reject stale packaged assets
+        run: |
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+          python scripts/stage_frontend.py --check
+          python scripts/stage_demos.py --check
+      - name: Build wheel and verify embedded workbench
+        run: |
+          python -m pip wheel . --no-deps -w wheelhouse
+          python .github/scripts/check_wheel_web.py wheelhouse/*.whl
+          python .github/scripts/check_wheel_demos.py wheelhouse/*.whl
+          python -m pip install --no-deps --target wheel-smoke wheelhouse/*.whl
+          python -I -c "import sys; from pathlib import Path; sys.path.insert(0, 'wheel-smoke'); from popper.server import Handler; root=Handler._frontend_dist(); assert root.is_relative_to(Path('wheel-smoke').resolve()) and (root / 'index.html').is_file()"
+          python -I .github/scripts/smoke_installed_workbench.py wheel-smoke
+          python -I .github/scripts/smoke_installed_demo.py wheel-smoke
+          python -I .github/scripts/smoke_installed_benchmark.py wheel-smoke
+          python -I .github/scripts/smoke_installed_bound_draft.py wheel-smoke
+          python -I .github/scripts/smoke_installed_repro.py wheel-smoke
+          python -m pip wheel examples/external-order-pack --no-deps -w external-wheelhouse
+          python -m pip install --no-deps --target wheel-smoke external-wheelhouse/*.whl
+          python -I .github/scripts/smoke_installed_domain_pack.py wheel-smoke
+      - name: Build sdist and verify a wheel rebuilt from it
+        run: |
+          python -m pip install build
+          python -m build --sdist --outdir sdist-house
+          python -m pip wheel sdist-house/*.tar.gz --no-deps -w sdist-wheelhouse
+          python .github/scripts/check_wheel_web.py sdist-wheelhouse/*.whl
+          python .github/scripts/check_wheel_demos.py sdist-wheelhouse/*.whl
+      - name: Record build artifact hashes and wheel inventory
+        run: |
+          python .github/scripts/release_artifact_manifest.py wheelhouse/*.whl sdist-house/*.tar.gz --output release-artifact-manifest.json
+          python .github/scripts/release_artifact_manifest.py wheelhouse/*.whl sdist-house/*.tar.gz --output release-artifact-manifest.json --check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: popper-ci-build-artifacts
+          path: |
+            wheelhouse/*.whl
+            sdist-house/*.tar.gz
+            release-artifact-manifest.json
+          if-no-files-found: error
+
   test:
     name: pytest / windows / py${{ matrix.python-version }}
     runs-on: windows-latest
@@ -61,13 +117,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: 安装（含全部四个 extras）
-        # 四个 extra 必须装齐：pyproject 声明的每个 extra 都要有 job 真装真跑，
+      - name: 安装（含全部五个 extras）
+        # 五个 extra 必须装齐：pyproject 声明的每个 extra 都要有 job 真装真跑，
         # 否则对应用例在 CI 上等于不存在（曾漏装 orchestration，langgraph 分支全没跑过）。
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install -e ".[ml,research,orchestration,confirmation]"
+          python -m pip install -e ".[ml,research,orchestration,confirmation,workstation]"
       - name: 全量测试（覆盖需要可选依赖的分支）
         # -rs 与 PYTHONIOENCODING 的理由同 test job：skip 名单要能递出来、递出来要读得懂。
         id: pytest
@@ -82,6 +138,14 @@ jobs:
           echo "$status" > pytest-status.txt
           cat pytest-output.txt
           exit $status
+      - name: 冻结论文复现端到端验收（离线真实 WDBC 数据）
+        run: python -X utf8 .github/scripts/e2e_frozen_reproduction.py
+      - name: 已安装 wheel 的真实 ConPTY 终端验收
+        run: |
+          python -m pip wheel . --no-deps -w wheelhouse
+          $wheel = (Get-ChildItem wheelhouse\popper_research-*.whl | Select-Object -First 1).FullName
+          python -m pip install --no-deps --target wheel-smoke $wheel
+          python -I .github/scripts/smoke_installed_terminal.py wheel-smoke
       - name: 失败清单与 skip 名单写进 job summary
         # 绿跑也递 skip 名单：extras 少装一个就会表现成「一大片带原因的 skip」，
         # 只看失败清单的仪表会把这种空转读成「该 job 什么都没发生」。
@@ -111,7 +175,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: 安装（Linux job 装齐四个 extra）
+      - name: 安装（Linux job 声明装齐五个 extra）
         # 与 test job 相反：这里不是零依赖验证点，而是沙箱硬门禁。真实沙箱 worker
         # 用例同时要求沙箱后端与 cryptography（见 test_research_confirmation_runner.py 的
         # 类级守卫），少装任何一个 extra 都会让 POPPER_REQUIRE_SANDBOX=1 的硬门禁在
@@ -119,7 +183,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install -e ".[ml,research,orchestration,confirmation]"
+          # workstation 的 pywinpty 带 Windows 环境标记，Linux 会合法跳过其平台包；
+          # extra 本身仍必须出现在安装清单，确保声明、探针和 CI 契约不漂移。
+          python -m pip install -e ".[ml,research,orchestration,confirmation,workstation]"
       - name: 准备 bubblewrap 沙箱环境
         # 装 bwrap / 开 AppArmor 的 userns 例外 / 按真实形状探活——三步都在
         # `.github/actions/sandbox-env`，与下面的端到端 job 共用一个出处（为什么必须共用、
