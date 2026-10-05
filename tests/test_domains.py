@@ -17,8 +17,10 @@ FROZEN_HASHES = {
     "binary-accuracy-v1": "e2ee67d7efd70c0f60a5f56663a01653dc2ceed01c6c549737af58e9536e3252",
 }
 BUILTIN = sorted(["algorithm-throughput-v1", "binary-accuracy-v1", "binary-f1-v1",
-                  "convergence-order-v1", "mae-v1", "mse-v1", "multiclass-macro-f1-v1",
-                  "oscillator-trajectory-v1", "treatment-effect-v1"])
+                  "convergence-order-v1", "mae-v1", "mlebench-nomad-rmsle-v1",
+                  "mlebench-pizza-auc-v1", "mlebench-spooky-logloss-v1", "mse-v1",
+                  "multiclass-macro-f1-v1", "oscillator-trajectory-v1",
+                  "treatment-effect-v1"])
 
 REGRESSION_ROWS = [{"id": "a", "x": 1, "y": 3}, {"id": "b", "x": 2, "y": 5}]
 CLASSIFICATION_ROWS = [{"id": "a", "features": [0.0], "label": 1},

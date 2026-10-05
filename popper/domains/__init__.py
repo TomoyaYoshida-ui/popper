@@ -32,6 +32,7 @@ from . import algorithm_throughput  # noqa: F401  注册 algorithm-throughput-v1
 from . import convergence_order  # noqa: F401  注册 convergence-order-v1
 from . import oscillator_trajectory  # noqa: F401  trajectory scoring; not resource attestation
 from . import treatment_effect  # noqa: F401  注册 treatment-effect-v1
+from . import mlebench_lite  # noqa: F401  注册三道 MLE-bench Lite 小题
 
 
 def load_external_packs(selection=None):

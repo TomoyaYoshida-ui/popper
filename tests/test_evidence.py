@@ -20,7 +20,8 @@ class MetricsTests(unittest.TestCase):
     def test_default_metrics_and_registry_load(self):
         # 默认指标表由域包注册表导出，不是第三套命名体系。
         expected = {"mse", "accuracy", "mae", "f1", "macro_f1", "throughput",
-                    "convergence_order", "ate_error", "trajectory_error"}
+                    "convergence_order", "ate_error", "trajectory_error",
+                    "spooky_log_loss", "nomad_mean_rmsle", "pizza_roc_auc"}
         self.assertEqual(expected, set(registered_metrics()))
         reg = MetricsRegistry()
         self.assertEqual(expected, set(reg.names()))

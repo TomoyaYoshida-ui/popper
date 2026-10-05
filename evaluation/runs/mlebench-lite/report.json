@@ -1,0 +1,21 @@
+{
+  "schema": "mlebench-lite-budget-v1",
+  "tasks": [
+    "spooky-author-identification",
+    "nomad2018-predict-transparent-conductors",
+    "random-acts-of-pizza"
+  ],
+  "missing_tasks": [
+    "spooky-author-identification",
+    "nomad2018-predict-transparent-conductors",
+    "random-acts-of-pizza"
+  ],
+  "data_root": "C:\\Users\\wangj\\Desktop\\research\\research-agent-v2\\evaluation\\data\\mlebench-lite",
+  "budget_confirmed_tokens": 600000,
+  "per_task_token_cap": 200000,
+  "paid_model_calls": 0,
+  "tokens_used": 0,
+  "holdout_seal_available": true,
+  "status": "blocked_missing_raw_data",
+  "reason": "未找到原始训练文件，也没有 Kaggle 凭据。已确认的 token 上限没有消耗。"
+}
