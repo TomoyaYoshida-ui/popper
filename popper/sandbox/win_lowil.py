@@ -564,7 +564,7 @@ def seal_read(path):
     而用户本人与控制器（同为 Medium）不受影响。本实现只走 Windows 强制完整性标签；
     Linux 上的等价能力由 bubblewrap mount namespace 遮蔽提供（机制不同：候选读到
     空内容 EOF，而在多挂载叠放的真实端到端上实测也可能直接得 EACCES——两种形状
-    都读不到真值，见 linux_bwrap 模块说明与实施记录 run 35335109099）。
+    都读不到真值，见 linux_bwrap 模块说明与 GitHub Actions run 35335109099）。
     """
     if os.name != "nt":
         raise OSError("本函数只实现 Windows 强制完整性标签禁读"

@@ -10,7 +10,7 @@
 - 诚实边界：本模块约束"写"（mount namespace 只挂载 scope 为 rw）、对显式
   `seal_read` 的对象用 `--ro-bind /dev/null <path>` 屏蔽（候选读不到真实数据：
   简单挂载形状下读得空串 EOF，多挂载叠放的真实端到端在 GitHub runner 上实测为
-  PermissionError/EACCES；两种形状都内核强制、绕不过，实施记录 run 35335109099
+  PermissionError/EACCES；两种形状都内核强制、绕不过，GitHub Actions run 35335109099
   有原始观察表）、`--unshare-net` 内核级断网（空 netns）、POSIX
   RLIMIT_AS / RLIMIT_CPU 内核强制的资源限额；RLIMIT_NPROC 按真实 UID 计数而不是
   按进程树，因此只能给天花板兜底，不是 Windows Job Object 那种按作业精确计数。
