@@ -20,9 +20,16 @@ def can_support_claim(scope):
 
 
 def diff_fingerprint(edits):
-    if not isinstance(edits, list) or not edits:
+    if isinstance(edits, (str, bytes)) or not edits:
         raise ProtocolError("搜索节点必须给出代码修改")
-    return digest({"edits": edits})
+    rows = []
+    for edit in edits:
+        if isinstance(edit, dict):
+            rows.append(edit)
+        else:
+            rows.append({"path": edit.path, "original_sha256": edit.original_sha256,
+                         "replacement_sha256": digest(edit.replacement)})
+    return digest({"edits": rows})
 
 
 def choose_action(nodes, *, num_drafts=2, debug_prob=0.3, max_debug_depth=2, direction="min", rng=None):

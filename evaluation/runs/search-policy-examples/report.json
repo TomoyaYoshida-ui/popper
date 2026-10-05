@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0",
+  "paid_model_calls": 0,
+  "domains": [
+    {
+      "domain": "ode-convergence",
+      "paid_model_calls": 0,
+      "execution": "injected_executor",
+      "confirm_consumed": false,
+      "policies": [
+        {
+          "policy": "one_shot_repair",
+          "baseline": 1.029543,
+          "best_value": 1.029543,
+          "delta": 0.0,
+          "reaches_threshold": false,
+          "code_revisions": 2,
+          "budget_spent": 3.0,
+          "phase": "researching",
+          "last_decision": "add_control"
+        },
+        {
+          "policy": "tree_search",
+          "baseline": 1.029543,
+          "best_value": 2.051761,
+          "delta": 1.022218,
+          "reaches_threshold": true,
+          "code_revisions": 3,
+          "budget_spent": 4.0,
+          "phase": "ready_for_confirmation",
+          "last_decision": "request_confirmation"
+        }
+      ]
+    },
+    {
+      "domain": "breast-cancer-wisconsin",
+      "paid_model_calls": 0,
+      "execution": "injected_executor",
+      "confirm_consumed": false,
+      "policies": [
+        {
+          "policy": "one_shot_repair",
+          "baseline": 0.929825,
+          "best_value": 0.377193,
+          "delta": -0.552632,
+          "reaches_threshold": false,
+          "code_revisions": 2,
+          "budget_spent": 3.0,
+          "phase": "researching",
+          "last_decision": "add_control"
+        },
+        {
+          "policy": "tree_search",
+          "baseline": 0.929825,
+          "best_value": 0.991228,
+          "delta": 0.061404,
+          "reaches_threshold": true,
+          "code_revisions": 3,
+          "budget_spent": 4.0,
+          "phase": "ready_for_confirmation",
+          "last_decision": "request_confirmation"
+        }
+      ]
+    }
+  ]
+}

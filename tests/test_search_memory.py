@@ -18,6 +18,8 @@ class SearchMemoryTests(unittest.TestCase):
         rows = [{"hypothesis_id": "H-1", "scope": "dev", "value": 0.2, "observation_id": "O-1"}]
         self.assertEqual("idea", progress_for("H-2", rows))
         self.assertEqual("implemented", progress_for("H-1", rows))
+        self.assertEqual("progress", progress_for("H-1", rows, baseline_value=0.5, direction="min"))
+        self.assertEqual("implemented", progress_for("H-1", rows, baseline_value=0.1, direction="min"))
 
     def test_notes_are_a_bounded_projection(self):
         store = _Store([

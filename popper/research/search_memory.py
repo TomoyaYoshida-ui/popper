@@ -4,12 +4,18 @@ from __future__ import annotations
 from .tree_search import SMOKE_SCOPE, best_node
 
 
-def progress_for(hypothesis_id, observations):
-    """idea：尚无实现；implemented：有开发集观察；progress：有观察即视为已执行过实现。"""
+def progress_for(hypothesis_id, observations, *, baseline_value=None, direction="min"):
+    """idea：尚无实现；implemented：有开发集观察；progress：有观察优于基线。"""
     own = [row for row in observations if row.get("hypothesis_id") == hypothesis_id
-           and row.get("scope") == "dev"]
+           and row.get("scope") == "dev" and row.get("value") is not None]
     if not own:
         return "idea"
+    if baseline_value is None:
+        return "implemented"
+    better = (lambda value: value < baseline_value) if direction == "min" else (
+        lambda value: value > baseline_value)
+    if any(better(row["value"]) for row in own):
+        return "progress"
     return "implemented"
 
 
@@ -17,10 +23,17 @@ def research_notes(store, manifest, question, *, limit=4000):
     """把已试节点压成一段带分数的笔记，附加到下一次代码提案的问题描述。"""
     observations = [row for row in store.list("observation")
                     if row.get("scope") in {"dev", SMOKE_SCOPE}]
+    direction = manifest.get("metric", {}).get("direction", "min")
+    control_id = manifest.get("control_hypothesis_id")
+    baseline_rows = [row for row in observations if row.get("hypothesis_id") == control_id
+                     and row.get("scope") == "dev" and row.get("value") is not None]
+    baseline_value = None if not baseline_rows else baseline_rows[-1]["value"]
     lines = [question, "", "研究笔记（由研究记录投影，不是新的事实来源）："]
     for hypothesis_id in manifest["candidate_hypothesis_ids"]:
         own = [row for row in observations if row.get("hypothesis_id") == hypothesis_id]
-        lines.append(f"- {hypothesis_id} 进度 {progress_for(hypothesis_id, observations)}，"
+        progress = progress_for(hypothesis_id, observations, baseline_value=baseline_value,
+                                direction=direction)
+        lines.append(f"- {hypothesis_id} 进度 {progress}，"
                      f"开发集观察 {sum(1 for row in own if row.get('scope') == 'dev')} 条，"
                      f"冒烟观察 {sum(1 for row in own if row.get('scope') == SMOKE_SCOPE)} 条")
         for row in own:
