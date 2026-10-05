@@ -3,8 +3,11 @@ import unittest
 
 from popper.core import ProtocolError
 from evaluation.compare_search_policies import compare
+from popper.domains.binary_classification import BinaryClassificationV1
+from popper.domains.convergence_order import ConvergenceOrderV1
 from popper.research.tree_search import (
-    best_node, can_support_claim, choose_action, node_record, reject_duplicate)
+    best_node, can_support_claim, choose_action, node_record, reject_duplicate,
+    representative_observation)
 
 
 def _node(node_id, kind, status, value=None, depth=0, parent_id=None, scope="dev"):
@@ -19,6 +22,11 @@ class TreeSearchTests(unittest.TestCase):
         nodes = [_node("smoke", "draft", "scored", 0.1, scope="dev:smoke"),
                  _node("full", "draft", "scored", 0.4)]
         self.assertEqual("full", best_node(nodes)["node_id"])
+        rows = [{"scope": "dev:smoke", "value": 0.1}, {"scope": "dev", "value": 0.4},
+                {"scope": "dev", "value": 0.2}]
+        self.assertEqual(0.2, representative_observation(rows, "min")["value"])
+        self.assertEqual(1, ConvergenceOrderV1().smoke_repeat_limit())
+        self.assertEqual(1, BinaryClassificationV1().smoke_repeat_limit())
 
     def test_drafts_then_debug_or_improve(self):
         self.assertEqual("draft", choose_action([], rng=random.Random(0))["action"])

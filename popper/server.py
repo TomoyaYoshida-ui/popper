@@ -1135,7 +1135,9 @@ class Workstation(ThreadingHTTPServer):
         store = StudyJobStore(run_dir)
         try:
             store.verify()
-            return {"jobs": store.list()}
+            progress_path = run_dir / "search-progress.json"
+            progress = read_json(progress_path) if progress_path.is_file() else None
+            return {"jobs": store.list(), "search_progress": progress}
         finally:
             store.close()
 

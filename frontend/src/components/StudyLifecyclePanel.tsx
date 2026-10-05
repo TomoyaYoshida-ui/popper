@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { cancelStudyJob, executeStudyAction, fetchStudyJobs, previewStudyAction,
-  type StudyActionPreview, type StudyLifecycleJob } from '../api'
+  type SearchProgress, type StudyActionPreview, type StudyLifecycleJob } from '../api'
 import type { WorkbenchResource } from '../workbench'
 
 const jobLabels: Record<StudyLifecycleJob['status'], string> = {
@@ -51,7 +51,7 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
   const [minutes, setMinutes] = useState(60)
   const [codeFiles, setCodeFiles] = useState('')
   const [previewState, setPreview] = useState<{ key: string; value: StudyActionPreview } | null>(null)
-  const [jobState, setJobs] = useState<{ key: string; rows: StudyLifecycleJob[]; loaded: boolean }>({ key: routeKey, rows: [], loaded: false })
+  const [jobState, setJobs] = useState<{ key: string; rows: StudyLifecycleJob[]; loaded: boolean; progress: SearchProgress | null }>({ key: routeKey, rows: [], loaded: false, progress: null })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [jobsError, setJobsError] = useState<string | null>(null)
@@ -62,6 +62,7 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
   const notify = useRef(onChanged)
   notify.current = onChanged
   const jobs = jobState.key === routeKey ? jobState.rows : []
+  const searchProgress = jobState.key === routeKey ? jobState.progress : null
   const jobsLoaded = jobState.key === routeKey && jobState.loaded
   const activeJobs = jobs.filter(isActive)
   const active = activeJobs.length > 0
@@ -91,7 +92,7 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
     let timer: ReturnType<typeof setTimeout>
     previous.current = []
     setJobsError(null)
-    setJobs({ key: routeKey, rows: [], loaded: false })
+    setJobs({ key: routeKey, rows: [], loaded: false, progress: null })
     const load = async () => {
       try {
         const result = await fetchStudyJobs(studyId)
@@ -99,7 +100,7 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
         const completed = result.jobs.some((job) => !isActive(job) &&
           previous.current.some((old) => old.job_id === job.job_id && isActive(old)))
         previous.current = result.jobs
-        setJobs({ key: routeKey, rows: result.jobs, loaded: true })
+        setJobs({ key: routeKey, rows: result.jobs, loaded: true, progress: result.search_progress ?? null })
         setJobsError(null)
         if (completed) notify.current()
       } catch (cause) {
@@ -163,7 +164,7 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
       if (!mounted.current || context.current.contextKey !== contextKey) return
       const rows = [...previous.current.filter((row) => row.job_id !== job.job_id), job]
       previous.current = rows
-      setJobs({ key: routeKey, rows, loaded: true }); setPreview(null)
+      setJobs({ key: routeKey, rows, loaded: true, progress: searchProgress }); setPreview(null)
     })
   }
   const stop = async (job: StudyLifecycleJob) => {
@@ -172,7 +173,7 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
       const next = await cancelStudyJob(studyId, job.job_id)
       if (!mounted.current || context.current.routeKey !== routeKey) return
       previous.current = previous.current.map((row) => row.job_id === next.job_id ? next : row)
-      setJobs({ key: routeKey, rows: previous.current, loaded: true })
+      setJobs({ key: routeKey, rows: previous.current, loaded: true, progress: searchProgress })
       if (!isActive(next)) notify.current()
     })
   }
@@ -198,6 +199,12 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
     <div className="study-action-heading"><span className="step-kicker">下一步</span><strong>{active ? '查看正在执行的作业' : phaseLabels[lifecycle] || '核对研究状态'}</strong></div>
     {!active && <p className="muted">{phaseReason || descriptions[lifecycle] || '当前阶段请先核对研究记录。'}</p>}
     {!jobsLoaded && <p role="status" className="muted">正在核对作业状态…</p>}
+    {activeJobs.some((job) => job.request.action === 'autopilot') && searchProgress && <div className="notice" role="status">
+      第 {searchProgress.step}/{searchProgress.max_steps} 步 · 节点 {searchProgress.nodes} · 失败 {searchProgress.buggy}
+      {searchProgress.best_value != null && <> · 当前最优 {searchProgress.best_value}</>}
+      {searchProgress.max_dev_runs != null && <> · 开发运行 {searchProgress.dev_runs_used}/{searchProgress.max_dev_runs}</>}
+      {searchProgress.max_model_tokens != null && <> · token {searchProgress.tokens_used}/{searchProgress.max_model_tokens}</>}
+    </div>}
     {activeJobs.map(jobRow)}
     {!active && requestedAction && <div className="actions">
       {requestedAction === 'run' && <label>本次候选步数 <input aria-label="本次候选步数" type="number" min={1} max={100} value={steps}

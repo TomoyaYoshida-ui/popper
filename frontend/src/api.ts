@@ -249,7 +249,11 @@ export type StudyLifecycleJob = {
   cancel_requested: boolean; error: string | null
   result: { phase: string; observation_ids: string[]; claim_ids: string[] } | null
 }
-export function fetchStudyJobs(studyId: string): Promise<{ jobs: StudyLifecycleJob[] }> {
+export type SearchProgress = {
+  step: number; max_steps: number; nodes: number; buggy: number; best_value: number | null
+  dev_runs_used: number; max_dev_runs: number | null; tokens_used: number; max_model_tokens: number | null
+}
+export function fetchStudyJobs(studyId: string): Promise<{ jobs: StudyLifecycleJob[]; search_progress?: SearchProgress | null }> {
   return projectFilesRequest(`/api/v1/research/${encodeURIComponent(studyId)}/lifecycle`)
 }
 export function previewStudyAction(studyId: string, action: 'run' | 'confirm' | 'autopilot', maxSteps: number,

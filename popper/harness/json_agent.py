@@ -44,6 +44,11 @@ class JSONAgentHarness:
         self._call = call
         self.model = model
 
+    @property
+    def tokens_used(self):
+        counter = getattr(self._call, "tokens_used", None)
+        return counter() if callable(counter) else 0
+
     @classmethod
     def from_endpoint(cls, base_url, model, diagnostics_dir=None):
         """按端点配置接入；``diagnostics_dir`` 只落审计记录，不参与提案。"""

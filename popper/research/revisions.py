@@ -79,7 +79,7 @@ class RevisionStore:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def create(self, project, hypothesis_id, design_id, edits, actor,
-               parent_revision_id=None, expected_source_control=None):
+               parent_revision_id=None, expected_source_control=None, node_kind=None):
         project = Path(project).resolve()
         if not hypothesis_id or not design_id or not actor:
             raise ProtocolError("revision 必须绑定 hypothesis/design/actor")
@@ -160,6 +160,10 @@ class RevisionStore:
                             if parent_revision_id else None),
                         "edits": edit_payload, "actor": actor,
                         "execution_changes": execution_changes}
+            if node_kind is not None:
+                if node_kind not in {"draft", "debug", "improve"}:
+                    raise ProtocolError("搜索节点类型必须是 draft、debug 或 improve")
+                identity["node_kind"] = node_kind
             revision_id = "REV-" + digest(identity)[:24]
             target = (self.root / revision_id).resolve()
             if not target.is_relative_to(self.root):

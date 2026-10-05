@@ -35,6 +35,15 @@ from .schema import migrate_research
 # 值必须是真实存在的写入方：study 类实体由本模块自写；observation 的权威是独立
 # 评估服务 evaluation_service.py；run 的权威是持有 RunWriter 能力的编排内核
 # controller.py（worker 只执行，不碰存储）。
+def _claim_limitations(dev_nodes):
+    """单次开发观察保持原有两条限制。搜索比较过多个节点时，Claim 写明节点数。"""
+    limitations = ["does_not_establish_mechanism",
+                   "not_generalizable_beyond_registered_scope"]
+    if type(dev_nodes) is int and dev_nodes > 1:
+        limitations.append(f"development_search_nodes:{dev_nodes}")
+    return limitations
+
+
 AUTHORITY = {
     "study": "research_store",
     "hypothesis": "research_store",
@@ -849,6 +858,27 @@ class ResearchStore:
             return {"status": "recorded", "decision_id": decision.decision_id}
         return self._transaction(_do)
 
+    def record_envelope_approval(self, envelope):
+        """把一次自治包络批准追加到研究事件链。重复批准同一摘要不产生第二条事件。"""
+        required = {"study_id", "envelope_sha256", "state_version", "max_dev_runs",
+                    "max_model_tokens", "max_wall_clock_minutes", "code_files"}
+        if not isinstance(envelope, dict) or not required <= set(envelope):
+            raise ProtocolError("自治包络批准事件缺少字段")
+        entity_id = envelope["envelope_sha256"]
+
+        def _do():
+            existing = self._conn.execute(
+                "SELECT 1 FROM events WHERE kind='audit_event' AND entity_id=? "
+                "AND event_type='envelope_approved'", (entity_id,)).fetchone()
+            if existing:
+                return {"status": "recorded", "envelope_sha256": entity_id}
+            payload = {key: envelope[key] for key in sorted(required)}
+            payload["code_files"] = list(envelope["code_files"])
+            payload["actor"] = "envelope"
+            self._append("audit_event", entity_id, "envelope_approved", payload, AUTHORITY["audit_event"])
+            return {"status": "recorded", "envelope_sha256": entity_id}
+        return self._transaction(_do)
+
     def _record_confirmation_claim(self, study_id, decision_id,
                                    baseline_observation_id, candidate_observation_id):
         """Derive an immutable, scope-bound claim from authoritative evidence."""
@@ -927,8 +957,10 @@ class ResearchStore:
                 "metric": candidate_design["metric"], "metric_direction": direction,
                 "oriented_delta": delta, "min_meaningful_effect": threshold,
                 "scope": "registered_independent_confirmation",
-                "limitations": ["does_not_establish_mechanism",
-                                "not_generalizable_beyond_registered_scope"],
+                "limitations": _claim_limitations(sum(
+                    1 for row in self.list("observation")
+                    if row.get("design_id") == evidence[1]["design_id"]
+                    and row.get("scope") == "dev")),
             }
             current = self.get("claim", claim_id)
             if current is not None:
@@ -1488,9 +1520,11 @@ class ResearchStore:
                             or decoded["hypothesis_version"] !=
                                candidate_design["hypothesis_version"]
                             or decoded["scope"] != "registered_independent_confirmation"
-                            or decoded["limitations"] != [
-                                "does_not_establish_mechanism",
-                                "not_generalizable_beyond_registered_scope"]
+                            or decoded["limitations"] != _claim_limitations(sum(
+                                1 for (snap_kind, _), snap in expected_snapshots.items()
+                                if snap_kind == "observation"
+                                and snap["payload"].get("design_id") == candidate_design["design_id"]
+                                and snap["payload"].get("scope") == "dev"))
                             or any(run["status"] != RunStatus.SUCCEEDED.value
                                    or run["payload"]["design_id"] != obs["design_id"]
                                    or run["payload"]["study_id"] != decoded["study_id"]
@@ -1520,6 +1554,16 @@ class ResearchStore:
                         return fail(f"Claim 与确认依据不一致 @seq={row[0]}")
                 except (KeyError, TypeError, ValueError):
                     return fail(f"Claim 引用缺失或字段不合法 @seq={row[0]}")
+
+            if kind == "audit_event" and event_type == "envelope_approved":
+                required = {"actor", "code_files", "envelope_sha256", "max_dev_runs",
+                            "max_model_tokens", "max_wall_clock_minutes", "state_version",
+                            "study_id"}
+                if (set(decoded) != required or decoded["envelope_sha256"] != entity_id
+                        or decoded["actor"] != "envelope"):
+                    return fail(f"自治包络批准事件不合法 @seq={row[0]}")
+                count += 1
+                continue
 
             if kind == "audit_event":
                 if event_type != "command_applied":

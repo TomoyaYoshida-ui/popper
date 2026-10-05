@@ -28,6 +28,10 @@ class BinaryClassificationV1(AlignedPredictionPack):
         "dataset": "rows[id,features,label] with finite numeric features and label in {0,1}",
     }
 
+    def smoke_repeat_limit(self):
+        """新节点先用一个重复单位冒烟。通过后再跑预注册的全部重复。"""
+        return 1
+
     def validate_input_fields(self, row):
         values = row["features"]
         if (not isinstance(values, list) or not values

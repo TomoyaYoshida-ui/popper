@@ -299,8 +299,14 @@ class ResearchController:
             actor=proposal.source, model=proposal.model))
 
     def _observation_for_design(self, design_id, scope="dev"):
-        return next((o for o in self.store.list("observation")
-                     if o.get("design_id") == design_id and o.get("scope") == scope), None)
+        rows = [o for o in self.store.list("observation")
+                if o.get("design_id") == design_id and o.get("scope") == scope]
+        if not rows:
+            return None
+        if scope != "dev" or len(rows) == 1:
+            return rows[0]
+        from .tree_search import representative_observation
+        return representative_observation(rows, self.manifest["metric"]["direction"])
 
     def _record_development_observations(self, run_id, evaluated, scope="dev"):
         """Persist the global score and every preregistered diagnostic slice."""
@@ -702,7 +708,8 @@ class ResearchController:
         return observation
 
     def implement(self, hypothesis_id, parent_revision_id=None, gpu_count=0,
-                  should_cancel=None, search_node=False, fidelity=None, seen_diffs=None):
+                  should_cancel=None, search_node=False, fidelity=None, seen_diffs=None,
+                  node_kind=None):
         """Generate, freeze, execute and independently score one code revision.
 
         Generated code always goes through LocalWorker's OS sandbox. There is no
@@ -779,7 +786,8 @@ class ResearchController:
                     "receipts": [], "observation": observation}
         revision = self.revisions.create(
             self.project, hypothesis_id, design_id, proposed["edits"],
-            actor=proposal_source, parent_revision_id=parent_revision_id)
+            actor=proposal_source, parent_revision_id=parent_revision_id,
+            node_kind=node_kind if search_node else None)
         revision_id = revision["revision_id"]
         revision_sha = file_hash(self.revisions.path(revision_id) / "revision.json")
         action = REPAIR_IMPLEMENTATION if parent_revision_id else IMPLEMENT_REVISION
@@ -836,8 +844,13 @@ class ResearchController:
             dev_rows = dataset(self.project / state["spec"]["dev"], state["evaluator_id"])
             pack = evaluator_pack(state["evaluator_id"])
             all_seeds = list(repeat_values(pack, dev_rows, state["spec"]))
-            phases = ([(all_seeds[:1], "dev:smoke"), (all_seeds, "dev")]
-                      if fidelity == "ladder" and len(all_seeds) > 1 else [(all_seeds, "dev")])
+            declared_smoke = getattr(pack, "smoke_repeat_limit", None)
+            if callable(declared_smoke):
+                declared_smoke = declared_smoke()
+            smoke_count = (declared_smoke if (fidelity == "ladder" or search_node)
+                           and isinstance(declared_smoke, int)
+                           and 1 <= declared_smoke < len(all_seeds)
+                           else 1 if fidelity == "ladder" and len(all_seeds) > 1 else len(all_seeds))
             artifacts = self._staged_inputs(
                 pack.invocation(), inputs_dir, state, dev_rows,
                 config, state["evaluator_id"])
@@ -845,9 +858,9 @@ class ResearchController:
             receipts = []
             seed_specs = []
             seed_outputs = []
-            # 保真度阶梯先只跑第一个重复单位。它失败就不再启动其余单位；
-            # 通过后才跑完全部单位，并且只对完整预测做一次可进入结论的评分。
-            for seed in phases[-1][0]:
+            # 保真度阶梯或域包声明的冒烟子集先跑。失败就不再启动其余单位；
+            # 通过后才跑完全部单位。冒烟评分单独记录，不能进入决策或 Claim。
+            for seed in all_seeds:
                 args, outputs = job_invocation(pack, seed)
                 output = outputs[0]
                 spec = JobSpec(
@@ -865,7 +878,7 @@ class ResearchController:
             # 多个 seed 争抢同一批设备；CPU job 保持并发。
             job_ids = [spec.job_id for spec in seed_specs]
             max_in_flight = 1 if gpu_count else len(seed_specs)
-            wave_limit = 1 if fidelity == "ladder" and len(seed_specs) > 1 else len(seed_specs)
+            wave_limit = smoke_count if smoke_count < len(seed_specs) else len(seed_specs)
             batches = (len(seed_specs) + max_in_flight - 1) // max_in_flight
             deadline = time.monotonic() + max(
                 spec.timeout_seconds for spec in seed_specs) * batches + 120.0
@@ -898,11 +911,11 @@ class ResearchController:
                     time.sleep(0.5)
                 in_flight = sum(1 for s in statuses.values()
                                 if s["status"] not in TERMINAL_JOB_STATUSES)
-                if wave_limit == 1 and in_flight == 0 and job_ids:
-                    first_status = statuses.get(job_ids[0], {}).get("status")
-                    if first_status == "succeeded":
+                if wave_limit < len(seed_specs) and in_flight == 0 and job_ids:
+                    smoke_statuses = [statuses.get(jid, {}).get("status") for jid in job_ids[:wave_limit]]
+                    if smoke_statuses and all(item == "succeeded" for item in smoke_statuses):
                         wave_limit = len(seed_specs)
-                    elif first_status in TERMINAL_JOB_STATUSES:
+                    elif any(item in TERMINAL_JOB_STATUSES for item in smoke_statuses):
                         break
             for spec, (seed, output) in zip(seed_specs[:next_to_launch], seed_outputs[:next_to_launch]):
                 receipt = self.worker.collect(spec.job_id)
@@ -921,18 +934,34 @@ class ResearchController:
                 self.worker.fetch_artifact(spec.job_id, output, output_path)
                 predictions.append({"seed": seed, "path": str(output_path),
                                     "sha256": file_hash(output_path)})
+            smoke_evaluated = None
+            if smoke_count < len(predictions) and not getattr(pack, "units_from_data", False):
+                smoke_state = {**state, "spec": {**state["spec"], "seeds": [
+                    item["seed"] for item in predictions[:smoke_count]]}}
+                smoke_evaluated = self.evaluator.score_artifacts(
+                    smoke_state, "dev", run_id + "-smoke", predictions[:smoke_count])
             evaluated = self.evaluator.score_artifacts(state, "dev", run_id, predictions)
-            # C1: 用独立评估的 per_seed 构造 core result 并 complete_run，让 freeze
-            # 能从 core.runs 选出该候选。build_result 的 per_seed 与 evaluated 的
-            # per_seed 同源（都是独立评估算出的逐种子值），与 registered-implementation
-            # 路径在 _evaluate_via_worker 内调用 score() 的口径一致（同一 evaluator_id）。
-            if core_prior is None and core_rid is not None:
+            # 搜索的第一次成功才写入核心实验库，供 freeze 看到这个候选配置。
+            # 后续节点不再注册，避免同一配置耗尽预注册次数或改写已完成结果。
+            if search_node:
+                try:
+                    reg_rid, reg_state, reg_prior = self.exp.register_run(config, "dev")
+                except ProtocolError:
+                    reg_rid, reg_state, reg_prior = None, None, {"skipped": True}
+                if reg_prior is None and reg_rid is not None:
+                    core_result = self.exp.build_result(
+                        reg_rid, reg_state, config, "dev", evaluated["per_seed"],
+                        core_started, True)
+                    self.exp.complete_run(reg_rid, core_result)
+            elif core_prior is None and core_rid is not None:
                 core_result = self.exp.build_result(
                     core_rid, core_state, config, "dev", evaluated["per_seed"],
                     core_started, True)
                 self.exp.complete_run(core_rid, core_result)
             if self.store.get("run", run_id)["status"] == RunStatus.RUNNING.value:
                 self.store.runs.set_status(run_id, RunStatus.SUCCEEDED)
+            if smoke_evaluated is not None:
+                self._record_development_observations(run_id, smoke_evaluated, scope="dev:smoke")
             observation = self._record_development_observations(run_id, evaluated)
             if reservation["status"] == "reserved":
                 ledger.settle(reservation["reservation_id"], 1.0)
@@ -1125,18 +1154,33 @@ class ResearchController:
             if should_cancel is not None and should_cancel():
                 raise ProtocolError("研究执行已取消")
             envelope = load_envelope(self.run_dir)
+            tokens_used = getattr(self.harness, "tokens_used", 0)
+            if callable(tokens_used):
+                tokens_used = tokens_used()
             if envelope is not None:
                 study = self.store.get("study", self.manifest["study_id"])
-                assert_active(envelope, dev_runs_used=step,
+                assert_active(envelope, dev_runs_used=step, tokens_used=tokens_used,
                               state_version=study["state_version"])
-                write_usage(self.run_dir, dev_runs_used=step)
+                write_usage(self.run_dir, dev_runs_used=step, tokens_used=tokens_used)
+                self.store.record_envelope_approval(envelope)
             decision = choose_action(nodes, direction=direction, rng=random.Random(step))
+            winner = best_node(nodes, direction)
+            write_json(self.run_dir / "search-progress.json", {
+                "step": step + 1, "max_steps": limit, "nodes": len(nodes),
+                "buggy": sum(1 for node in nodes if node["status"] == "buggy"),
+                "best_value": None if winner is None else winner["value"],
+                "dev_runs_used": step,
+                "max_dev_runs": None if envelope is None else envelope["max_dev_runs"],
+                "tokens_used": tokens_used,
+                "max_model_tokens": None if envelope is None else envelope["max_model_tokens"],
+            })
             parent = next((node for node in nodes if node["node_id"] == decision["parent_id"]), None)
             depth = 0 if parent is None else parent["depth"] + 1
             try:
                 outcome = self.implement(
                     hypothesis_id, parent_revision_id=None if parent is None else parent.get("revision_id"),
-                    search_node=True, fidelity="ladder", seen_diffs=seen, should_cancel=should_cancel)
+                    search_node=True, fidelity="ladder", seen_diffs=seen, should_cancel=should_cancel,
+                    node_kind=decision["kind"])
             except RevisionExecutionError as error:
                 nodes.append(node_record(f"node-{step}", decision["kind"], decision["parent_id"],
                                          depth, "buggy", revision_id=error.revision_id))
@@ -1170,7 +1214,7 @@ class ResearchController:
         return self.status()
 
     def run(self, trusted_local=False, sandboxed=False, max_steps=None, auto_confirm=False,
-            autonomous_code=False, should_cancel=None, search=False):
+            autonomous_code=False, should_cancel=None, search=None):
         def check_cancelled():
             if should_cancel is not None and should_cancel():
                 raise ProtocolError("研究执行已取消")
@@ -1190,6 +1234,8 @@ class ResearchController:
             raise ProtocolError("独立确认需先 prepare-confirmation，再导入已签名回执")
         if max_steps is not None and (type(max_steps) is not int or max_steps < 0):
             raise ProtocolError("max_steps 必须是非负整数")
+        if search is None:
+            search = bool(autonomous_code)
         self._verify_inputs()
         self._require_scoring_binding()
         before = self.status()

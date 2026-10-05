@@ -59,6 +59,10 @@ class ConvergenceOrderV1(StagedArtifactsPack):
                     "problem instance (rate, t_end) is shared by all rows of a split"),
     }
 
+    def smoke_repeat_limit(self):
+        """新节点先用一个重复单位冒烟。通过后再跑预注册的全部重复。"""
+        return 1
+
     def invocation(self):
         """调用契约：问题实例（含细化表）+ 格式配置 → 一份测量制品。
 

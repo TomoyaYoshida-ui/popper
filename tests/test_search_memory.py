@@ -7,10 +7,11 @@ from popper.research.tree_search import node_record
 class _Store:
     def __init__(self, rows):
         self.rows = rows
+        self.kinds = []
 
     def list(self, kind):
-        self.assert_kind = kind
-        return self.rows
+        self.kinds.append(kind)
+        return self.rows if kind == "observation" else []
 
 
 class SearchMemoryTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class SearchMemoryTests(unittest.TestCase):
         self.assertLessEqual(len(text.encode("utf-8")), 80)
         self.assertNotIn("O-2", research_notes(
             store, {"candidate_hypothesis_ids": ["H-1"]}, "问题"))
-        self.assertEqual("observation", store.assert_kind)
+        self.assertIn("observation", store.kinds)
 
     def test_journal_ignores_smoke_and_names_the_representative(self):
         nodes = [node_record("n0", "draft", None, 0, "buggy"),

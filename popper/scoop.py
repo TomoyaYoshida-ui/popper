@@ -37,6 +37,8 @@ def make_json_client(base_url, model, diagnostics_dir=None):
             raise ProtocolError("模型接口重定向被拒绝")
     opener = urllib.request.build_opener(NoRedirect)
 
+    spent = {"tokens": 0}
+
     def call(system, payload):
         call_id = uuid.uuid4().hex
         repair_json = False
@@ -68,6 +70,9 @@ def make_json_client(base_url, model, diagnostics_dir=None):
                 choice = envelope["choices"][0]
                 diagnostic["finish_reason"] = choice.get("finish_reason")
                 diagnostic["usage"] = envelope.get("usage")
+                total = (envelope.get("usage") or {}).get("total_tokens")
+                if type(total) is int and total >= 0:
+                    spent["tokens"] += total
                 if choice.get("finish_reason") == "length":
                     raise ValueError("truncated response")
                 result = json.loads(choice["message"]["content"])
@@ -102,6 +107,7 @@ def make_json_client(base_url, model, diagnostics_dir=None):
                     serialized = serialized.replace(key, "[REDACTED]")
                     (folder / f"{call_id}-{attempt + 1}.json").write_text(serialized + "\n", encoding="utf-8")
 
+    call.tokens_used = lambda: spent["tokens"]
     return call
 
 

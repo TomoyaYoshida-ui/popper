@@ -67,6 +67,15 @@ def best_node(nodes, direction="min"):
     return _best(scored, direction) if scored else None
 
 
+def representative_observation(rows, direction="min"):
+    """同一设计的代表观察取完整开发集评分的最优值。冒烟观察不能代表设计。"""
+    scored = [row for row in rows if row.get("scope") == "dev" and row.get("value") is not None]
+    if not scored:
+        return None
+    return min(scored, key=lambda row: row["value"]) if direction == "min" else max(
+        scored, key=lambda row: row["value"])
+
+
 def reject_duplicate(edits, seen):
     fingerprint = diff_fingerprint(edits)
     if fingerprint in seen:

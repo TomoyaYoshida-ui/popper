@@ -6,6 +6,7 @@ from pathlib import Path
 from popper.core import ProtocolError
 from popper.research.envelope import (
     assert_active, build_envelope, covering_envelope, covers_tool, save_envelope, write_usage)
+from popper.research.store import ResearchStore
 from popper.sessions import AgentSessionStore
 
 
@@ -62,6 +63,19 @@ class EnvelopeTests(unittest.TestCase):
             write_usage(run_dir, dev_runs_used=2)
             self.assertIsNone(covering_envelope(
                 root, "workspace.file_replace", {"path": "src/model.py"}))
+
+    def test_approval_is_one_research_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ResearchStore(Path(tmp) / "research.sqlite")
+            try:
+                envelope = _envelope(approved_at=datetime.now(timezone.utc).isoformat())
+                first = store.record_envelope_approval(envelope)
+                second = store.record_envelope_approval(envelope)
+                self.assertEqual(first, second)
+                integrity = store.verify()
+                self.assertTrue(integrity["ok"], integrity)
+            finally:
+                store.close()
 
 
 class EnvelopeApprovalTests(unittest.TestCase):

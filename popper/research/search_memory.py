@@ -39,6 +39,10 @@ def research_notes(store, manifest, question, *, limit=4000):
         for row in own:
             if row.get("scope") == "dev":
                 lines.append(f"  - {row['observation_id']} = {row['value']} ({row['scope']})")
+    failed = [row for row in store.list("run") if str(row.get("status", "")).endswith("failed")]
+    if failed:
+        lines.append(f"- 失败运行 {len(failed)} 次，状态：" +
+                     "、".join(sorted({row["status"] for row in failed})))
     text = "\n".join(lines)
     if len(text.encode("utf-8")) <= limit:
         return text
