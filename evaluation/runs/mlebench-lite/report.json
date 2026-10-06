@@ -1,21 +1,51 @@
 {
-  "schema": "mlebench-lite-budget-v1",
+  "schema": "mlebench-lite-run-v1",
   "tasks": [
     "spooky-author-identification",
     "nomad2018-predict-transparent-conductors",
     "random-acts-of-pizza"
   ],
-  "missing_tasks": [
-    "spooky-author-identification",
-    "nomad2018-predict-transparent-conductors",
-    "random-acts-of-pizza"
+  "task_results": [
+    {
+      "task_id": "spooky-author-identification",
+      "completed": false,
+      "confirmation_calls": 0,
+      "confirmation_consumed_once": false,
+      "tokens_used": 0,
+      "paid_model_calls": 0,
+      "reason": "RulesAcceptanceRequired：比赛规则尚未接受，训练文件未下载"
+    },
+    {
+      "task_id": "nomad2018-predict-transparent-conductors",
+      "completed": false,
+      "confirmation_calls": 0,
+      "confirmation_consumed_once": false,
+      "tokens_used": 0,
+      "paid_model_calls": 0,
+      "reason": "RulesAcceptanceRequired：比赛规则尚未接受，训练文件未下载"
+    },
+    {
+      "task_id": "random-acts-of-pizza",
+      "completed": false,
+      "confirmation_calls": 0,
+      "confirmation_consumed_once": false,
+      "tokens_used": 0,
+      "paid_model_calls": 0,
+      "reason": "RulesAcceptanceRequired：比赛规则尚未接受，训练文件未下载"
+    }
   ],
-  "data_root": "C:\\Users\\wangj\\Desktop\\research\\research-agent-v2\\evaluation\\data\\mlebench-lite",
+  "files": [],
+  "execution": "not_started",
   "budget_confirmed_tokens": 600000,
   "per_task_token_cap": 200000,
   "paid_model_calls": 0,
   "tokens_used": 0,
-  "holdout_seal_available": true,
-  "status": "blocked_missing_raw_data",
-  "reason": "未找到原始训练文件，也没有 Kaggle 凭据。已确认的 token 上限没有消耗。"
+  "confirmation_calls": [
+    0,
+    0,
+    0
+  ],
+  "confirmation_consumed_once": false,
+  "status": "blocked_rules_acceptance",
+  "reason": "Kaggle 认证已通过，但下载返回 403 RulesAcceptanceRequired。当前 CLI 没有 rules accept 子命令，三份训练文件未落地。未调用模型。"
 }

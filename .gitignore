@@ -40,6 +40,9 @@ pytest-output.txt
 .mypy_cache/
 .ruff_cache/
 
+# Kaggle 原始训练文件不入库
+evaluation/data/
+
 # ---- 运行产物：只保留每个 run 目录顶层的报告 json ----
 # 完整产物（~200MB、含 per-cell 轨迹与本地状态库）只存在本机；仓库内保留可读的
 # 结论报告与脚本，任何人不该需要把 holdout 真值库推进 git。

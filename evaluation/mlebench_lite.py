@@ -62,7 +62,7 @@ def materialize(task_id, rows, dest):
     _write_json(project / "dev.json", dev)
     _write_json(project / "test.json", private)
     _write_json(project / "experiment.json", _experiment(task_id))
-    (project / "model.py").write_text(_MODEL, encoding="utf-8")
+    (project / "model.py").write_text(model_source(), encoding="utf-8")
     manifest = {
         "task_id": task_id,
         "confirmation_file": "project/test.json",
@@ -135,7 +135,7 @@ def _experiment(task_id):
         "metric": _METRICS[task_id],
         "seeds": [0],
         "budget": 1,
-        "timeout_seconds": 120,
+        "timeout_seconds": 300,
         "min_improvement": 0.01,
     }
 
@@ -189,21 +189,13 @@ def _assert_disjoint(train, dev, private):
             raise ValueError("确认标签进入了开发文件")
 
 
+def model_source():
+    """预注册入口的源码。计分仍由领域包完成，这里只是候选程序。"""
+    return Path(__file__).with_name("mlebench_lite_entrypoint.py").read_text(encoding="utf-8")
+
+
 def _write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-_MODEL = '''"""候选入口。确认集由研究内核单独计分，本文件不读取 test.json。"""
-from __future__ import annotations
-
-
-def main():
-    raise SystemExit("候选模型尚未实现")
-
-
-if __name__ == "__main__":
-    main()
-'''
 
 
 def main():
