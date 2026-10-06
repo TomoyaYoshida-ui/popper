@@ -17,6 +17,7 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 
 from popper.domains.mlebench_lite import SPOOKY_AUTHORS
+from popper.domains.protocol import get as get_pack
 from popper.sandbox import seal_read_available
 
 TOKEN_CAP = 600_000
@@ -32,6 +33,11 @@ _METRICS = {
     "nomad2018-predict-transparent-conductors": {"name": "nomad_mean_rmsle", "direction": "min"},
     "random-acts-of-pizza": {"name": "pizza_roc_auc", "direction": "max"},
 }
+_EVALUATORS = {
+    "spooky-author-identification": "mlebench-spooky-logloss-v1",
+    "nomad2018-predict-transparent-conductors": "mlebench-nomad-rmsle-v1",
+    "random-acts-of-pizza": "mlebench-pizza-auc-v1",
+}
 
 
 def data_root():
@@ -41,11 +47,30 @@ def data_root():
     return Path(__file__).resolve().parent / "data" / "mlebench-lite"
 
 
-def holdout_split(rows):
-    """10% 确认集，种子 0；再从公开部分切 20% 开发集，种子 1。"""
-    public, private = train_test_split(list(rows), test_size=0.1, random_state=0)
+def holdout_split(rows, identity=None):
+    """10% 确认集，种子 0；再从公开部分切 20% 开发集，种子 1。
+
+    给出样本身份时，完全相同的样本整组进入同一个划分，避免确认集里出现
+    开发文件中已经有的行。
+    """
+    items = list(rows)
+    if identity is not None:
+        groups = {}
+        order = []
+        for row in items:
+            key = identity(row)
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(row)
+        items = order
+    public, private = train_test_split(items, test_size=0.1, random_state=0)
     train, dev = train_test_split(list(public), test_size=0.2, random_state=1)
     train, dev, private = list(train), list(dev), list(private)
+    if identity is not None:
+        train = [row for key in train for row in groups[key]]
+        dev = [row for key in dev for row in groups[key]]
+        private = [row for key in private for row in groups[key]]
     _assert_disjoint(train, dev, private)
     return train, dev, private
 
@@ -57,7 +82,7 @@ def materialize(task_id, rows, dest):
     dest = Path(dest)
     project = dest / "project"
     project.mkdir(parents=True, exist_ok=True)
-    train, dev, private = holdout_split(rows)
+    train, dev, private = holdout_split(rows, get_pack(_EVALUATORS[task_id]).row_identity)
     _write_json(project / "train.json", train)
     _write_json(project / "dev.json", dev)
     _write_json(project / "test.json", private)

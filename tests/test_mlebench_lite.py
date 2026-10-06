@@ -83,6 +83,20 @@ class HoldoutTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertGreaterEqual(len(first), 1)
 
+    def test_duplicate_rows_stay_in_one_split(self):
+        rows = _nomad_rows()
+        rows.append({**rows[0], "id": "n-copy"})
+        with tempfile.TemporaryDirectory() as directory:
+            materialize("nomad2018-predict-transparent-conductors", rows, directory)
+            project = Path(directory) / "project"
+            initialize(project)
+            placed = {}
+            for name in ("train.json", "dev.json", "test.json"):
+                for row in json.loads((project / name).read_text(encoding="utf-8")):
+                    key = (tuple(row["features"]), tuple(row["y"]))
+                    placed.setdefault(key, set()).add(name)
+            self.assertTrue(all(len(names) == 1 for names in placed.values()))
+
     def test_loaders_keep_typed_labels_and_do_not_spend_tokens(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

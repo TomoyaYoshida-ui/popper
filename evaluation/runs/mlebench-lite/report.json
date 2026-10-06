@@ -8,44 +8,66 @@
   "task_results": [
     {
       "task_id": "spooky-author-identification",
-      "completed": false,
-      "confirmation_calls": 0,
-      "confirmation_consumed_once": false,
-      "tokens_used": 0,
-      "paid_model_calls": 0,
-      "reason": "RulesAcceptanceRequired：比赛规则尚未接受，训练文件未下载"
+      "completed": true,
+      "confirmation_calls": 1,
+      "confirmation_consumed_once": true,
+      "phase": "concluded",
+      "core_phase": "completed",
+      "tokens_used": 7195,
+      "paid_model_calls": 3,
+      "reason": null
     },
     {
       "task_id": "nomad2018-predict-transparent-conductors",
-      "completed": false,
-      "confirmation_calls": 0,
-      "confirmation_consumed_once": false,
-      "tokens_used": 0,
-      "paid_model_calls": 0,
-      "reason": "RulesAcceptanceRequired：比赛规则尚未接受，训练文件未下载"
+      "completed": true,
+      "confirmation_calls": 1,
+      "confirmation_consumed_once": true,
+      "phase": "concluded",
+      "core_phase": "completed",
+      "tokens_used": 8035,
+      "paid_model_calls": 3,
+      "reason": null
     },
     {
       "task_id": "random-acts-of-pizza",
-      "completed": false,
-      "confirmation_calls": 0,
-      "confirmation_consumed_once": false,
-      "tokens_used": 0,
-      "paid_model_calls": 0,
-      "reason": "RulesAcceptanceRequired：比赛规则尚未接受，训练文件未下载"
+      "completed": true,
+      "confirmation_calls": 1,
+      "confirmation_consumed_once": true,
+      "phase": "concluded",
+      "core_phase": "completed",
+      "tokens_used": 7093,
+      "paid_model_calls": 3,
+      "reason": null
     }
   ],
-  "files": [],
-  "execution": "not_started",
+  "files": [
+    {
+      "task_id": "spooky-author-identification",
+      "bytes": 3295644,
+      "lines": 19580
+    },
+    {
+      "task_id": "nomad2018-predict-transparent-conductors",
+      "bytes": 218636,
+      "lines": 2401
+    },
+    {
+      "task_id": "random-acts-of-pizza",
+      "bytes": 12569177,
+      "records": 4040
+    }
+  ],
+  "execution": "sandbox",
   "budget_confirmed_tokens": 600000,
   "per_task_token_cap": 200000,
-  "paid_model_calls": 0,
-  "tokens_used": 0,
+  "paid_model_calls": 9,
+  "tokens_used": 22323,
   "confirmation_calls": [
-    0,
-    0,
-    0
+    1,
+    1,
+    1
   ],
-  "confirmation_consumed_once": false,
-  "status": "blocked_rules_acceptance",
-  "reason": "Kaggle 认证已通过，但下载返回 403 RulesAcceptanceRequired。当前 CLI 没有 rules accept 子命令，三份训练文件未落地。未调用模型。"
+  "confirmation_consumed_once": true,
+  "status": "completed",
+  "reason": null
 }
