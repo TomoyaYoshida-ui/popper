@@ -41,6 +41,17 @@ class JsonRecoveryTests(unittest.TestCase):
             budgets = [json.loads(c.args[0].data)["max_tokens"] for c in opener.open.call_args_list]
             self.assertEqual([8000, 16000], budgets)
 
+    def test_qianwen_flash_caps_reasoning_on_the_json_client(self):
+        with patch.dict("os.environ", {"POPPER_API_KEY": "test"}):
+            opener = Mock()
+            opener.open.return_value = response('{"ok":true}')
+            with patch("popper.scoop.urllib.request.build_opener", return_value=opener):
+                make_json_client("https://maas.qianwenaiapi.com/v1", "qwen3.8-flash")("JSON", {})
+            body = json.loads(opener.open.call_args.args[0].data)
+            self.assertEqual(1024, body["thinking_budget"])
+            self.assertTrue(body["enable_thinking"])
+            self.assertEqual(8000, body["max_tokens"])
+
     def test_transient_network_error_has_one_recovery_attempt(self):
         with patch.dict("os.environ", {"POPPER_API_KEY": "test"}):
             opener = Mock()

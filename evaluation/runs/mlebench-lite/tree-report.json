@@ -1,0 +1,54 @@
+{
+  "schema": "mlebench-lite-tree-v1",
+  "tasks": [
+    {
+      "task_id": "spooky-author-identification",
+      "best_dev": 0.4566729143668833,
+      "linear_dev": 0.5357816025471395,
+      "baseline_dev": 1.0865072784096697,
+      "min_improvement": 0.5507256758625302,
+      "direction": "min",
+      "beats_linear": true,
+      "phase": "ready_for_confirmation",
+      "confirmation_calls": 0,
+      "tokens_used": 14187,
+      "paid_model_calls": 9,
+      "reason": null
+    },
+    {
+      "task_id": "nomad2018-predict-transparent-conductors",
+      "best_dev": 0.06116383885128415,
+      "linear_dev": 0.11389975695107324,
+      "baseline_dev": 0.20322032116366168,
+      "min_improvement": 0.08932056421258844,
+      "direction": "min",
+      "beats_linear": true,
+      "phase": "ready_for_confirmation",
+      "confirmation_calls": 0,
+      "tokens_used": 20432,
+      "paid_model_calls": 7,
+      "reason": null
+    },
+    {
+      "task_id": "random-acts-of-pizza",
+      "best_dev": 0.6250238595151747,
+      "linear_dev": 0.6250238595151747,
+      "baseline_dev": 0.5,
+      "min_improvement": 0.1250238595151747,
+      "direction": "max",
+      "beats_linear": false,
+      "phase": "ready_for_confirmation",
+      "confirmation_calls": 0,
+      "tokens_used": 32095,
+      "paid_model_calls": 8,
+      "reason": "实验树的最佳开发集节点没有超过线性候选"
+    }
+  ],
+  "budget_confirmed_tokens": 600000,
+  "tokens_already_used": 22323,
+  "tokens_used": 66714,
+  "tokens_used_total": 89037,
+  "paid_model_calls": 24,
+  "confirmation_calls": 0,
+  "status": "incomplete"
+}

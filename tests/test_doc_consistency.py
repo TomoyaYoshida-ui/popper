@@ -23,6 +23,7 @@ HEADING = re.compile(r"(?m)^#{2,4}\s+(\d+(?:\.\d+)?)\b")
 
 BLIND_REPORT = (REPO / "evaluation" / "runs" / "bp-20260913T083501Z-c32a"
                 / "blind-repair-report.json")
+TREE_REPORT = REPO / "evaluation" / "runs" / "mlebench-lite" / "tree-report.json"
 # 标记名 -> 产物内的取值路径；路径末项 "__len__" 表示取该列表的长度。映射放在代码里而不是
 # 文档里，是为了避免「文档自己跟自己校对」：文档只能声明数值，取哪个字段由这里说了算。
 BLIND_MARKERS = {
@@ -122,6 +123,33 @@ class DocConsistencyTests(unittest.TestCase):
         self.assertFalse(report["claims"]["adaptive_gain_claimed"],
                          "产物不再声明自适应增益为否，文档的保守口径需同步上调")
         self.assertFalse(report["claims"]["scientific_accuracy_claimed"])
+
+    def test_lite_tree_numbers_in_doc_match_the_artifact(self):
+        """实验树的超过、打平和确认次数必须从 tree-report.json 实算，不能手写第二套。"""
+        self.assertTrue(TREE_REPORT.is_file(),
+                        f"缺少 {TREE_REPORT.relative_to(REPO).as_posix()}")
+        report = json.loads(TREE_REPORT.read_text(encoding="utf-8"))
+        tasks = report["tasks"]
+        beats = sum(1 for task in tasks if task["beats_linear"] is True)
+        ties = sum(1 for task in tasks
+                   if task["beats_linear"] is False and task["best_dev"] is not None
+                   and task["best_dev"] == task["linear_dev"])
+        expected = {
+            "lite_tree_beats_linear": beats,
+            "lite_tree_ties_linear": ties,
+            "lite_tree_confirmation_calls": report["confirmation_calls"],
+            "lite_tree_tokens_used_total": report["tokens_used_total"],
+            "lite_tree_budget_confirmed_tokens": report["budget_confirmed_tokens"],
+        }
+        declared = doc_markers()
+        for name, actual in expected.items():
+            self.assertIn(name, declared,
+                          f"docs/技术方案.md 缺少 ci-check: {name} 标记")
+            self.assertEqual(int(declared[name]), actual,
+                             f"文档里的 {name}={declared[name]} 与产物实算 {actual} 不一致")
+        self.assertEqual(beats + ties, len(tasks))
+        self.assertEqual(sum(task["confirmation_calls"] for task in tasks),
+                         report["confirmation_calls"])
 
     def test_section_references_point_at_a_real_heading(self):
         """形如 §9.4 的引用必须在技术方案.md 里能找到对应小节。悬空章节号是文档漂移里

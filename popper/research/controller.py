@@ -1186,10 +1186,17 @@ class ResearchController:
                                          depth, "buggy", revision_id=error.revision_id))
                 continue
             except ProtocolError as error:
-                if "重复节点" not in str(error):
+                message = str(error)
+                if "模型调用失败" in message:
+                    time.sleep(20)
+                    nodes.append(node_record(
+                        f"node-{step}", decision["kind"], decision["parent_id"], depth, "buggy"))
+                    continue
+                if "重复节点" not in message and "必须给出代码修改" not in message:
                     raise
-                nodes.append(node_record(f"node-{step}", decision["kind"], decision["parent_id"],
-                                         depth, "duplicate"))
+                nodes.append(node_record(
+                    f"node-{step}", decision["kind"], decision["parent_id"], depth,
+                    "duplicate" if "重复节点" in message else "buggy"))
                 continue
             observation = outcome["observation"]
             revision = outcome.get("revision") or {}

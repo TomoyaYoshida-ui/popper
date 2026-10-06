@@ -28,7 +28,17 @@ def research_notes(store, manifest, question, *, limit=4000):
     baseline_rows = [row for row in observations if row.get("hypothesis_id") == control_id
                      and row.get("scope") == "dev" and row.get("value") is not None]
     baseline_value = None if not baseline_rows else baseline_rows[-1]["value"]
-    lines = [question, "", "研究笔记（由研究记录投影，不是新的事实来源）："]
+    lines = [
+        question, "",
+        "Experiment-tree search node: return a non-empty edits array. "
+        "Empty edits are rejected and do not end the search. "
+        "Change an executable statement that runs during prediction for every seed. "
+        "Keep the frozen config and the CLI contract. "
+        "Improve the development metric past the constant baseline and past any "
+        "development score listed below.",
+        "",
+        "研究笔记（由研究记录投影，不是新的事实来源）：",
+    ]
     for hypothesis_id in manifest["candidate_hypothesis_ids"]:
         own = [row for row in observations if row.get("hypothesis_id") == hypothesis_id]
         progress = progress_for(hypothesis_id, observations, baseline_value=baseline_value,

@@ -33,6 +33,10 @@ class SearchMemoryTests(unittest.TestCase):
             store, {"candidate_hypothesis_ids": ["H-1"]}, "问题"))
         self.assertIn("observation", store.kinds)
 
+    def test_search_notes_require_a_code_edit(self):
+        text = research_notes(_Store([]), {"candidate_hypothesis_ids": ["H-1"]}, "问题")
+        self.assertIn("non-empty edits", text)
+
     def test_journal_ignores_smoke_and_names_the_representative(self):
         nodes = [node_record("n0", "draft", None, 0, "buggy"),
                  node_record("n1", "draft", None, 0, "scored", 0.4),

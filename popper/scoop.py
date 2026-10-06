@@ -47,6 +47,12 @@ def make_json_client(base_url, model, diagnostics_dir=None):
                     "response_format": {"type": "json_object"},
                     "messages": [{"role": "system", "content": system},
                                  {"role": "user", "content": canonical(payload)}]}
+            from .chat import request_output_limits
+            limits = request_output_limits(base_url, model)
+            if "thinking_budget" in limits:
+                # 这个端点默认深度思考，非流式连接大约 76 秒会被掐断。
+                body["enable_thinking"] = limits["enable_thinking"]
+                body["thinking_budget"] = limits["thinking_budget"]
             if repair_json:
                 body["messages"].append({"role": "user", "content":
                     "The previous response was truncated or invalid JSON. Return one complete JSON "
