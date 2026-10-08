@@ -32,6 +32,7 @@ def build_context(store, study_id, manifest):
     return {"study_id": study_id, "study": study, "candidates": candidates, "runs": runs,
             "observations": observations, "decisions": decisions, "claims": claims,
             "reflections": [r for r in store.list("reflection") if r["study_id"] == study_id],
+            'judgments': [j for j in store.list('judgment') if j['study_id'] == study_id],
             "budget": budget,
             "metric": manifest["metric"],
             "min_meaningful_effect": manifest["min_meaningful_effect"],

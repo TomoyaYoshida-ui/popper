@@ -56,6 +56,7 @@ AUTHORITY = {
     "audit_event": "research_store",
     # 接入事件不是 Observation / Claim。写入方仍是本模块。
     "dataset": "research_store",
+    "judgment": "evaluation_service",
 }
 
 # 已退役的权威名 → 当前名。历史研究库里 run 事件记录为 experiment_service，
@@ -840,6 +841,8 @@ class ResearchStore:
                             "rationale": decision.rationale,
                             "budget_request": decision.budget_request,
                             "actor": decision.actor, "model": decision.model}
+                if decision.judgment_refs:
+                    proposed['judgment_refs'] = list(decision.judgment_refs)
                 if self._same_payload(current, proposed):
                     return {"status": "duplicate", "decision_id": decision.decision_id}
                 raise ProtocolError("相同 decision_id 对应不同内容")
@@ -855,16 +858,53 @@ class ResearchStore:
                 observation = self.get("observation", ref)
                 if observation.get("study_id") != decision.study_id:
                     raise ProtocolError(f"决策引用了其他 study 的观察: {ref}")
+            for ref in decision.judgment_refs:
+                judgment = self.get('judgment', ref)
+                if (judgment is None or judgment['study_id'] != decision.study_id
+                        or not set(judgment['observation_refs']).issubset(decision.observation_refs)):
+                    raise ProtocolError('决策判断引用未绑定观察')
             seq = self._conn.execute("SELECT COALESCE(MAX(seq),0)+1 FROM events").fetchone()[0]
             payload = {"study_id": decision.study_id, "state_version": decision.state_version,
                        "observation_refs": list(decision.observation_refs),
                        "action": decision.action, "alternatives": list(decision.alternatives),
                        "rationale": decision.rationale, "budget_request": decision.budget_request,
                        "actor": decision.actor, "model": decision.model}
+            if decision.judgment_refs:
+                payload['judgment_refs'] = list(decision.judgment_refs)
             self._append("decision", decision.decision_id, "created", payload, writer)
             self._upsert("decision", decision.decision_id, "recorded", payload, writer, seq)
             self._touch_study(decision.study_id)
             return {"status": "recorded", "decision_id": decision.decision_id}
+        return self._transaction(_do)
+
+    def record_judgment(self, hypothesis_id, version, observation_refs=(), *, comparison_artifact=None):
+        """Derive an immutable judgment from verified evaluator observations, never model scores."""
+        from .judgment import derive
+        def _do():
+            integrity = self.verify()
+            if not integrity['ok']:
+                raise ProtocolError('判断证据完整性失败: ' + integrity['reason'])
+            hypothesis = self.get('hypothesis', hypothesis_id)
+            if hypothesis is None or hypothesis['version'] != version:
+                raise ProtocolError('判断假设版本过期')
+            self._require_study_active(hypothesis['study_id'])
+            designs = [d for d in self.list('design') if d['hypothesis_id'] == hypothesis_id and d['hypothesis_version'] == version]
+            if not designs:
+                raise ProtocolError('判断没有对应冻结设计')
+            observations = [self.get('observation', ref) for ref in observation_refs]
+            if any(o is None or o.get('study_id') != hypothesis['study_id'] for o in observations):
+                raise ProtocolError('判断引用不存在或其他研究的证据')
+            history = [j for j in self.list('judgment') if j['hypothesis_id'] == hypothesis_id and j['hypothesis_version'] == version]
+            for old in history:
+                if old['observation_refs'] == list(observation_refs) and old['comparison_artifact'] == comparison_artifact:
+                    return old
+            previous = history[-1] if history else None
+            payload = derive(hypothesis, designs[-1], observations, previous, comparison_artifact)
+            seq = self._conn.execute('SELECT COALESCE(MAX(seq),0)+1 FROM events').fetchone()[0]
+            self._append('judgment', payload['judgment_id'], 'created', payload, AUTHORITY['judgment'])
+            self._upsert('judgment', payload['judgment_id'], payload['new_judgment'], payload, AUTHORITY['judgment'], seq)
+            self._touch_study(hypothesis['study_id'])
+            return self.get('judgment', payload['judgment_id'])
         return self._transaction(_do)
 
     def record_envelope_approval(self, envelope):
@@ -1265,6 +1305,10 @@ class ResearchStore:
                                 "alternatives": [proposed["alternative_explanation"]],
                                 "rationale": proposed["rationale"], "budget_request": 0.0,
                                 "actor": actor, "model": model}
+            judgments = [j for j in self.list('judgment') if j['observation_refs']
+                         and set(j['observation_refs']) == set(refs)]
+            if judgments:
+                decision_payload['judgment_refs'] = [j['judgment_id'] for j in judgments]
             _write("decision", decision_id, "created", "recorded", decision_payload)
             return self.get("reflection", reflection_id)
         return self._transaction(_do)
@@ -1619,6 +1663,27 @@ class ResearchStore:
 
             key = (kind, entity_id)
             current = expected_snapshots.get(key)
+            if kind == 'decision' and decoded.get('judgment_refs'):
+                for ref in decoded['judgment_refs']:
+                    judgment = expected_snapshots.get(('judgment', ref))
+                    if (judgment is None or judgment['payload']['study_id'] != decoded['study_id']
+                            or not set(judgment['payload']['observation_refs']).issubset(decoded['observation_refs'])):
+                        return fail('决策判断引用无法重放')
+            if kind == 'judgment':
+                try:
+                    from .judgment import derive
+                    h = expected_snapshots[('hypothesis', decoded['hypothesis_id'])]['payload']
+                    designs = [s['payload'] for (k, _), s in expected_snapshots.items() if k == 'design'
+                               and s['payload']['hypothesis_id'] == h['hypothesis_id']
+                               and s['payload']['hypothesis_version'] == h['version']]
+                    observations = [expected_snapshots[('observation', r)]['payload'] for r in decoded['observation_refs']]
+                    previous = expected_snapshots.get(('judgment', decoded['previous_judgment_id']))
+                    expected = derive(h, designs[-1], observations,
+                                      previous['payload'] if previous else None, decoded['comparison_artifact'])
+                    if decoded != expected or entity_id != expected['judgment_id'] or current is not None:
+                        return fail('判断无法从独立证据重算')
+                except (KeyError, IndexError, TypeError, OSError, ProtocolError):
+                    return fail('判断引用或评估制品不合法')
             if event_type in {"created", "registered", "revised"}:
                 statuses = {
                     ("study", "created"): StudyStatus.ACTIVE.value,
@@ -1630,6 +1695,7 @@ class ResearchStore:
                     ("decision", "created"): "recorded",
                     ("claim", "created"): decoded.get("status"),
                     ("reflection", "created"): "recorded",
+                    ('judgment', 'created'): decoded.get('new_judgment'),
                 }
                 status = statuses.get((kind, event_type))
                 if status is None:

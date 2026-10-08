@@ -82,10 +82,10 @@ class EvidenceDrivenPolicy:
 class DeepSeekResearchPolicy(EvidenceDrivenPolicy):
     """DeepSeek 只从内核给出的合法假设与动作中选择，不能自报结果。"""
 
-    def __init__(self, base_url, model="deepseek-flash", diagnostics_dir=None):
+    def __init__(self, base_url, model="deepseek-flash", diagnostics_dir=None, *, request_budget=None):
         self.model = model
         self.name = "deepseek_json_policy"
-        self._call = make_json_client(base_url, model, diagnostics_dir)
+        self._call = make_json_client(base_url, model, diagnostics_dir, request_budget=request_budget)
 
     def propose_experiment(self, context):
         payload = {key: context.get(key) for key in ("study_id", "metric", "min_meaningful_effect",

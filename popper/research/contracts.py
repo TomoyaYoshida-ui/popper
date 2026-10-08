@@ -335,6 +335,7 @@ class Decision:
     budget_request: float = 0.0
     actor: str = "research_store"
     model: Optional[str] = None
+    judgment_refs: tuple = field(default_factory=tuple)
 
     def __post_init__(self):
         if not self.decision_id or not self.study_id or not self.action:

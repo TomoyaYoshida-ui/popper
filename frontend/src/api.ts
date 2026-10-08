@@ -201,6 +201,9 @@ export type RevisionDetail = {
   diff_attestation_id: string | null
 }
 export type ResearchRunState = {
+  judgments?: Array<{ judgment_id: string; hypothesis_id: string; hypothesis_version: number;
+    new_judgment: 'supported' | 'refuted' | 'inconclusive' | 'not_evaluated'; scope: string;
+    observation_refs: string[]; next_action: string; mechanism_proven: false }>
   run_dir: string
   ok: boolean
   lifecycle_phase?: string

@@ -182,6 +182,9 @@ def build_reflection_context(context, baseline, observation, hypothesis_id):
             "observations": list(dev_by_id.values()),
             "slice_effects": slice_effects, "boundary_detected": boundary,
             "evidence_refs": evidence_refs,
+            'judgments': [{k:j.get(k) for k in ('judgment_id','hypothesis_id','hypothesis_version',
+                           'new_judgment','scope','reason','next_action','observation_refs','evidence')}
+                          for j in context.get('judgments', []) if j.get('scope')=='dev'],
             "allowed_actions": _allowed_actions(effect, threshold, remaining, available, boundary)}
 
 

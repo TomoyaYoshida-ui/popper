@@ -100,6 +100,8 @@ class ResearchController:
         if (confirmation_contract is None) != (confirmation_public_key is None):
             raise ProtocolError("确认合同与独立固定的服务公钥必须同时提供")
         if confirmation_contract is not None:
+            if 'confirmation_train' in spec:
+                raise ProtocolError('外部确认合同尚不支持 confirmation_train 重拟合；不能静默改变训练身份')
             if getattr(pack, "units_from_data", False):
                 raise ProtocolError("数据内分析单元尚不能使用外部确认合同")
             from .confirmation_contracts import validate_contract
@@ -143,6 +145,7 @@ class ResearchController:
         assert_study_budget_floor(project, cap)
         manifest = {
             "schema_version": "1.0", "project": str(project), "study_id": study_id,
+            'judgment_schema': 'research-judgment/v1',
             "family_id": family_id, "control_hypothesis_id": control_hypothesis_id,
             "candidate_hypothesis_ids": candidate_ids, "configs": configs,
             "metric": spec["metric"], "scorer_id": state["evaluator_id"],
@@ -197,6 +200,18 @@ class ResearchController:
                  "alternatives": []}, is_control=True)
             for hypothesis_id, hypothesis in zip(candidate_ids, generated):
                 _create_hypothesis_and_design(store, manifest, hypothesis_id, hypothesis)
+            if 'judgment-protocol.json' in spec.get('provenance_files', []):
+                protocol = read_json(project / 'judgment-protocol.json')
+                for alternate_id in protocol['hypothesis_predictions']:
+                    if alternate_id in candidate_ids:
+                        continue
+                    shadow = {**manifest, 'configs': {**manifest['configs'], alternate_id: spec['candidates'][0]}}
+                    _create_hypothesis_and_design(store, shadow, alternate_id, {
+                        'mechanism': 'Single-tree structure suffices at the fixed rule budget',
+                        'applicability': 'Frozen Concrete recipe groups',
+                        'predictions': ['Relative grouped MAE improvement lies between -0.05 and 0.05'],
+                        'falsification': ['Confidence interval falls outside the registered interval'],
+                        'alternatives': ['Additive multi-tree structure improves held-out prediction']})
         finally:
             store.close()
         controller = cls(run_dir, policy=policy)
@@ -335,6 +350,8 @@ class ResearchController:
         write_successor_proposal(self.run_dir, proposal)
 
     def _record(self, proposal, observation_refs=(), budget_request=0.0):
+        judgments = [j for j in self.store.list('judgment')
+                     if j['observation_refs'] and set(j['observation_refs']) == set(observation_refs)]
         study = self.store.get("study", self.manifest["study_id"])
         ordinal = len(self.store.list("decision")) + 1
         decision_id = "DEC-" + digest({"ordinal": ordinal,
@@ -344,7 +361,22 @@ class ResearchController:
             decision_id, self.manifest["study_id"], study["state_version"],
             tuple(observation_refs), proposal.kind, proposal.alternatives,
             proposal.rationale, budget_request,
-            actor=proposal.source, model=proposal.model))
+            actor=proposal.source, model=proposal.model,
+            judgment_refs=tuple(j['judgment_id'] for j in judgments)))
+
+    def _update_judgments(self, baseline, observation):
+        if self.manifest.get('judgment_schema') != 'research-judgment/v1':
+            return []  # Old runs remain not_recorded; never manufacture historical judgments.
+        descriptor = None
+        ids = [observation['hypothesis_id']]
+        state = self._verify_inputs()
+        if 'judgment-protocol.json' in state['spec'].get('provenance_files', []):
+            from .grouped_comparison import compare_observations
+            descriptor = compare_observations(self.project, self.run_dir, baseline, observation)
+            ids = list(read_json(self.project/'judgment-protocol.json')['hypothesis_predictions'])
+        return [self.store.record_judgment(hid, self.store.get('hypothesis',hid)['version'],
+                    (baseline['observation_id'],observation['observation_id']), comparison_artifact=descriptor)
+                for hid in ids]
 
     def _observation_for_design(self, design_id, scope="dev"):
         rows = [o for o in self.store.list("observation")
@@ -435,7 +467,7 @@ class ResearchController:
                 shutil.rmtree(staging)
             raise
 
-    def _staged_inputs(self, invocation, inputs_dir, state, rows, config, evaluator_id):
+    def _staged_inputs(self, invocation, inputs_dir, state, rows, config, evaluator_id, *, split='dev'):
         """按声明的输入角色落位输入制品，返回 InputArtifact tuple。
 
         落位名与 job_invocation() 生成的 args 同源（都来自 invocation.inputs），
@@ -445,7 +477,7 @@ class ResearchController:
         for role, basename in invocation.inputs:
             target = inputs_dir / basename
             if role == "train":
-                train = state["spec"]["train"]
+                train = state['spec'].get('confirmation_train',state['spec']['train']) if split=='test' else state['spec']['train']
                 sources[role] = (self.project / train, state["input_hashes"][train])
             elif role == "inputs":
                 write_json(target, model_inputs(rows, evaluator_id))
@@ -514,7 +546,7 @@ class ResearchController:
             inputs_dir.mkdir(parents=True, exist_ok=True)
             pack = evaluator_pack(evaluator_id)
             artifacts = self._staged_inputs(
-                pack.invocation(), inputs_dir, state, rows, config, evaluator_id)
+                pack.invocation(), inputs_dir, state, rows, config, evaluator_id, split=split)
             seed_specs = []
             # 重复单位取值与 core.evaluate 同源：分析单元域包从本划分数据导出，
             # 训练种子/独立重复域包取预注册 seeds。本处曾经直接读 spec["seeds"]，
@@ -522,6 +554,8 @@ class ResearchController:
             for seed in repeat_values(pack, rows, spec):
                 args, outputs = job_invocation(pack, seed)
                 output = outputs[0]
+                if 'judgment-protocol.json' in spec.get('provenance_files', []):
+                    outputs = (*outputs, f'outputs/model-audit-{seed}.json')
                 job = JobSpec(
                     idempotency_key=f"{rid}:seed:{seed}:{split}-v1",
                     revision_id=revision_id, revision_manifest_sha256=revision_sha,
@@ -590,6 +624,9 @@ class ResearchController:
                         raise ProtocolError(
                             f"已注册实现执行失败: {receipt['status']}/{receipt.get('error_type')}")
                     prediction_path = run_dir / pack.invocation().prediction_name(seed)
+                    if 'judgment-protocol.json' in spec.get('provenance_files', []):
+                        audit_bytes = self.worker.read_artifact(job.job_id, f'outputs/model-audit-{seed}.json')
+                        (run_dir/f'model-audit-{seed}.json').write_bytes(audit_bytes)
                     self.worker.fetch_artifact(job.job_id, output, prediction_path)
                     points.append({"seed": seed,
                                    "value": score(rows, read_json(prediction_path), evaluator_id,
@@ -1145,6 +1182,7 @@ class ResearchController:
         for observation in self.store.list("observation"):
             if observation.get("scope") != "dev" or observation["hypothesis_id"] not in candidates:
                 continue
+            self._update_judgments(baseline, observation)
             hypothesis = self.store.get("hypothesis", observation["hypothesis_id"])
             if hypothesis["status"] == HypothesisStatus.UNTESTED.value:
                 delta = (baseline["value"] - observation["value"]
@@ -1394,6 +1432,7 @@ class ResearchController:
             delta = (baseline["value"] - observation["value"] if direction == "min"
                      else observation["value"] - baseline["value"])
             threshold = self.manifest["min_meaningful_effect"]
+            self._update_judgments(baseline, observation)
             if delta >= threshold:
                 target = HypothesisStatus.SUPPORTED_IN_SCOPE
             elif delta <= -threshold:
@@ -1677,6 +1716,7 @@ class ResearchController:
                      observations[1]["value"] - observations[0]["value"])
             passed = delta >= self.manifest["min_meaningful_effect"]
             observation_refs = tuple(o["observation_id"] for o in observations)
+            judgments = self._update_judgments(observations[0], observations[1])
             already_recorded = any(
                 d["actor"] == "confirmation_controller" and d["action"] == STOP
                 and tuple(d["observation_refs"]) == observation_refs
@@ -1685,7 +1725,8 @@ class ResearchController:
                 self._record(ActionProposal(
                     STOP, f"独立进程确认的方向统一效应为 {delta:.8g}；"
                           f"预注册阈值为 {self.manifest['min_meaningful_effect']:.8g}；"
-                          f"结论={'支持' if passed else '证据不足'}。",
+                          f"描述性阈值={'达标' if passed else '未达标'}；科研判断="
+                          + ','.join(j['new_judgment'] for j in judgments) + '；不证明机制。',
                     alternatives=("新的独立数据复现",), source="confirmation_controller"),
                     observation_refs=observation_refs)
             confirmation_decision = next(
@@ -1738,6 +1779,7 @@ class ResearchController:
                 "claims": context["claims"],
                 "decisions": decisions, "budget": context["budget"],
                 "reflections": context["reflections"],
+                'judgments': context['judgments'],
                 "integrity": self.store.verify(),
                 "capability_mode": self.manifest["capability_mode"],
                 "evaluation_trust": "separate_process_same_account",

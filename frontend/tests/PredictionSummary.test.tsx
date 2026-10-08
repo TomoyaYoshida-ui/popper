@@ -14,4 +14,11 @@ describe('prediction assurance', () => {
     render(<PredictionSummary value={{ predictions: ['accuracy exceeds 0.577'] }} />)
     expect(screen.getByText(/历史文字预测尚未验证/)).not.toBeNull()
   })
+  it('shows an inconclusive scientific judgment even when the point threshold is met', () => {
+    render(<PredictionSummary value={{ prediction_result: { status: 'met', oriented_effect: .096,
+      statistical_evidence_sufficient: false, prediction: { metric: 'mae', unit: 'absolute_error', threshold: .05 } } }}
+      judgments={[{ hypothesis_id: 'H1', new_judgment: 'inconclusive' }]} />)
+    expect(screen.getByText(/科研判断：证据不足/)).not.toBeNull()
+    expect(screen.getByText(/达到注册预测阈值/)).not.toBeNull()
+  })
 })

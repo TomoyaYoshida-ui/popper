@@ -208,7 +208,7 @@ def normalized_state(state):
     spec = state.get("spec")
     if not isinstance(spec, dict):
         return state
-    for field in ("entrypoint", "train", "dev", "test"):
+    for field in ("entrypoint", "train", "dev", "test", 'confirmation_train'):
         if isinstance(spec.get(field), str):
             spec[field] = normalized_spec_path(field, spec[field])
     for field in ("code_files", "provenance_files"):
@@ -253,6 +253,10 @@ def validate_spec(spec):
     spec["entrypoint"] = entrypoint
     for split in ("train", "dev", "test"):
         spec[split] = normalized_spec_path(split, spec[split])
+    if 'confirmation_train' in spec:
+        spec['confirmation_train'] = normalized_spec_path('confirmation_train', spec['confirmation_train'])
+        if spec['confirmation_train'] in {spec['train'], spec['dev'], spec['test']}:
+            raise ProtocolError('确认重拟合训练文件必须独立注册')
     provenance = spec.get("provenance_files", [])
     if (not isinstance(provenance, list) or any(not isinstance(path, str) for path in provenance)
             or len(set(provenance)) != len(provenance)):
@@ -575,7 +579,8 @@ class Experiment:
             for role, basename in invocation.inputs:
                 path = run_dir / basename
                 if role == "train":
-                    shutil.copyfile(inside(self.root, spec["train"]), path)
+                    train_name = spec.get('confirmation_train', spec['train']) if split == 'test' else spec['train']
+                    shutil.copyfile(inside(self.root, train_name), path)
                 elif role == "inputs":
                     write_json(path, model_inputs(rows, evaluator_id))
                 elif role == "config":
@@ -1051,10 +1056,16 @@ def initialize(root):
     evaluator_id = evaluator_for_metric(spec["metric"])
     files = ["experiment.json", *spec["code_files"], *spec.get("provenance_files", []),
              spec["train"], spec["dev"], spec["test"]]
+    if 'confirmation_train' in spec:
+        files.append(spec['confirmation_train'])
     hashes = {name: file_hash(inside(root, name)) for name in files}
     sets = [dataset(inside(root, spec[s]), evaluator_id) for s in ("train", "dev", "test")]
     pack = evaluator_pack(evaluator_id)
     pack.validate_splits(sets)
+    if 'confirmation_train' in spec:
+        refit = dataset(inside(root, spec['confirmation_train']), evaluator_id)
+        if refit != sets[0] + sets[1]:
+            raise ProtocolError('确认重拟合只能使用冻结 train + dev，不能引入测试标签或修改样本')
     for i, left in enumerate(sets):
         for right in sets[i + 1:]:
             if {r["id"] for r in left} & {r["id"] for r in right}:

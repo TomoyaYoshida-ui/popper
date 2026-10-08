@@ -18,7 +18,7 @@ from .controller import research_lifecycle_phase
 
 # snapshots 里与研究工作台相关的实体类型；顺序即 API 投影顺序。
 _ENTITY_KINDS = ("study", "hypothesis", "design", "run", "observation", "decision",
-                 "claim", "reflection")
+                 "claim", "reflection", 'judgment')
 _REF_KINDS = {
     "study": EntityKind.STUDY,
     "hypothesis": EntityKind.HYPOTHESIS,
@@ -274,6 +274,7 @@ def _project(conn, study_id, manifest, run_dir) -> dict:
             "decisions": entities["decision"],
             "claims": entities["claim"],
             "reflections": entities["reflection"],
+            'judgments': entities['judgment'],
             "budget": budget, "events_total": events_total,
             "experiment_graph": graph}
 

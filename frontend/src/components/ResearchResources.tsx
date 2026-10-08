@@ -44,13 +44,15 @@ export function EntityPanel({ tab, research, onOpenResource }: { tab: WorkbenchT
   const claim = tab.kind === 'claim' ? run.claims?.find((item) => item.entity_id === tab.ref) : null
   const observation = tab.kind === 'observation' ? run.observations?.find((item) => item.entity_id === tab.ref) : null
   const value = claim ?? observation
+  const scientificJudgments = claim ? (run.judgments ?? []).filter((j) =>
+    j.scope === 'confirmation' && j.observation_refs.every((id) => claim.observation_refs.includes(id))) : []
   if (!value) return null
-  return <div className="resource-detail"><span className="eyebrow">{claim ? '研究结论 / CLAIM' : '实验观察 / OBSERVATION'}</span><h2>{claim ? `${claim.metric} 的研究结论` : '实验观察结果'}</h2><span className="resource-status">{label(value.status)}</span><p className="muted">所属研究：{studyName(run)}</p>
+  return <div className="resource-detail"><span className="eyebrow">{claim ? '研究结论 / CLAIM' : '实验观察 / OBSERVATION'}</span><h2>{claim ? `${claim.metric} 的研究结论` : '实验观察结果'}</h2><span className="resource-status">{scientificJudgments.length ? '科研判断见独立证据；下列效应为描述性结果' : label(value.status)}</span><p className="muted">所属研究：{studyName(run)}</p>
     <p className="resource-scope">适用范围：{scopes[value.scope] ?? value.scope}</p><dl className="resource-facts">
       {claim ? <><div><dt>指标方向</dt><dd>{claim.metric_direction === 'max' ? '越大越好' : '越小越好'}</dd></div><div><dt>方向统一效应</dt><dd>{claim.oriented_delta}</dd></div><div><dt>预注册阈值</dt><dd>{claim.min_meaningful_effect}</dd></div></>
         : observation && <><div><dt>观察值</dt><dd>{observation.value} {observation.unit}</dd></div><div><dt>不确定度</dt><dd>{observation.uncertainty ?? '未提供'}</dd></div><div><dt>信任级别</dt><dd>{observation.trust}</dd></div></>}
     </dl>
-    {claim && <><h3>来源证据</h3><PredictionSummary value={value} /><div className="resource-links">{claim.observation_refs.map((id, index) => <button type="button" key={id} title={id} onClick={() => onOpenResource({ kind: 'observation', ref: id, studyId: claim.study_id, title: '实验观察' })}>实验观察 {index + 1} ↗</button>)}</div><h3>适用限制</h3><ul>{claim.limitations.map((text, index) => <li key={index}>{limitations[text] ?? text}</li>)}</ul></>}
+    {claim && <><h3>来源证据</h3><PredictionSummary value={value} judgments={scientificJudgments} /><div className="resource-links">{claim.observation_refs.map((id, index) => <button type="button" key={id} title={id} onClick={() => onOpenResource({ kind: 'observation', ref: id, studyId: claim.study_id, title: '实验观察' })}>实验观察 {index + 1} ↗</button>)}</div><h3>适用限制</h3><ul>{claim.limitations.map((text, index) => <li key={index}>{limitations[text] ?? text}</li>)}</ul></>}
     <button type="button" className="btn" onClick={() => onOpenResource({ kind: 'study', studyId: run.manifest?.study_id })}>打开所属 Study →</button>
     <TechnicalDetails value={value} title="完整研究记录与对象标识" />
   </div>
