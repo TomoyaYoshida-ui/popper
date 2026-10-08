@@ -208,16 +208,16 @@ class ResearchController:
                     if alternate_id in candidate_ids:
                         continue
                     alternate_config = spec['candidates'][0]
-                    if protocol.get('schema')=='paired-unit-ci/v1':
+                    if 'hypothesis_contrasts' in protocol:
                         primary = next(h for h,c in protocol['hypothesis_contrasts'].items() if c['alternative_id']==alternate_id)
                         alternate_config = manifest['configs'][primary]
                     shadow = {**manifest, 'configs': {**manifest['configs'], alternate_id: alternate_config}}
                     _create_hypothesis_and_design(store, shadow, alternate_id, {
                         'mechanism': 'Performance lies within the frozen practical-equivalence interval',
                         'applicability': 'Frozen analysis units and registered scope',
-                        'predictions': ['Relative grouped MAE improvement lies between -0.05 and 0.05'],
+                        'predictions': [canonical(protocol['hypothesis_predictions'][alternate_id])],
                         'falsification': ['Confidence interval falls outside the registered interval'],
-                        'alternatives': ['Additive multi-tree structure improves held-out prediction']})
+                        'alternatives': ['The registered candidate exceeds its frozen effect threshold']})
         finally:
             store.close()
         controller = cls(run_dir, policy=policy)
@@ -378,13 +378,8 @@ class ResearchController:
         state = self._verify_inputs()
         if 'judgment-protocol.json' in state['spec'].get('provenance_files', []):
             protocol=read_json(self.project/'judgment-protocol.json')
-            if protocol.get('schema')=='paired-unit-ci/v1':
-                from .paired_comparison import compare_observations
-                ids=[observation['hypothesis_id'],protocol['hypothesis_contrasts'][observation['hypothesis_id']]['alternative_id']]
-            else:
-                from .grouped_comparison import compare_observations
-                ids=list(protocol['hypothesis_predictions'])
-            descriptor = compare_observations(self.project, self.run_dir, baseline, observation)
+            from .comparison_registry import compare
+            ids, descriptor = compare(self, baseline, observation, protocol)
         return [self.store.record_judgment(hid, self.store.get('hypothesis',hid)['version'],
                     (baseline['observation_id'],observation['observation_id']), comparison_artifact=descriptor)
                 for hid in ids]
@@ -742,32 +737,124 @@ class ResearchController:
         study=self.store.get('study',self.manifest['study_id'])
         if study['state_version']!=expected_version:
             raise ProtocolError('候选执行基于陈旧状态版本')
-        if study['status']!=StudyStatus.ACTIVE.value or self.exp.state()['phase']!='searching' or self._external_is_frozen():
+        if (study['status']!=StudyStatus.ACTIVE.value or self.exp.state()['phase']!='searching'
+                or self._external_is_frozen() or self._registered_selection() is not None):
             raise ProtocolError('开发执行通道已关闭')
         if hypothesis_id not in self.manifest['candidate_hypothesis_ids']:
             raise ProtocolError('未注册的候选假设')
+        from .project_adapter import RegisteredProjectAdapter
+        adapter = RegisteredProjectAdapter(self)
+        adapter.require_execution_support()
         if sandboxed: self._require_sandbox_backend()
         control=self.manifest['control_hypothesis_id']
         baseline=self._execute_development(control,ActionProposal(RUN_EXPERIMENT,'冻结基线',control),
                                            trusted_local,sandboxed,should_cancel=should_cancel)
         observation=self._execute_development(hypothesis_id,ActionProposal(RUN_EXPERIMENT,'冻结候选执行',hypothesis_id),
                                               trusted_local,sandboxed,should_cancel=should_cancel)
-        protocol_path=self.project/'judgment-protocol.json'
-        if protocol_path.exists():
-            protocol=read_json(protocol_path)
-            if protocol.get('schema')=='paired-unit-ci/v1' and protocol['primary_dev_prefix']:
-                source_baseline=self._observation_for_design(self._current_design_id(control),'dev:slice:s1')
-                source_observation=self._observation_for_design(self._current_design_id(hypothesis_id),'dev:slice:s1')
-                if source_baseline is None or source_observation is None:
-                    raise ProtocolError('缺少注册源环境观察')
-                self._update_judgments(source_baseline,source_observation)
-                baseline=self._observation_for_design(self._current_design_id(control),'dev:slice:s2')
-                observation=self._observation_for_design(self._current_design_id(hypothesis_id),'dev:slice:s2')
+        return self._compare_registered_development(self._current_design_id(hypothesis_id),
+                                                    self._current_design_id(control), adapter)
+
+    def _compare_registered_development(self, design_id, control_design_id, adapter=None):
+        from .project_adapter import RegisteredProjectAdapter
+        adapter = adapter or RegisteredProjectAdapter(self)
+        adapter.preflight()
+        primary = adapter.primary_scope_id()
+        judgments = []
+        baseline = observation = None
+        for scope in adapter.comparison_scope_ids():
+            scope_baseline = self._observation_for_design(control_design_id, scope)
+            scope_observation = self._observation_for_design(design_id, scope)
+            if scope_baseline is None or scope_observation is None:
+                raise ProtocolError('缺少注册比较范围的独立观察')
+            scoped = self._update_judgments(scope_baseline, scope_observation)
+            if scope == primary:
+                baseline, observation, judgments = scope_baseline, scope_observation, scoped
         if baseline is None or observation is None:
-            raise ProtocolError('缺少主分析范围的独立观察')
-        judgments=self._update_judgments(baseline,observation)
+            raise ProtocolError('缺少注册主范围的独立观察')
         return {'observation':observation,'baseline':baseline,'judgments':judgments,
                 'state_version':self.store.get('study',self.manifest['study_id'])['state_version']}
+
+    def planning_runtime(self, *, session_id='default', profile='evidence_driven',
+                         max_experiments=None, max_decisions=9):
+        """Shared typed planning boundary; it never authorizes confirmation."""
+        from .runtime import ResearchRuntime
+        return ResearchRuntime(self, session_id=session_id, profile=profile,
+                               max_experiments=max_experiments, max_decisions=max_decisions)
+
+    def revise_registered_hypothesis(self, hypothesis_id, *, mechanism, applicability,
+                                     predictions, evidence_refs, expected_version):
+        """Append an unexecuted registered hypothesis and its design atomically.
+
+        This capability changes explanatory text. Numeric predictions, selectors
+        and execution configurations remain bound to the frozen project protocol.
+        Evaluated candidates require a separately registered follow-up project.
+        """
+        from dataclasses import fields
+        self._verify_inputs()
+        if (self.exp.state()['phase'] != 'searching' or self._external_is_frozen()
+                or self._registered_selection() is not None):
+            raise ProtocolError('开发修订通道已关闭')
+        if hypothesis_id not in self.manifest['candidate_hypothesis_ids']:
+            raise ProtocolError('修订需要已注册候选')
+        from .runtime_protocol import parse_action
+        proposal = parse_action({'kind': 'revise_hypothesis', 'hypothesis_id': hypothesis_id,
+            'mechanism': mechanism, 'applicability': applicability, 'predictions': list(predictions),
+            'rationale': 'Registered explanatory revision', 'evidence_refs': list(evidence_refs)})
+        if not proposal.evidence_refs:
+            raise ProtocolError('修订必须引用独立证据')
+        for ref in proposal.evidence_refs:
+            observation = self.store.get('observation', ref)
+            if (not observation or observation['study_id'] != self.manifest['study_id']
+                    or not observation['scope'].startswith('dev')):
+                raise ProtocolError('修订证据不是当前研究的开发观察')
+        targets = [hypothesis_id]
+        spec = self.exp.state()['spec']
+        if 'judgment-protocol.json' in spec.get('provenance_files', []):
+            protocol = read_json(self.project / 'judgment-protocol.json')
+            alternate = protocol.get('hypothesis_contrasts', {}).get(hypothesis_id, {}).get('alternative_id')
+            if alternate:
+                targets.append(alternate)
+        with self.store.transaction():
+            study = self.store.get('study', self.manifest['study_id'])
+            if study['state_version'] != expected_version:
+                raise ProtocolError('修订基于陈旧状态版本')
+            for target in targets:
+                current = self.store.get('hypothesis', target)
+                old = self.store.get('design', self._current_design_id(target))
+                if any(o['design_id'] == old['design_id'] for o in self.store.list('observation')):
+                    raise ProtocolError('已评估版本不能通过文本修订重新解释历史结论')
+                version = current['version'] + 1
+                self.store.revise_hypothesis(Hypothesis(
+                    target, current['study_id'], version, current['version'],
+                    proposal.mechanism if target == hypothesis_id else current['mechanism'],
+                    proposal.applicability,
+                    tuple(proposal.predictions if target == hypothesis_id else current['predictions']),
+                    tuple(current['falsification']), tuple(current['alternatives'])))
+                data = {f.name: old[f.name] for f in fields(ExperimentDesign) if f.name in old}
+                data.update(design_id=_design_id(target, version), status=DesignStatus.DRAFT)
+                if data.get('proposal'):
+                    data['proposal'] = {**data['proposal'], 'expected_hypothesis_version': version}
+                for name in ('interventions', 'splits', 'seeds'):
+                    data[name] = tuple(data[name])
+                self.store.create_design(ExperimentDesign(**data))
+                self.store.freeze_design(data['design_id'])
+        return self.store.get('hypothesis', hypothesis_id)
+
+    def prepare_registered_baseline(self, *, trusted_local=False, sandboxed=False,
+                                    should_cancel=None):
+        if trusted_local == sandboxed:
+            raise ProtocolError('必须明确选择 trusted_local 或 sandbox')
+        self._verify_inputs(); self._require_scoring_binding()
+        if (self.exp.state()['phase'] != 'searching' or self._external_is_frozen()
+                or self._registered_selection() is not None):
+            raise ProtocolError('开发执行通道已关闭')
+        from .project_adapter import RegisteredProjectAdapter
+        RegisteredProjectAdapter(self).require_execution_support()
+        if sandboxed:
+            self._require_sandbox_backend()
+        control = self.manifest['control_hypothesis_id']
+        return self._execute_development(control, ActionProposal(RUN_EXPERIMENT, '冻结基线', control),
+                                         trusted_local, sandboxed, should_cancel=should_cancel)
 
     def execute_registered_design(self, design_id, *, sandboxed=True,
                                   should_cancel=None):
@@ -782,7 +869,8 @@ class ResearchController:
         self._require_sandbox_backend()
         state = self._verify_inputs()
         self._require_scoring_binding()
-        if state["phase"] != "searching" or self._external_is_frozen():
+        if (state["phase"] != "searching" or self._external_is_frozen()
+                or self._registered_selection() is not None):
             raise ProtocolError("开发搜索已关闭，不能执行新设计")
         study = self.store.get("study", self.manifest["study_id"])
         if study["status"] != StudyStatus.ACTIVE.value:
@@ -830,9 +918,18 @@ class ResearchController:
             RUN_EXPERIMENT, f"冻结设计 {design_id} 复用预注册候选 {candidate_id}",
             hypothesis_id, alternatives=("保留未执行设计",),
             source="research_controller")
+        if self.uses_registered_planning():
+            from .project_adapter import RegisteredProjectAdapter
+            RegisteredProjectAdapter(self).require_execution_support()
+            if hypothesis_id != candidate_id:
+                raise ProtocolError('新规划项目只能执行绑定预登记预测的候选；新假设需要独立注册的后续项目')
+            self.prepare_registered_baseline(sandboxed=True, should_cancel=should_cancel)
         observation = self._execute_development(
             hypothesis_id, proposal, trusted_local=False, sandboxed=True,
             design_id=design_id, config=config, should_cancel=should_cancel)
+        if self.uses_registered_planning():
+            observation = self._compare_registered_development(design_id,
+                self._current_design_id(self.manifest['control_hypothesis_id']))['observation']
         current = self.store.get("hypothesis", hypothesis_id)
         if current["status"] == HypothesisStatus.UNTESTED.value:
             self.store.set_hypothesis_status(
@@ -1360,12 +1457,37 @@ class ResearchController:
         return self.status()
 
     def run(self, trusted_local=False, sandboxed=False, max_steps=None, auto_confirm=False,
-            autonomous_code=False, should_cancel=None, search=None, autonomous_design=False):
+            autonomous_code=False, should_cancel=None, search=None, autonomous_design=False,
+            planning_client=None):
         def check_cancelled():
             if should_cancel is not None and should_cancel():
                 raise ProtocolError("研究执行已取消")
 
         check_cancelled()
+        if self.uses_registered_planning():
+            if trusted_local == sandboxed:
+                raise ProtocolError('research run 必须且只能选择 --trusted-local 或 --sandbox')
+            if autonomous_code or autonomous_design:
+                raise ProtocolError('当前冻结项目适配器未声明生成代码的执行与制品验证权限')
+            if self.store.get('study', self.manifest['study_id'])['status'] != StudyStatus.ACTIVE.value:
+                return self.status()
+            if self._registered_selection() is not None:
+                return self.confirm(trusted_local, sandboxed, should_cancel) if auto_confirm else self.status()
+            if hasattr(self.policy, '_call') and planning_client is None:
+                raise ProtocolError('注册规划的模型客户端必须由调用方绑定请求预算')
+            limit = self.exp.state()['spec']['budget']
+            if max_steps is not None:
+                if type(max_steps) is not int or max_steps < 0:
+                    raise ProtocolError('max_steps 必须是非负整数')
+                limit = min(limit, max_steps)
+            runtime = self.planning_runtime(session_id='registered-run', max_experiments=limit)
+            planned = runtime.run(planning_client, trusted_local=trusted_local,
+                                  sandboxed=sandboxed, should_cancel=should_cancel)
+            if planned['planner']['status'] == 'stopped' and planned['finalist']:
+                self.prepare_registered_selection(selection_receipt=planned['finalist']['selection_receipt'])
+                if auto_confirm:
+                    self.confirm(trusted_local, sandboxed, should_cancel)
+            return {**self.status(), 'planning_runtime': planned}
         if autonomous_design:
             autonomous_code = True
         if trusted_local == sandboxed:
@@ -1539,6 +1661,120 @@ class ResearchController:
         return self.status()
 
     def confirm(self, trusted_local=False, sandboxed=False, should_cancel=None):
+        """Confirm under the original descriptive development eligibility gate."""
+        if self.uses_registered_planning():
+            receipt = self.prepare_registered_selection()
+            return self.confirm_registered_candidate(receipt['hypothesis_id'],
+                expected_version=receipt['state_version'], selection_receipt=receipt,
+                trusted_local=trusted_local, sandboxed=sandboxed, should_cancel=should_cancel)
+        return self._confirm_candidate(trusted_local, sandboxed, should_cancel)
+
+    def uses_registered_planning(self):
+        protocol = self.exp.state()['spec'].get('metadata', {}).get('planning_protocol')
+        if protocol not in {None, 'research-runtime/v1'}:
+            raise ProtocolError('未支持的研究规划协议，不能退回旧执行通道')
+        return protocol == 'research-runtime/v1'
+
+    def _registered_selection(self):
+        decisions = [d for d in self.store.list('decision')
+                     if d['actor'] == 'registered_confirmation_controller'
+                     and d['action'] == REQUEST_CONFIRMATION]
+        return json.loads(decisions[-1]['rationale']) if decisions else None
+
+    def prepare_registered_selection(self, *, selection_receipt=None):
+        """Freeze a verified selection without executing or consuming holdout."""
+        from .project_adapter import RegisteredProjectAdapter
+        prior = self._registered_selection()
+        if prior is not None:
+            if selection_receipt is not None and selection_receipt != prior:
+                raise ProtocolError('已登记确认选择不能替换')
+            selection_receipt = prior
+        elif selection_receipt is None:
+            selection_receipt = RegisteredProjectAdapter(self).confirmation_selection_receipt()
+        if selection_receipt is None:
+            raise ProtocolError('没有当前版本的有效独立开发证据，不能冻结确认选择')
+        return self._register_confirmation_selection(selection_receipt['hypothesis_id'],
+            expected_version=selection_receipt['state_version'], selection_receipt=selection_receipt)
+
+    def confirm_registered_candidate(self, hypothesis_id, *, expected_version,
+                                     selection_receipt, trusted_local=False,
+                                     sandboxed=False, should_cancel=None):
+        """Confirm a selection under an initialization-frozen assessment policy.
+
+        Selection is replayed from successful, current-version independent
+        development evidence. A model assessment never makes a candidate eligible.
+        The selection Decision is an authorization identity, not a second result
+        ledger; saved core results remain the only recovery execution authority.
+        """
+        if trusted_local == sandboxed:
+            raise ProtocolError("research confirm 必须且只能选择 --trusted-local 或 --sandbox")
+        if should_cancel is not None and should_cancel():
+            raise ProtocolError("独立确认已取消；已消费的确认资源不会重试")
+        selection_receipt = self._register_confirmation_selection(hypothesis_id,
+            expected_version=expected_version, selection_receipt=selection_receipt)
+        return self._confirm_candidate(trusted_local, sandboxed, should_cancel,
+                                       registered_selection=selection_receipt)
+
+    def _register_confirmation_selection(self, hypothesis_id, *, expected_version, selection_receipt):
+        self._verify_inputs()
+        self._require_scoring_binding()
+        if self.manifest.get("external_confirmation"):
+            raise ProtocolError("该研究使用外部签名确认，不能用本地选择确认替代")
+        state = self.exp.state()
+        protocol_name = "judgment-protocol.json"
+        if protocol_name not in state["spec"].get("provenance_files", []):
+            raise ProtocolError("研究初始化时未冻结候选选择确认策略")
+        protocol = read_json(self.project / protocol_name)
+        policy = protocol.get("confirmation_policy")
+        if (not isinstance(policy, dict)
+                or policy.get("schema") != "selected_by_registered_dev_metric/v1"):
+            raise ProtocolError("研究初始化时未冻结候选选择确认策略")
+        if (not isinstance(selection_receipt, dict)
+                or selection_receipt.get("schema") != "registered-dev-selection/v1"
+                or selection_receipt.get("hypothesis_id") != hypothesis_id
+                or selection_receipt.get("state_version") != expected_version
+                or type(expected_version) is not int
+                or selection_receipt.get("receipt_sha256") != digest(
+                    {key: value for key, value in selection_receipt.items()
+                     if key != "receipt_sha256"})):
+            raise ProtocolError("冻结候选选择回执身份或摘要不合法")
+        from .project_adapter import RegisteredProjectAdapter
+        replay = RegisteredProjectAdapter(self).confirmation_selection_receipt()
+        if replay is None:
+            raise ProtocolError("没有当前版本的有效独立开发证据，不能确认")
+        # A recorded authorization survives state advances caused by its own
+        # confirmation Runs/Observations, while every selected evidence identity
+        # and the frozen metric must still replay exactly.
+        replay = {**replay, "state_version": expected_version}
+        replay["receipt_sha256"] = digest(
+            {key: value for key, value in replay.items() if key != "receipt_sha256"})
+        if replay != selection_receipt:
+            raise ProtocolError("候选选择与冻结开发规则重算不一致")
+        if (policy.get("selection_metric", replay["selection_metric"])
+                != replay["selection_metric"]):
+            raise ProtocolError("候选选择指标与冻结确认策略不一致")
+        decision_id = "DEC-registered-confirm-" + selection_receipt["receipt_sha256"][:24]
+        prior = self.store.get("decision", decision_id)
+        study = self.store.get("study", self.manifest["study_id"])
+        if prior is not None:
+            if (prior["actor"] != "registered_confirmation_controller"
+                    or prior["action"] != REQUEST_CONFIRMATION
+                    or prior["rationale"] != canonical(selection_receipt)):
+                raise ProtocolError("已登记确认选择回执冲突")
+        else:
+            if study["state_version"] != expected_version:
+                raise ProtocolError("确认选择基于陈旧状态版本")
+            if study["status"] != StudyStatus.ACTIVE.value or state["phase"] != "searching":
+                raise ProtocolError("只能从活动研究的开发阶段登记确认选择")
+            self.store.add_decision(Decision(
+                decision_id, self.manifest["study_id"], expected_version,
+                (selection_receipt["observation_id"],), REQUEST_CONFIRMATION, (),
+                canonical(selection_receipt), 0.0,
+                actor="registered_confirmation_controller"))
+        return selection_receipt
+
+    def _confirm_candidate(self, trusted_local=False, sandboxed=False, should_cancel=None,
+                           *, registered_selection=None):
         def check_cancelled():
             if should_cancel is not None and should_cancel():
                 raise ProtocolError("独立确认已取消；已消费的确认资源不会重试")
@@ -1558,7 +1794,9 @@ class ResearchController:
                 == REQUEST_SCOPE_BOUNDARY_CONFIRMATION):
             raise ProtocolError("范围边界结论必须由预登记切片的独立签名保留集确认")
         selected = next((c for c in current_status["candidates"]
-                         if c["status"] == HypothesisStatus.SUPPORTED_IN_SCOPE.value), None)
+                         if (c["hypothesis_id"] == registered_selection["hypothesis_id"]
+                             if registered_selection is not None else
+                             c["status"] == HypothesisStatus.SUPPORTED_IN_SCOPE.value)), None)
         core_state = self.exp.state()
         if selected is None and core_state["phase"] == "completed":
             # A failed final status write may follow the candidate's transition
@@ -1571,8 +1809,13 @@ class ResearchController:
                         for r in confirmation_runs)), None)
         if selected is None:
             raise ProtocolError("没有达到开发阈值的假设，不能消费最终确认集")
-        selected_observation = self._observation_for_design(
-            self._current_design_id(selected["hypothesis_id"]), "dev")
+        selected_observation = (self.store.get("observation", registered_selection["observation_id"])
+                                if registered_selection is not None else
+                                self._observation_for_design(
+                                    self._current_design_id(selected["hypothesis_id"]), "dev"))
+        if registered_selection is not None and core_state["phase"] != "searching":
+            if core_state.get("selected") != self.manifest["configs"][selected["hypothesis_id"]]:
+                raise ProtocolError("底层冻结候选与研究确认选择不一致")
         # 若 selected 候选的 dev observation 来自生成代码 revision，则在 test split
         # 上必须经 Worker 执行该 revision（holdout 封读窗口覆盖整段执行），
         # 而不能用 evaluate() 跑原始注册代码冒充——那会让「测试结果」对应的代码
@@ -1601,6 +1844,16 @@ class ResearchController:
                 file_hash(self.revisions.path(revision_id) / "revision.json"))
         ledger = self.store.budget(self.manifest["study_id"])
         reservations = {}
+
+        def reserve_confirmation(run_id):
+            # Older controllers registered local confirmation items as dev.
+            # Preserve those identities and their settled amounts during replay;
+            # new items are never eligible for development-budget reclamation.
+            row = ledger._conn.execute(
+                "SELECT kind FROM reservations WHERE family_id=? AND item=?",
+                (self.manifest["family_id"], run_id)).fetchone()
+            return ledger.reserve(self.manifest["family_id"], run_id, 1.0,
+                                  kind=row[0] if row is not None else "confirmation")
 
         def release_unstarted():
             for run_id, (reservation, _) in reservations.items():
@@ -1642,7 +1895,7 @@ class ResearchController:
                     for label, hypothesis_id in pairs:
                         prefix = f"RUN-confirm-{label}-{hypothesis_id}"
                         if run["run_id"] == prefix or run["run_id"].startswith(prefix + "-attempt-"):
-                            reservation = ledger.reserve(self.manifest["family_id"], run["run_id"], 1.0)
+                            reservation = reserve_confirmation(run["run_id"])
                             reservations[run["run_id"]] = (reservation, hypothesis_id)
                 raise ProtocolError("底层确认已失败并消费测试访问，禁止重复执行")
 
@@ -1654,7 +1907,7 @@ class ResearchController:
                 for label, hypothesis_id in pairs:
                     suffix = f"-attempt-{attempt}" if attempt > 1 else ""
                     run_id = f"RUN-confirm-{label}-{hypothesis_id}{suffix}"
-                    reservation = ledger.reserve(self.manifest["family_id"], run_id, 1.0)
+                    reservation = reserve_confirmation(run_id)
                     reservations[run_id] = (reservation, hypothesis_id)
                     current = self.store.get("run", run_id)
                     if reservation["status"] == "settled" and reservation["spent"] == 0.0:
@@ -1689,7 +1942,10 @@ class ResearchController:
                     self.store.runs.set_status(run_id, RunStatus.RUNNING)
             phase = self.exp.state()["phase"]
             if phase == "searching":
-                self.exp.freeze()
+                if registered_selection is None:
+                    self.exp.freeze()
+                else:
+                    self.exp.freeze(selected_config=self.manifest["configs"][selected["hypothesis_id"]])
                 phase = "frozen"
             if phase == "frozen":
                 check_cancelled()

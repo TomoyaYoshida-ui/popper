@@ -7,7 +7,7 @@ name = "popper-research"
 version = "0.1.0"
 description = "Local-first evidence-backed experiment runner"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["pydantic>=2.12,<3"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Programming Language :: Python :: 3",
@@ -16,6 +16,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+analysis = ["numpy==2.2.6"]
 ml = ["scikit-learn>=1.7,<1.8"]
 intake = ["pyarrow>=18,<25"]
 research = ["requests>=2.31,<3", "pypdf>=5,<7"]

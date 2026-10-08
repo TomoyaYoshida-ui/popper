@@ -8,6 +8,24 @@ from popper.model_budget import ModelRequestBudget
 
 
 class RequestBudgetTests(unittest.TestCase):
+    def test_readonly_audit_keeps_ledger_and_unknown_reservation_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/'calls.sqlite'
+            budget = self.budget(path)
+            request = budget.reserve({'messages': [], 'max_tokens': 100})
+            with self.assertRaises(ProtocolError):
+                budget.settle(request, None)
+            original = budget.snapshot()
+            budget.close()
+            before = path.read_bytes()
+            reader = ModelRequestBudget.readonly(path, scope='one')
+            try:
+                self.assertEqual(original, reader.snapshot())
+                self.assertGreater(reader.snapshot()['global']['unresolved_reserved_tokens'], 0)
+            finally:
+                reader.close()
+            self.assertEqual(before, path.read_bytes())
+
     def budget(self, path, scope="one", calls=2):
         return ModelRequestBudget(path, global_tokens=20000, global_calls=calls,
                                   scope=scope, scope_tokens=20000, scope_calls=calls)

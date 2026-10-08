@@ -10,7 +10,29 @@ from pathlib import Path
 from .core import ProtocolError, canonical
 
 
+class ModelBudgetFailure(ProtocolError):
+    def __init__(self, category, message):
+        self.category = category
+        super().__init__(message)
+
+
 class ModelRequestBudget:
+    @classmethod
+    def readonly(cls, path, *, scope):
+        """Inspect an existing ledger without migration, policy changes or sends."""
+        instance = cls.__new__(cls)
+        instance.path = Path(path).resolve()
+        instance.scope = scope
+        instance._lock = threading.Lock()
+        instance.db = sqlite3.connect(instance.path.as_uri() + '?mode=ro', uri=True,
+                                      check_same_thread=False)
+        row = instance.db.execute('SELECT unknown_usage_policy FROM scope_policies WHERE scope=?', (scope,)).fetchone()
+        if row is None:
+            instance.db.close()
+            raise ProtocolError('Ledger scope is not registered; audit cannot create it')
+        instance.unknown_usage_policy = row[0]
+        return instance
+
     def __init__(self, path, *, global_tokens, global_calls, scope, scope_tokens, scope_calls,
                  unknown_usage_policy='stop'):
         if unknown_usage_policy not in {'stop', 'reserve'}:
@@ -76,17 +98,17 @@ class ModelRequestBudget:
             unknown = self.db.execute("SELECT 1 FROM requests WHERE scope=? AND status IN " + statuses,
                                       (self.scope,)).fetchone()
             if unknown:
-                raise ProtocolError("上一调用用量未知或仍在执行，该运行停止调用模型")
+                raise ModelBudgetFailure('usage_unresolved', "上一调用用量未知或仍在执行，该运行停止调用模型")
             if logical_request_id is not None:
                 conflict = self.db.execute("SELECT 1 FROM requests WHERE scope=? AND logical_request_id=? "
                     "AND (attempt_index=? OR (status='unknown' AND (?=0 OR COALESCE(output_started,1)<>0))) LIMIT 1",
                     (self.scope,logical_request_id,attempt_index,int(pre_output_retry and self.unknown_usage_policy=='reserve'))).fetchone()
                 if conflict:
-                    raise ProtocolError('该逻辑请求尝试已记录或用量未知，不能重复发送')
+                    raise ModelBudgetFailure('request_recovery_blocked', '该逻辑请求尝试已记录或用量未知，不能重复发送')
             for scope in ("__global__", self.scope):
                 balance = self._balance(scope)
                 if balance["calls"] >= balance["call_cap"] or balance["accounted_tokens"] + amount > balance["token_cap"]:
-                    raise ProtocolError("模型调用预算不足，发送前已停止")
+                    raise ModelBudgetFailure('request_budget_exhausted', "模型调用预算不足，发送前已停止")
             request_id = uuid.uuid4().hex
             self.db.execute("INSERT INTO requests(id,scope,reserved,status,request_hash,logical_request_id,attempt_index) VALUES(?,?,?,'reserved',?,?,?)",
                             (request_id, self.scope, amount, digest(body),logical_request_id,attempt_index))
@@ -139,10 +161,10 @@ class ModelRequestBudget:
                                 ('usage_over_reservation' if status == 'unknown' else None, request_id))
         if type(total) is not int or total < 0:
             if self.unknown_usage_policy == 'stop':
-                raise ProtocolError("提供商缺少有效用量，保留预留并停止该运行")
+                raise ModelBudgetFailure('usage_unresolved', "提供商缺少有效用量，保留预留并停止该运行")
             return  # Availability mode retains the full bound; never pretends this was free.
         if total > row[1]:
-            raise ProtocolError("提供商用量超过请求预留，停止该运行")
+            raise ModelBudgetFailure('usage_accounting_failure', "提供商用量超过请求预留，停止该运行")
 
     def snapshot(self):
         with self._lock:

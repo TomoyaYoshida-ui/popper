@@ -57,6 +57,8 @@ AUTHORITY = {
     # 接入事件不是 Observation / Claim。写入方仍是本模块。
     "dataset": "research_store",
     "judgment": "evaluation_service",
+    # Planner receipts are metadata, never measurements or scientific judgments.
+    "runtime_record": "research_store",
 }
 
 # 已退役的权威名 → 当前名。历史研究库里 run 事件记录为 experiment_service，
@@ -567,6 +569,25 @@ class ResearchStore:
                     raise ProtocolError("study status 不合法") from None
                 entity = self.set_study_status(study_id, target)
                 entity_kind, entity_id = "study", study_id
+            elif action == "record_runtime":
+                if (set(payload) != {'session_id', 'record_id', 'record_kind', 'body'}
+                        or not all(isinstance(payload[k], str) and payload[k].strip()
+                                   for k in ('session_id', 'record_id', 'record_kind'))
+                        or payload['record_kind'] not in {
+                            'session', 'request_started', 'response_received', 'action_completed',
+                            'planner_closed', 'agent_assessment', 'assessment_rejected'}
+                        or not isinstance(payload['body'], dict)):
+                    raise ProtocolError('Runtime receipt fields are invalid')
+                self._require_study_active(study_id)
+                entity_kind, entity_id = 'runtime_record', payload['record_id']
+                if self._entity_exists(entity_kind, entity_id):
+                    raise ResearchIdempotencyConflict('Runtime record already exists')
+                seq = self.event_cursor() + 1
+                data = {'study_id': study_id, **payload}
+                self._append(entity_kind, entity_id, 'created', data, AUTHORITY[entity_kind])
+                self._upsert(entity_kind, entity_id, 'recorded', data, AUTHORITY[entity_kind], seq)
+                self._touch_study(study_id)
+                entity = self.get(entity_kind, entity_id)
             else:
                 raise ProtocolError("未知 research 命令")
 
@@ -1696,6 +1717,7 @@ class ResearchStore:
                     ("claim", "created"): decoded.get("status"),
                     ("reflection", "created"): "recorded",
                     ('judgment', 'created'): decoded.get('new_judgment'),
+                    ('runtime_record', 'created'): 'recorded',
                 }
                 status = statuses.get((kind, event_type))
                 if status is None:
@@ -1803,6 +1825,12 @@ class ResearchStore:
         with self.transaction():
             for item in ledger.outstanding(study["family_id"]):
                 if item["kind"] != "dev":
+                    continue
+                # Older controller versions labelled confirmation reservations
+                # as dev. A failed held-out execution is still consumed; a name
+                # reserved by that controller must never be refunded as search.
+                # Keep the existing reservation until confirmation reconciles it.
+                if item['item'].startswith('RUN-confirm-'):
                     continue
                 if run_status.get(item["item"]) in terminal_failed:
                     ledger.reclaim(item["reservation_id"])

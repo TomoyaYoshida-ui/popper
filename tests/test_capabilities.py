@@ -62,11 +62,21 @@ class ExtraDeclarationConsistencyTests(unittest.TestCase):
         self.assertEqual(set(), missing,
                          f"这些 extra 从未在任何 CI job 里被安装，对应用例等于没跑：{sorted(missing)}")
 
-    def test_ci_keeps_one_zero_dependency_job(self):
-        """"核心零运行时依赖"是对外主张，必须有一个只装 `-e .` 的 job 为它背书。"""
+    def test_ci_keeps_one_core_only_job(self):
+        """核心依赖必须能独立运行，不以安装可选 extras 掩盖问题。"""
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertTrue(INSTALL_BARE.search(text),
-                        "CI 里没有任何「不带 extras」的安装步骤，零依赖主张失去验证点")
+                        "CI 里没有任何「不带 extras」的安装步骤，核心独立运行缺少验证点")
+
+    def test_installed_wheel_smokes_install_declared_runtime_dependencies(self):
+        text = WORKFLOW.read_text(encoding="utf-8")
+        installs = [line.strip() for line in text.splitlines()
+                    if "pip install" in line and "--target wheel-smoke" in line
+                    and "external-wheelhouse" not in line]
+        self.assertEqual(2, len(installs), "安装包工作台和 Windows 终端都必须验证已安装 wheel")
+        for command in installs:
+            self.assertNotIn("--no-deps", command,
+                             "已安装 wheel 的隔离 smoke 必须安装 Pydantic 等声明的核心依赖")
 
     def test_linux_sandbox_gate_installs_every_extra(self):
         """沙箱硬门禁不得在「对应用例被 skip」的状态下发绿。

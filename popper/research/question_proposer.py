@@ -1,6 +1,9 @@
 """只根据数据卡和一句研究目的提案。不读取原始表、封存件或确认集标签。"""
 from __future__ import annotations
 
+from contextlib import nullcontext
+from inspect import getattr_static
+
 from ..core import ProtocolError
 from .actions import (ADD_CONTROL, REQUEST_CONFIRMATION, RUN_EXPERIMENT, ActionProposal)
 from .agenda import (
@@ -11,6 +14,12 @@ from .agenda import (
 from .formulate import _proposal, normalize_prediction
 
 _BOUND = {RUN_EXPERIMENT, ADD_CONTROL, REQUEST_CONFIRMATION}
+
+
+def _request_scope(call):
+    if getattr_static(call, "logical_operation", None) is None:
+        return nullcontext()
+    return call.logical_operation(max_attempts=2)
 
 FIXTURES = {
     "fixture-table": {
@@ -191,15 +200,16 @@ def solicit_card_problem(call, card, objective, split_declaration_sha256):
         "frozen_min_improvement": FROZEN_THRESHOLD,
     }
     last = None
-    for _attempt in range(2):
-        body = payload if last is None else {**payload, "validation_error": str(last)}
-        response = call(system, body)
-        try:
-            if not isinstance(response, dict) or "execution" not in response:
-                raise ProtocolError("模型必须提出可执行的实验设计，不能只填写解释")
-            return proposal_from_card_reply(card, response, split_declaration_sha256)
-        except ProtocolError as error:
-            last = error
+    with _request_scope(call):
+        for _attempt in range(2):
+            body = payload if last is None else {**payload, "validation_error": str(last)}
+            response = call(system, body)
+            try:
+                if not isinstance(response, dict) or "execution" not in response:
+                    raise ProtocolError("模型必须提出可执行的实验设计，不能只填写解释")
+                return proposal_from_card_reply(card, response, split_declaration_sha256)
+            except ProtocolError as error:
+                last = error
     raise last
 
 
@@ -230,26 +240,27 @@ def mechanism_after_kill(call, *, second_feature, target, killed_id, surviving_i
             "delta": delta,
         }
         last = None
-        for _attempt in range(2):
-            body = payload if last is None else {**payload, "validation_error": str(last)}
-            try:
-                response = call(system, body)
-                if contains_killed_field(response):
-                    raise ProtocolError("模型不能指定被杀掉的解释")
-                if not isinstance(response, dict) or not isinstance(response.get("revised_mechanism"), str):
-                    raise ProtocolError("后继机制必须改写")
-                cleaned = accept_revised_mechanism(
-                    response["revised_mechanism"], explanations=explanations,
-                    parent_question=parent_question,
-                    parent_holdout_sha256=parent_holdout_sha256)
-                if second_feature not in cleaned or f"{threshold:.8g}" not in cleaned:
-                    raise ProtocolError("后继机制必须点名第二特征和同一阈值")
-                text = cleaned
-                author = "model"
-                break
-            except ProtocolError as caught:
-                last = caught
-                error = str(caught)
+        with _request_scope(call):
+            for _attempt in range(2):
+                body = payload if last is None else {**payload, "validation_error": str(last)}
+                try:
+                    response = call(system, body)
+                    if contains_killed_field(response):
+                        raise ProtocolError("模型不能指定被杀掉的解释")
+                    if not isinstance(response, dict) or not isinstance(response.get("revised_mechanism"), str):
+                        raise ProtocolError("后继机制必须改写")
+                    cleaned = accept_revised_mechanism(
+                        response["revised_mechanism"], explanations=explanations,
+                        parent_question=parent_question,
+                        parent_holdout_sha256=parent_holdout_sha256)
+                    if second_feature not in cleaned or f"{threshold:.8g}" not in cleaned:
+                        raise ProtocolError("后继机制必须点名第二特征和同一阈值")
+                    text = cleaned
+                    author = "model"
+                    break
+                except ProtocolError as caught:
+                    last = caught
+                    error = str(caught)
         if text is None:
             author = "kernel_after_model_rejection"
     if text is None:

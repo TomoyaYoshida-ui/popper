@@ -32,7 +32,7 @@ jobs:
           python -m pip wheel . --no-deps -w wheelhouse
           python .github/scripts/check_wheel_web.py wheelhouse/*.whl
           python .github/scripts/check_wheel_demos.py wheelhouse/*.whl
-          python -m pip install --no-deps --target wheel-smoke wheelhouse/*.whl
+          python -m pip install --target wheel-smoke wheelhouse/*.whl
           python -I -c "import sys; from pathlib import Path; sys.path.insert(0, 'wheel-smoke'); from popper.server import Handler; root=Handler._frontend_dist(); assert root.is_relative_to(Path('wheel-smoke').resolve()) and (root / 'index.html').is_file()"
           python -I .github/scripts/smoke_installed_workbench.py wheel-smoke
           python -I .github/scripts/smoke_installed_demo.py wheel-smoke
@@ -75,7 +75,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: 安装（核心零运行时依赖）
+      - name: 安装（核心依赖，不安装可选 extras）
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
@@ -123,7 +123,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install -e ".[ml,intake,research,orchestration,confirmation,workstation,figs]"
+          python -m pip install -e ".[analysis,ml,intake,research,orchestration,confirmation,workstation,figs]"
       - name: 全量测试（覆盖需要可选依赖的分支）
         # -rs 与 PYTHONIOENCODING 的理由同 test job：skip 名单要能递出来、递出来要读得懂。
         id: pytest
@@ -144,7 +144,7 @@ jobs:
         run: |
           python -m pip wheel . --no-deps -w wheelhouse
           $wheel = (Get-ChildItem wheelhouse\popper_research-*.whl | Select-Object -First 1).FullName
-          python -m pip install --no-deps --target wheel-smoke $wheel
+          python -m pip install --target wheel-smoke $wheel
           python -I .github/scripts/smoke_installed_terminal.py wheel-smoke
       - name: 失败清单与 skip 名单写进 job summary
         # 绿跑也递 skip 名单：extras 少装一个就会表现成「一大片带原因的 skip」，
@@ -176,7 +176,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: 安装（Linux job 声明装齐五个 extra）
-        # 与 test job 相反：这里不是零依赖验证点，而是沙箱硬门禁。真实沙箱 worker
+        # 与只装核心的 test job 不同：这里覆盖可选依赖与沙箱硬门禁。真实沙箱 worker
         # 用例同时要求沙箱后端与 cryptography（见 test_research_confirmation_runner.py 的
         # 类级守卫），少装任何一个 extra 都会让 POPPER_REQUIRE_SANDBOX=1 的硬门禁在
         # 「对应用例被 skip」的情况下发绿——那正是本 job 存在的理由被空转。
@@ -185,7 +185,7 @@ jobs:
           python -m pip install pytest
           # workstation 的 pywinpty 带 Windows 环境标记，Linux 会合法跳过其平台包；
           # extra 本身仍必须出现在安装清单，确保声明、探针和 CI 契约不漂移。
-          python -m pip install -e ".[ml,intake,research,orchestration,confirmation,workstation,figs]"
+          python -m pip install -e ".[analysis,ml,intake,research,orchestration,confirmation,workstation,figs]"
       - name: 准备 bubblewrap 沙箱环境
         # 装 bwrap / 开 AppArmor 的 userns 例外 / 按真实形状探活——三步都在
         # `.github/actions/sandbox-env`，与下面的端到端 job 共用一个出处（为什么必须共用、
@@ -254,8 +254,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: 安装（只装 -e .，不装任何 extra）
-        # 端到端走的是核心 CLI，它只依赖标准库——这同时是「零运行时依赖」那条对外主张在
-        # **真实执行路径**上的验证点（零依赖单测 job 只证到测试层，没证到能跑完一个实验）。
+        # 端到端只安装核心 CLI 及其声明依赖——验证无需可选 extras 的
+        # **真实执行路径**上的验证点（只装核心的单测 job 只证到测试层，没证到能跑完一个实验）。
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .

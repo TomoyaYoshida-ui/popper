@@ -6,6 +6,8 @@ import os
 import subprocess
 import sys
 import hashlib
+from contextlib import nullcontext
+from inspect import getattr_static
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -515,20 +517,23 @@ class VendorRegistry:
                            "must be testable by this evaluator. Do not introduce probability metrics, cross-validation, "
                            "statistical significance or confidence intervals. This is a descriptive fixed-split experiment.")
                 payload["evaluation_contract"] = evaluation_contract
-            for attempt in range(2):
-                candidate = client(prompt, payload)
-                try:
-                    if evaluation_contract is not None:
-                        validate_candidate(candidate, evaluation_contract)
-                    elif not all(isinstance(candidate.get(k), str) and candidate[k].strip()
-                                 for k in ("title", "core_mechanism", "falsification_prediction")):
-                        raise ProtocolError("LLM 候选不符合契约")
-                    break
-                except ProtocolError as error:
-                    if attempt == 1:
-                        raise
-                    payload["validation_error"] = str(error)
-                    payload["rejected_candidate"] = candidate
+            scope = (client.logical_operation(max_attempts=2)
+                     if getattr_static(client, "logical_operation", None) is not None else nullcontext())
+            with scope:
+                for attempt in range(2):
+                    candidate = client(prompt, payload)
+                    try:
+                        if evaluation_contract is not None:
+                            validate_candidate(candidate, evaluation_contract)
+                        elif not all(isinstance(candidate.get(k), str) and candidate[k].strip()
+                                     for k in ("title", "core_mechanism", "falsification_prediction")):
+                            raise ProtocolError("LLM 候选不符合契约")
+                        break
+                    except ProtocolError as error:
+                        if attempt == 1:
+                            raise
+                        payload["validation_error"] = str(error)
+                        payload["rejected_candidate"] = candidate
             out_dir = target / "phase3_revise"
             out_dir.mkdir(parents=True, exist_ok=True)
             out_path = out_dir / "final_candidate.json"

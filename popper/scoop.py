@@ -41,22 +41,32 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
     opener = urllib.request.build_opener(NoRedirect)
 
     spent = {"tokens": 0}
+    from .transport.logical_operation import LogicalOperation, LogicalOperationManager
+    operations = LogicalOperationManager(request_limits)
 
     def call(system, payload, *, cancel_event=None, on_progress=None, logical_request_id=None):
         from .request_lifecycle import (RequestLifecycle, RequestFailure, failure_category,
                                         cancellable_wait, usage_total)
         from .structured_stream import collect_json_stream
-        cancel_event = cancel_event or threading.Event()
-        if cancel_event.is_set():
-            raise RequestFailure('cancelled', sent=False)
-        logical_started = time.monotonic()
+        operation = operations.current
+        if operation is None:
+            operation = LogicalOperation(logical_request_id, limits=request_limits,
+                                         cancel_event=cancel_event)
+        elif logical_request_id is not None and logical_request_id != operation.key:
+            raise ProtocolError('逻辑请求上下文内不能更改请求 ID')
+        operation.cancel.bind(cancel_event)
+        cancel_event = operation.cancel
+        operation.check()
+        logical_started = operation.started
         if "json" not in system.casefold():
             system += "\nReturn exactly one JSON object."
         call_id = uuid.uuid4().hex
-        logical_request_id = logical_request_id or call_id
+        logical_request_id = operation.key
         repair_json = False
-        for attempt in range(2):
-            lifecycle = RequestLifecycle(cancel_event, request_limits, on_progress)
+        for _ in range(2):
+            previous_failure = operation.last_failure
+            attempt_index = operation.claim_attempt()
+            lifecycle = RequestLifecycle(cancel_event, operation.limits, on_progress)
             lifecycle.started = logical_started
             body = {"model": model, "temperature": 0, "max_tokens": 16000 if repair_json else 8000,
                     "stream": True, "stream_options": {"include_usage": True},
@@ -76,18 +86,22 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                     "The previous response was truncated or invalid JSON. Return one complete JSON "
                     "object matching the requested schema. Keep explanations concise; no Markdown."})
             reservation = request_budget.reserve(body, logical_request_id=logical_request_id,
-                attempt_index=attempt+1, pre_output_retry=attempt>0 and not repair_json) if request_budget is not None else None
+                attempt_index=attempt_index, pre_output_retry=(attempt_index > 1 and not repair_json
+                    and previous_failure is not None and not previous_failure.output_started)) if request_budget is not None else None
             settled = False
             usage = None
             request = urllib.request.Request(base_url.rstrip("/") + "/chat/completions",
                                              data=canonical(body).encode(), method="POST",
                                              headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
-            diagnostic = {"call_id": call_id, "attempt": attempt + 1, "model": model,
+            diagnostic = {"call_id": call_id, "attempt": attempt_index, "model": model,
                           'logical_request_id': logical_request_id,
+                          'logical_started_monotonic': logical_started,
+                          'logical_deadline_monotonic': operation.deadline,
                           "request_sha256": hashlib.sha256(canonical(body).encode()).hexdigest(),
                           "max_tokens": body.get('max_completion_tokens', body.get('max_tokens'))}
             retryable = False
             try:
+                operation.check()
                 envelope = collect_json_stream(lifecycle, opener, request, diagnostic)
                 retryable = True
                 choice = envelope["choices"][0]
@@ -107,6 +121,7 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                 if not isinstance(result, dict):
                     raise ValueError("JSON object required")
                 diagnostic["status"] = "success"
+                operation.record_success()
                 return result
             except Exception as error:
                 usage = lifecycle.usage or usage
@@ -132,13 +147,20 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                     repair_json = error.category == 'output_truncated'
                     if lifecycle.output_started and not repair_json:
                         retryable = False  # Do not replay a generation after visible/reasoning output.
+                elif isinstance(error, ProtocolError):
+                    retryable = False  # Budget or transport contract rejection is terminal.
                 if isinstance(error, ValueError) and not isinstance(error, ProtocolError):
                     diagnostic['failure_category'] = 'invalid_json'
                 if cancel_event.is_set() or time.monotonic()-logical_started >= lifecycle.limits.total:
                     retryable = False
-                if attempt == 1 or not retryable:
-                    failure = RequestFailure(diagnostic['failure_category'], usage=usage, sent=lifecycle.sent)
-                    failure.call_id = call_id
+                failure = RequestFailure(diagnostic['failure_category'], usage=usage, sent=lifecycle.sent,
+                    transport_phase=lifecycle.transport_phase, output_started=lifecycle.output_started,
+                    stream_completed=lifecycle.stream_completed)
+                failure.call_id = call_id
+                failure.logical_request_id = logical_request_id
+                failure.attempt_index = attempt_index
+                operation.record_failure(failure, retryable=retryable)
+                if operation.remaining_attempts == 0 or not retryable:
                     raise failure from None
                 if on_progress is not None:
                     on_progress({'state': 'retrying', 'elapsed_seconds': round(time.monotonic()-logical_started,1)})
@@ -168,7 +190,7 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                     folder.mkdir(parents=True, exist_ok=True)
                     serialized = json.dumps(diagnostic, ensure_ascii=False, indent=2)
                     serialized = serialized.replace(key, "[REDACTED]")
-                    (folder / f"{call_id}-{attempt + 1}.json").write_text(serialized + "\n", encoding="utf-8")
+                    (folder / f"{call_id}-{attempt_index}.json").write_text(serialized + "\n", encoding="utf-8")
                 if budget_error is not None:
                     if diagnostic.get('status') == 'failed':
                         raise RequestFailure(diagnostic.get('failure_category', 'unknown_usage'),
@@ -176,6 +198,7 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                     raise budget_error
 
     call.tokens_used = lambda: request_budget.tokens_used if request_budget is not None else spent["tokens"]
+    call.logical_operation = operations.operation
     return call
 
 
@@ -220,21 +243,26 @@ def _verify_fulltext(llm, candidate, paper, content):
               "closest_passage must be an exact consecutive quotation of 20 to 300 characters from the supplied text. "
               "Do not paraphrase or join non-adjacent text from PDF columns.")
     normalize = lambda text: " ".join(text.split())
-    for attempt in range(2):
-        verified = llm(prompt, payload)
-        matches = verified.get("axis_matches", {})
-        passage = verified.get("closest_passage", "")
-        if (verified.get("paper_id") == paper["paper_id"] and isinstance(matches, dict)
-                and set(matches) == set(AXES)
-                and all(value in {"match", "partial", "differ"} for value in matches.values())
-                and isinstance(passage, str) and 20 <= len(passage.strip()) <= 300
-                and normalize(passage) in normalize(content)):
-            return {"axis_matches": matches, "assumptions_scope": verified.get("assumptions_scope"),
-                    "closest_passage": passage}
-        if attempt == 0:
-            payload = {**payload, "validation_error": "Paper id, axes or literal quotation did not match. "
-                       "Copy a shorter consecutive passage directly from the supplied text.",
-                       "rejected_response": verified}
+    from contextlib import nullcontext
+    from inspect import getattr_static
+    scope = (llm.logical_operation(max_attempts=2)
+             if getattr_static(llm, "logical_operation", None) is not None else nullcontext())
+    with scope:
+        for attempt in range(2):
+            verified = llm(prompt, payload)
+            matches = verified.get("axis_matches", {})
+            passage = verified.get("closest_passage", "")
+            if (verified.get("paper_id") == paper["paper_id"] and isinstance(matches, dict)
+                    and set(matches) == set(AXES)
+                    and all(value in {"match", "partial", "differ"} for value in matches.values())
+                    and isinstance(passage, str) and 20 <= len(passage.strip()) <= 300
+                    and normalize(passage) in normalize(content)):
+                return {"axis_matches": matches, "assumptions_scope": verified.get("assumptions_scope"),
+                        "closest_passage": passage}
+            if attempt == 0:
+                payload = {**payload, "validation_error": "Paper id, axes or literal quotation did not match. "
+                           "Copy a shorter consecutive passage directly from the supplied text.",
+                           "rejected_response": verified}
     raise ProtocolError("全文核验响应未绑定论文、指标轴或真实原文片段（两次尝试）")
 
 

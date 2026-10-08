@@ -81,10 +81,10 @@ class ConfirmationRecoveryTests(unittest.TestCase):
         controller = self.prepare()
         reserve = BudgetLedger.reserve
 
-        def fail_second(ledger, family_id, item, amount):
+        def fail_second(ledger, family_id, item, amount, kind="dev"):
             if item.startswith("RUN-confirm-candidate-"):
                 raise RuntimeError("second reservation failed")
-            return reserve(ledger, family_id, item, amount)
+            return reserve(ledger, family_id, item, amount, kind=kind)
 
         with patch.object(BudgetLedger, "reserve", fail_second):
             with self.assertRaisesRegex(RuntimeError, "second reservation"):

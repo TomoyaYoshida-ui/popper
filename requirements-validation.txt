@@ -1,4 +1,8 @@
 certifi==2026.7.22
+annotated-types==0.8.0
+pydantic==2.14.0
+pydantic-core==2.50.0
+typing-inspection==0.4.4
 cffi==2.1.1
 charset-normalizer==3.5.2
 cloudpickle==3.1.2

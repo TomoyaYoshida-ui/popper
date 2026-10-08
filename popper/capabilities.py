@@ -8,7 +8,7 @@
 2. 测试树有两处（`tests/` 与 `evaluation/blind_pilot/tests/`），各自跑在依赖完备程度
    不同的环境里。同一份探测逻辑复制两遍必然漂移，共享一个入口才跳得一致。
 
-对应纪律：核心零依赖 job 里跳过用例是**显式跳过并写明原因**，不是静默降级——
+对应纪律：仅核心依赖的 job 里跳过用例是**显式跳过并写明原因**，不是静默降级——
 装齐 extras 的 job 仍然逐条真跑，覆盖不丢。
 """
 from __future__ import annotations
@@ -18,6 +18,7 @@ import importlib.util
 #: pyproject.toml `[project.optional-dependencies]` 的 extra 名 -> 该 extra 的关键导入名。
 #: 新增 extra 时必须同步这里，否则探测会假报"可用"。
 EXTRA_IMPORTS = {
+    "analysis": ("numpy",),
     "ml": ("sklearn",),
     "intake": ("pyarrow",),
     "research": ("requests", "pypdf"),
