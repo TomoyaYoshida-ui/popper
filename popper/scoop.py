@@ -42,9 +42,9 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
 
     spent = {"tokens": 0}
 
-    def call(system, payload, *, cancel_event=None, on_progress=None):
+    def call(system, payload, *, cancel_event=None, on_progress=None, logical_request_id=None):
         from .request_lifecycle import (RequestLifecycle, RequestFailure, failure_category,
-                                        cancellable_wait)
+                                        cancellable_wait, usage_total)
         from .structured_stream import collect_json_stream
         cancel_event = cancel_event or threading.Event()
         if cancel_event.is_set():
@@ -53,6 +53,7 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
         if "json" not in system.casefold():
             system += "\nReturn exactly one JSON object."
         call_id = uuid.uuid4().hex
+        logical_request_id = logical_request_id or call_id
         repair_json = False
         for attempt in range(2):
             lifecycle = RequestLifecycle(cancel_event, request_limits, on_progress)
@@ -74,13 +75,15 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                 body["messages"].append({"role": "user", "content":
                     "The previous response was truncated or invalid JSON. Return one complete JSON "
                     "object matching the requested schema. Keep explanations concise; no Markdown."})
-            reservation = request_budget.reserve(body) if request_budget is not None else None
+            reservation = request_budget.reserve(body, logical_request_id=logical_request_id,
+                attempt_index=attempt+1, pre_output_retry=attempt>0 and not repair_json) if request_budget is not None else None
             settled = False
             usage = None
             request = urllib.request.Request(base_url.rstrip("/") + "/chat/completions",
                                              data=canonical(body).encode(), method="POST",
                                              headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
             diagnostic = {"call_id": call_id, "attempt": attempt + 1, "model": model,
+                          'logical_request_id': logical_request_id,
                           "request_sha256": hashlib.sha256(canonical(body).encode()).hexdigest(),
                           "max_tokens": body.get('max_completion_tokens', body.get('max_tokens'))}
             retryable = False
@@ -93,8 +96,9 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                 diagnostic["usage"] = usage
                 if reservation is not None:
                     settled = True
-                    request_budget.settle(reservation, usage)
-                total = (envelope.get("usage") or {}).get("total_tokens")
+                    request_budget.settle(reservation, usage, complete=lifecycle.stream_completed,
+                        transport_phase=lifecycle.transport_phase, output_started=lifecycle.output_started)
+                total = usage_total(envelope.get('usage'))
                 if type(total) is int and total >= 0:
                     spent["tokens"] += total
                 if choice.get("finish_reason") == "length":
@@ -124,9 +128,11 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                     diagnostic["network_reason_type"] = type(getattr(error, "reason", error)).__name__
                 elif isinstance(error, RequestFailure):
                     retryable = error.category in {'connection_failure', 'connect_timeout',
-                        'read_timeout', 'temporary_service', 'output_truncated'}
+                        'read_timeout', 'temporary_service', 'output_truncated', 'stream_interrupted'}
                     repair_json = error.category == 'output_truncated'
-                if isinstance(error, ValueError):
+                    if lifecycle.output_started and not repair_json:
+                        retryable = False  # Do not replay a generation after visible/reasoning output.
+                if isinstance(error, ValueError) and not isinstance(error, ProtocolError):
                     diagnostic['failure_category'] = 'invalid_json'
                 if cancel_event.is_set() or time.monotonic()-logical_started >= lifecycle.limits.total:
                     retryable = False
@@ -140,14 +146,21 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                                  cancel_event.is_set)
             finally:
                 diagnostic['usage'] = usage
-                diagnostic['usage_status'] = 'known' if isinstance(usage, dict) and type(usage.get('total_tokens')) is int else ('unknown' if lifecycle.sent else 'not_sent')
+                diagnostic['transport_phase'] = lifecycle.transport_phase
+                diagnostic['output_started'] = lifecycle.output_started
+                diagnostic['stream_completed'] = lifecycle.stream_completed
+                has_usage = isinstance(usage, dict) and bool(usage)
+                diagnostic['usage_status'] = ('not_sent' if not lifecycle.sent else
+                    ('known' if usage_total(usage) is not None and lifecycle.stream_completed else ('partial' if has_usage else 'unknown')))
                 diagnostic['usage_reason'] = diagnostic.get('failure_category', 'missing_provider_usage') if diagnostic['usage_status'] != 'known' else None
                 budget_error = None
                 if reservation is not None and not settled:
                     settled = True
                     try:
                         request_budget.settle(reservation, usage,
-                                              reason=diagnostic.get('failure_category'), sent=lifecycle.sent)
+                                              reason=diagnostic.get('failure_category'), sent=lifecycle.sent,
+                                              complete=lifecycle.stream_completed, transport_phase=lifecycle.transport_phase,
+                                              output_started=lifecycle.output_started)
                     except ProtocolError as caught:
                         budget_error = caught
                 if diagnostics_dir is not None:
@@ -157,6 +170,9 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                     serialized = serialized.replace(key, "[REDACTED]")
                     (folder / f"{call_id}-{attempt + 1}.json").write_text(serialized + "\n", encoding="utf-8")
                 if budget_error is not None:
+                    if diagnostic.get('status') == 'failed':
+                        raise RequestFailure(diagnostic.get('failure_category', 'unknown_usage'),
+                                             usage=usage, sent=lifecycle.sent) from None
                     raise budget_error
 
     call.tokens_used = lambda: request_budget.tokens_used if request_budget is not None else spent["tokens"]

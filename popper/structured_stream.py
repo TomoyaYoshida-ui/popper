@@ -1,12 +1,13 @@
 """Collect a bounded JSON answer from SSE; never downgrade to non-streaming."""
 import json
-from .request_lifecycle import RequestFailure
+from .request_lifecycle import RequestFailure, SSEReader
 
 
 def collect_json_stream(lifecycle, opener, request, diagnostic):
     content, finish, response_id = [], None, None
     wire, payload = 0, 0
     with lifecycle.open(opener, request) as response:
+        response = SSEReader(response)
         while True:
             line = response.readline(65537)
             if not line:
@@ -21,6 +22,8 @@ def collect_json_stream(lifecycle, opener, request, diagnostic):
                 raise RequestFailure('invalid_sse', usage=lifecycle.usage)
             data = text[5:].strip()
             if data == '[DONE]':
+                lifecycle.stream_completed = True
+                lifecycle.transport_phase = 'completed'
                 break
             envelope = json.loads(data)
             if isinstance(envelope.get('usage'), dict):
@@ -35,6 +38,7 @@ def collect_json_stream(lifecycle, opener, request, diagnostic):
                 continue
             finish = choices[0].get('finish_reason') or finish
             piece = (choices[0].get('delta') or {}).get('content') or ''
+            lifecycle.observe_output((choices[0].get('delta') or {}).get('reasoning_content'))
             if not isinstance(piece, str):
                 raise RequestFailure('invalid_response', usage=lifecycle.usage)
             payload += len(piece.encode('utf-8'))
@@ -42,6 +46,7 @@ def collect_json_stream(lifecycle, opener, request, diagnostic):
                 raise RequestFailure('response_size_limit', usage=lifecycle.usage)
             content.append(piece)
             if piece:
+                lifecycle.observe_output(piece)
                 lifecycle.progress('receiving')
     diagnostic['finish_reason'] = finish
     diagnostic['response_id'] = response_id

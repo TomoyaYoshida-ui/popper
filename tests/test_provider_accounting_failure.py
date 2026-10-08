@@ -122,6 +122,8 @@ class ProviderFailureAccountingTests(unittest.TestCase):
         result = self.send()
         self.assertEqual('failed', result['turn']['status'])
         self.assertNotIn('provider', result['turn']['error'])
+        self.assertEqual('partial',result['turn']['error']['transport']['usage_status'])
+        self.assertEqual(100,result['turn']['error']['partial_provider_usage']['total_tokens'])
         self.assertEqual(1, self.status()['unresolved_requests'])
 
     def test_malformed_native_tool_keeps_known_usage_and_no_tool_is_executed(self):

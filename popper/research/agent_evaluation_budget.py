@@ -99,11 +99,12 @@ class AgentEvaluationBudget:
                 if prior["sha256"] != sha or prior["reserved"] != reserved_tokens:
                     raise ProtocolError("request ID belongs to a different snapshot")
                 raise ProtocolError("request already reserved; reconcile it, never redispatch automatically")
-            if self.connection.execute("SELECT 1 FROM requests WHERE state NOT IN ('settled','aggregate_reconciled','usage_over_reservation') LIMIT 1").fetchone():
+            if self.connection.execute("SELECT 1 FROM requests WHERE state NOT IN ('settled','aggregate_reconciled','usage_over_reservation','not_sent') LIMIT 1").fetchone():
                 raise ProtocolError("unresolved request or unavailable usage; campaign stopped")
             limits = self.connection.execute("SELECT * FROM policy").fetchone()
             count, used = self.connection.execute(
-                "SELECT count(*),coalesce(sum(used),0) FROM requests").fetchone()
+                "SELECT SUM(CASE WHEN state='not_sent' THEN 0 ELSE 1 END),coalesce(sum(used),0) FROM requests").fetchone()
+            count = count or 0
             used += self.connection.execute("SELECT coalesce(sum(adjustment),0) FROM aggregate_usage").fetchone()[0]
             if count >= limits["max_requests"] or used + reserved_tokens > limits["max_tokens"]:
                 raise ProtocolError("campaign request/token ceiling exhausted")
@@ -118,6 +119,8 @@ class AgentEvaluationBudget:
             row = self.connection.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone()
             if row is None:
                 raise ProtocolError("unknown campaign request")
+            if row['state']=='not_sent':
+                raise ProtocolError('proven unsent request cannot be changed into provider usage')
             if self.connection.execute('SELECT 1 FROM aggregate_members WHERE request_id=?', (request_id,)).fetchone():
                 if row['state'] == 'settled' and type(total_tokens) is int and row['used'] == total_tokens:
                     return
@@ -180,12 +183,28 @@ class AgentEvaluationBudget:
             self.connection.execute("UPDATE requests SET state='aggregate_reconciled' WHERE id=?", (unknown[0]['id'],))
         return self.status()
 
+    def settle_not_sent(self, request_id, proof):
+        """Refund only a trusted transport's proof that no application write started."""
+        from ..request_lifecycle import RequestFailure
+        from ..chat import ChatCancelled
+        if (not isinstance(proof,(RequestFailure,ChatCancelled)) or proof.sent is not False
+                or proof.output_started is not False or proof.stream_completed is not False
+                or proof.transport_phase not in {'not_started','connecting','connected'}):
+            raise ProtocolError('unavailable usage is not proof of an unsent request')
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            row=self.connection.execute('SELECT state FROM requests WHERE id=?',(request_id,)).fetchone()
+            if row is None or row['state'] not in {'reserved','not_sent'}:
+                raise ProtocolError('only an unfinalized campaign attempt can be proven unsent')
+            self.connection.execute("UPDATE requests SET state='not_sent',used=0 WHERE id=?",(request_id,))
+
     def status(self):
         rows = self.connection.execute("SELECT state,used,reserved FROM requests").fetchall()
         adjustment = self.connection.execute('SELECT coalesce(sum(adjustment),0) FROM aggregate_usage').fetchone()[0]
         return {"request_count": len(rows), "used_tokens": sum(r["used"] or 0 for r in rows) + adjustment,
-                "unresolved_requests": sum(r["state"] not in {'settled','aggregate_reconciled','usage_over_reservation'} for r in rows),
+                "unresolved_requests": sum(r["state"] not in {'settled','aggregate_reconciled','usage_over_reservation','not_sent'} for r in rows),
+                'not_sent_requests':sum(r['state']=='not_sent' for r in rows),
                 "over_reservation_requests": sum(r["state"] == 'usage_over_reservation' for r in rows),
                 "unallocated_usage_requests": sum(r['state'] == 'aggregate_reconciled' for r in rows),
                 "aggregate_adjustment_tokens": adjustment,
-                "remaining_calls": self.connection.execute("SELECT max_requests FROM policy").fetchone()[0] - len(rows)}
+                "remaining_calls": self.connection.execute("SELECT max_requests FROM policy").fetchone()[0] - sum(r['state']!='not_sent' for r in rows)}

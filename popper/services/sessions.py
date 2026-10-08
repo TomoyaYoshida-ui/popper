@@ -516,6 +516,22 @@ class SessionsService(HostService):
                         details['provider'] = task_memory.redact_input({'response_id': error.response_id, 'finish_reason': error.finish_reason, 'stream_completed': error.stream_completed, 'usage': error.usage})
                     elif isinstance(error, ChatCancelled) and error.stream_completed:
                         usage = error.usage
+                    else:
+                        from ..request_lifecycle import RequestFailure
+                        if isinstance(error,(RequestFailure,ChatCancelled)):
+                            partial = getattr(error,'partial_usage',None) or error.usage
+                            details['transport'] = task_memory.redact_input({
+                                'transport_phase':error.transport_phase,'sent':error.sent,
+                                'output_started':error.output_started,'stream_completed':error.stream_completed,
+                                'usage_status':'not_sent' if error.sent is False else ('partial' if partial else 'unknown')})
+                            if partial:
+                                details['partial_provider_usage'] = task_memory.redact_input(partial)
+                            if (error.sent is False and error.output_started is False
+                                    and error.stream_completed is False
+                                    and error.transport_phase in {'not_started','connecting','connected'}):
+                                # This zero is local transport proof, not fabricated provider usage.
+                                # Its source is retained in turn.error.transport.
+                                usage = {'prompt_tokens':0,'completion_tokens':0,'total_tokens':0}
                     return (store.fail_turn(turn_id, details), usage)
                 except ProtocolError:
                     return (store.get_turn(turn_id), usage)
@@ -551,7 +567,8 @@ class SessionsService(HostService):
                 reply = harness.invoke(system_prompt, history)
             if ledger is not None:
                 usage = getattr(reply, 'usage', {})
-                total = usage.get('total_tokens') if isinstance(usage, dict) else None
+                from ..request_lifecycle import usage_total
+                total = usage_total(usage)
                 ledger.settle(turn_id, total)
                 settled = True
                 if type(total) is not int or total < 0:
@@ -561,9 +578,17 @@ class SessionsService(HostService):
             return reply
         except Exception as error:
             from ..chat import ChatReplyError, ChatCancelled
+            from ..request_lifecycle import RequestFailure
+            if (ledger is not None and reserved and not settled
+                    and isinstance(error,(RequestFailure,ChatCancelled)) and error.sent is False
+                    and error.output_started is False and error.stream_completed is False
+                    and error.transport_phase in {'not_started','connecting','connected'}):
+                ledger.settle_not_sent(turn_id,error)
+                settled = True
             known_terminal = isinstance(error, ChatReplyError) or (isinstance(error, ChatCancelled) and error.stream_completed)
             if ledger is not None and reserved and (not settled) and known_terminal:
-                total = error.usage.get('total_tokens')
+                from ..request_lifecycle import usage_total
+                total = usage_total(error.usage)
                 ledger.settle(turn_id, total if type(total) is int and total >= 0 else None)
                 settled = True
             raise

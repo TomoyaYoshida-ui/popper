@@ -29,6 +29,21 @@ class CampaignBudgetTests(unittest.TestCase):
             self.ledger.reserve("third", {}, 1)
         self.assertEqual(80, self.ledger.status()["used_tokens"])
 
+    def test_unsent_transport_proof_releases_budget_but_ambiguous_failure_does_not(self):
+        from popper.request_lifecycle import RequestFailure
+        self.ledger.reserve('unsent',{},100)
+        ambiguous=RequestFailure('connect_timeout',sent=True,transport_phase='connecting')
+        with self.assertRaises(ProtocolError): self.ledger.settle_not_sent('unsent',ambiguous)
+        proof=RequestFailure('connect_timeout',sent=False,transport_phase='connecting',output_started=False)
+        self.ledger.settle_not_sent('unsent',proof)
+        self.ledger.settle_not_sent('unsent',proof)
+        self.assertEqual(0,self.ledger.status()['unresolved_requests'])
+        self.assertEqual(2,self.ledger.status()['remaining_calls'])
+        self.ledger.reserve('next',{},100)
+        self.ledger.settle('next',100)
+        self.assertEqual(100,self.ledger.status()['used_tokens'])
+        with self.assertRaises(ProtocolError): self.ledger.settle('unsent',10)
+
     def test_ambiguous_request_blocks_after_restart(self):
         self.ledger.reserve("one", {}, 50)
         self.ledger.close()

@@ -434,10 +434,15 @@ class ChatStore:
 class ChatCancelled(ProtocolError):
     """A cooperative model transport was cancelled by its owning turn."""
 
-    def __init__(self, message, usage=None, *, stream_completed=False):
+    def __init__(self, message, usage=None, *, stream_completed=False, sent=None,
+                 transport_phase=None, output_started=None):
         super().__init__(message)
         self.usage = dict(usage or {}) if stream_completed else {}
         self.stream_completed = stream_completed
+        self.partial_usage = dict(usage or {}) if not stream_completed else {}
+        self.sent = sent
+        self.transport_phase = transport_phase
+        self.output_started = output_started
 
 
 class ChatText(str):
@@ -572,11 +577,12 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
         def invoke(self, system, messages, *, cancel_event=None, on_delta=None, on_progress=None):
             cancel_event = cancel_event or threading.Event()
             if cancel_event.is_set():
-                raise ChatCancelled("模型调用已取消")
+                raise ChatCancelled("模型调用已取消", sent=False,
+                                    transport_phase='not_started', output_started=False)
             return _call_stream(system, messages, cancel_event, on_delta, on_progress)
 
     def _call_stream(system, messages, cancel_event, on_delta, on_progress):
-        from .request_lifecycle import RequestLifecycle, RequestFailure
+        from .request_lifecycle import RequestLifecycle, RequestFailure, SSEReader
         lifecycle = RequestLifecycle(cancel_event, request_limits, on_progress)
         call_id = uuid.uuid4().hex
         body = {"model": model, "temperature": 0.7, **output_limits,
@@ -589,6 +595,7 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
             headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
         try:
             with lifecycle.open(opener, request) as response:
+                response = SSEReader(response, wire_limit=SSE_WIRE_LIMIT, line_limit=SSE_LINE_LIMIT)
                 done = threading.Event()
 
                 def close_on_cancel():
@@ -624,6 +631,8 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
                         data = line[5:].strip()
                         if data == "[DONE]":
                             stream_completed = True
+                            lifecycle.stream_completed = True
+                            lifecycle.transport_phase = 'completed'
                             break
                         envelope = json.loads(data)
                         candidate_id = envelope.get("id")
@@ -643,6 +652,7 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
                         if reason in {"stop", "length", "tool_calls", "content_filter"}:
                             finish_reason = reason
                         delta = choices[0].get("delta") or {}
+                        lifecycle.observe_output(delta.get('reasoning_content'))
                         piece = delta.get("content") or ""
                         if piece:
                             if not isinstance(piece, str):
@@ -651,6 +661,7 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
                             if payload_bytes > MODEL_PAYLOAD_LIMIT:
                                 raise ProtocolError("模型有效回复超过大小上限")
                             content.append(piece)
+                            lifecycle.observe_output(piece)
                             lifecycle.progress('receiving')
                             if on_delta is not None:
                                 on_delta(piece)
@@ -677,7 +688,7 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
                 if cancel_event.is_set():
                     raise ChatCancelled("模型调用已取消", usage, stream_completed=stream_completed)
                 if not stream_completed:
-                    raise RequestFailure('stream_interrupted', usage=usage)
+                    raise lifecycle.failure('stream_interrupted')
             try:
                 if finish_reason == 'length':
                     raise ProtocolError("输出达到限制；已保留用量，禁止执行截断响应中的工具")
@@ -690,7 +701,8 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
         except RequestFailure as error:
             if error.category == 'cancelled':
                 raise ChatCancelled("模型调用已取消", error.usage,
-                                    stream_completed=False) from None
+                                    stream_completed=error.stream_completed, sent=error.sent,
+                                    transport_phase=error.transport_phase, output_started=error.output_started) from None
             raise
         except ChatCancelled:
             raise

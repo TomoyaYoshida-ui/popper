@@ -2609,12 +2609,12 @@ class ChatClientGuardTests(unittest.TestCase):
                 second = {"choices": [{"delta": {"tool_calls": [{
                     "index": 0, "function": {"arguments": json.dumps({
                         "expected_version": 1, "fid": "f1", "title": "任务"})}}]}}]}
-                yield ("data: " + json.dumps(first) + "\n").encode()
-                yield ("data: " + json.dumps(second) + "\n").encode()
+                yield ("data: " + json.dumps(first) + "\n\n").encode()
+                yield ("data: " + json.dumps(second) + "\n\n").encode()
                 yield ("data: " + json.dumps({"choices": [], "usage": {
                     "prompt_tokens": 10, "completion_tokens": 4,
-                    "total_tokens": 14}}) + "\n").encode()
-                yield b"data: [DONE]\n"
+                    "total_tokens": 14}}) + "\n\n").encode()
+                yield b"data: [DONE]\n\n"
 
             def readline(self, size=-1):
                 import io
@@ -2681,8 +2681,8 @@ class ChatClientGuardTests(unittest.TestCase):
             def __iter__(self):
                 for piece in ("研究", "完成"):
                     yield ("data: " + json.dumps({"choices": [{
-                        "delta": {"content": piece}}]}) + "\n").encode()
-                yield b"data: [DONE]\n"
+                        "delta": {"content": piece}}]}) + "\n\n").encode()
+                yield b"data: [DONE]\n\n"
             def readline(self, size=-1):
                 import io
                 if not hasattr(self, '_stream'):

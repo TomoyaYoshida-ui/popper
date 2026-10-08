@@ -25,6 +25,8 @@ class Handler(BaseHTTPRequestHandler):
             if mode == 'retry' and len(self.server.bodies) == 1:
                 self.send_response(503); self.end_headers(); return
             self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
+            if mode == 'metadata':
+                self.wfile.write(b'event: message\nid: synthetic\nretry: 1000\n')
             if mode == 'partial':
                 self.wfile.write(b'data: {'); self.wfile.flush(); time.sleep(2); return
             if mode == 'heartbeat':
@@ -37,7 +39,10 @@ class Handler(BaseHTTPRequestHandler):
             frames = [{'choices': [{'delta': tool if mode == 'tool_length' else {'content': text},
                        'finish_reason': 'length' if mode == 'tool_length' else 'stop'}]}]
             if mode != 'missing_usage': frames.append({'choices': [], 'usage': {'total_tokens': 17}})
-            for frame in frames: self.wfile.write(('data: '+json.dumps(frame)+'\n\n').encode())
+            for frame in frames:
+                if mode == 'metadata':
+                    self.wfile.write(('data: '+json.dumps(frame,indent=2).replace('\n','\ndata: ')+'\n\n').encode())
+                else: self.wfile.write(('data: '+json.dumps(frame)+'\n\n').encode())
             if mode != 'dropped_after_usage': self.wfile.write(b'data: [DONE]\n\n')
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError, OSError): pass
@@ -127,3 +132,73 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual('cancelled', error.exception.category)
         self.assertLess(time.monotonic()-start,1)
         self.assertEqual(1,len(self.server.bodies)); timer.cancel()
+
+    def test_sse_metadata_and_multiline_data_work_for_both_clients(self):
+        self.server.mode='metadata'
+        self.assertEqual('{"ok":true}',self.chat()('test',[]))
+        self.assertTrue(make_json_client(self.url,'local',api_key='synthetic-placeholder')('json',{})['ok'])
+
+    def test_response_headers_use_idle_timeout_after_tcp_connect(self):
+        self.server.mode='headers'
+        with self.assertRaises(RequestFailure) as error:
+            self.chat(RequestLimits(connect=.1,idle=.2,total=1))('test',[])
+        self.assertEqual('read_timeout',error.exception.category)
+
+    def test_windows_registry_proxy_does_not_override_explicit_environment_routing(self):
+        from unittest.mock import patch
+        with patch('urllib.request.getproxies',return_value={'http':'http://127.0.0.1:1'}), \
+             patch('urllib.request.getproxies_environment',return_value={}):
+            self.assertEqual('{"ok":true}',self.chat()('test',[]))
+
+    def test_connection_refusal_is_proven_not_sent_and_can_retry_under_strict_budget(self):
+        import socket
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            budget=ModelRequestBudget(Path(tmp)/'calls.db',global_tokens=100000,global_calls=1,
+                scope='strict',scope_tokens=100000,scope_calls=1)
+            call=make_json_client(f'http://127.0.0.1:{port}/v1','local',api_key='synthetic-placeholder',request_budget=budget)
+            with self.assertRaises(RequestFailure): call('json',{})
+            snapshot=budget.snapshot()
+            self.assertEqual(2,len(snapshot['attempts']))
+            self.assertTrue(all(r['usage_status']=='not_sent' for r in snapshot['attempts']))
+            self.assertEqual(0,snapshot['global']['calls']); self.assertEqual(0,budget.tokens_used)
+            budget.close()
+
+    def test_missing_usage_does_not_lock_unrelated_interactive_turns(self):
+        self.server.mode='missing_usage'
+        with tempfile.TemporaryDirectory() as tmp:
+            budget=ModelRequestBudget(Path(tmp)/'calls.db',global_tokens=100000,global_calls=2,
+                scope='interactive',scope_tokens=100000,scope_calls=2,unknown_usage_policy='reserve')
+            call=make_json_client(self.url,'local',api_key='synthetic-placeholder',request_budget=budget)
+            self.assertTrue(call('json',{},logical_request_id='one')['ok'])
+            self.assertTrue(call('json',{},logical_request_id='two')['ok'])
+            with self.assertRaises(ProtocolError): call('json',{},logical_request_id='three')
+            self.assertEqual(2,len(self.server.bodies))
+            self.assertEqual(0,budget.snapshot()['global']['known_tokens'])
+            self.assertGreater(budget.tokens_used,0); budget.close()
+
+    def test_retry_before_output_retains_each_attempt_bound(self):
+        self.server.mode='retry'
+        with tempfile.TemporaryDirectory() as tmp:
+            budget=ModelRequestBudget(Path(tmp)/'calls.db',global_tokens=100000,global_calls=2,
+                scope='interactive',scope_tokens=100000,scope_calls=2,unknown_usage_policy='reserve')
+            call=make_json_client(self.url,'local',api_key='synthetic-placeholder',request_budget=budget)
+            self.assertTrue(call('json',{},logical_request_id='one')['ok'])
+            rows=budget.snapshot()['attempts']
+            self.assertEqual([1,2],[r['attempt_index'] for r in rows])
+            self.assertEqual(['unknown','settled'],[r['status'] for r in rows])
+            self.assertGreater(budget.tokens_used,17); budget.close()
+
+    def test_interrupted_generation_is_not_replayed_and_keeps_partial_usage(self):
+        self.server.mode='dropped_after_usage'
+        with tempfile.TemporaryDirectory() as tmp:
+            budget=ModelRequestBudget(Path(tmp)/'calls.db',global_tokens=100000,global_calls=2,
+                scope='interactive',scope_tokens=100000,scope_calls=2,unknown_usage_policy='reserve')
+            call=make_json_client(self.url,'local',api_key='synthetic-placeholder',request_budget=budget)
+            with self.assertRaises(RequestFailure): call('json',{},logical_request_id='one')
+            self.assertEqual(1,len(self.server.bodies))
+            row=budget.snapshot()['attempts'][0]
+            self.assertEqual('partial',row['usage_status'])
+            self.assertEqual(17,row['reported_tokens']); self.assertIsNone(row['used_tokens'])
+            self.assertEqual(1,row['output_started']); budget.close()
