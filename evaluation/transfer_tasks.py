@@ -90,6 +90,7 @@ def prepare(task, project, cache):
         registered[digest(c)]={**c,'hypothesis_id':hid,'is_baseline':False}
     registered[digest(baseline)]={**baseline,'hypothesis_id':'H-control-'+digest(baseline)[:12],'is_baseline':True}
     protocol={'schema':'paired-unit-ci/v1','metric':{'name':'mae','direction':'min'},'effect':'relative_mae_improvement',
+        'aggregation':'equal_analysis_unit_mean_mae',
         'unit':'ratio','confidence':.95,'bootstrap_samples':10000,'bootstrap_seed':DATA_SEED,'minimum_units':30,'model_seed':17,
         'features':{str(i):row for i,row in enumerate(x.tolist())},'groups':{str(i):g for i,g in enumerate(groups)},
         'configurations':registered,'hypothesis_predictions':predictions,'hypothesis_contrasts':contrasts,
@@ -102,6 +103,7 @@ def prepare(task, project, cache):
         'timeout_seconds':120,'min_improvement':.05,'provenance_files':['judgment-protocol.json']}
     if task=='T02': spec['analysis_slices']=[{'slice_id':'s1','rule':{'kind':'id_prefix','value':'source-'}},
                                            {'slice_id':'s2','rule':{'kind':'id_prefix','value':'independent-'}}]
+    if task=='T02': spec['analysis_slice_splits']=['dev']
     write_json(project/'experiment.json',spec)
     write_json(project/'oracle-private.json',oracle)
     return {'task':task,'rows':len(y),'features':x.shape[1],'split_rows':{s:len(v) for s,v in splits.items()},

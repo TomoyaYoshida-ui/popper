@@ -19,6 +19,7 @@ def validate_protocol(p):
     if not isinstance(p,dict) or not required <= p.keys() or p['schema'] != SCHEMA:
         raise ProtocolError('配对比较协议字段或版本不合法')
     if (p['metric'] != {'name':'mae','direction':'min'} or p['effect']!='relative_mae_improvement'
+            or p.get('aggregation','equal_analysis_unit_mean_mae')!='equal_analysis_unit_mean_mae'
             or p['unit']!='ratio' or p['confidence']!=.95 or p['bootstrap_samples']!=10000
             or p['minimum_units']!=30 or p['model_seed']!=17 or type(p['bootstrap_seed']) is not int):
         raise ProtocolError('未实现的配对比较统计规则')
@@ -117,7 +118,7 @@ def evaluate(packet):
     stats=paired_statistics(a,b,p['bootstrap_seed'])
     alternate=p['hypothesis_contrasts'][candidate]['alternative_id']
     return {'schema':SCHEMA,'request_sha256':digest(packet),'service_sha256':file_hash(Path(__file__)),
-        'metric':p['effect'],'unit':p['unit'],**stats,
+        'metric':p['effect'],'unit':p['unit'],'aggregation':'equal_analysis_unit_mean_mae',**stats,
         'analysis_prefix':prefix,'model_audit_sha256':[d[3] for d in decoded],
         'hypothesis_predictions':{h:p['hypothesis_predictions'][h] for h in (candidate,alternate)},
         'mechanism_proven':False,'trust':'separate_process_same_account'}

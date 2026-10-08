@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
@@ -18,19 +19,32 @@ def audit(out):
         root=out/'cells'/cell['id']; r=read_json(root/'result.json') if (root/'result.json').exists() else None
         record={**cell,'status':r['status'] if r else 'not_started','confirmation_status':'not_started',
                 'scientific_judgment':'not_evaluated','mean_effect':None,'ci95':None,'false_support':False,
-                'agent_assessment':'not_evaluated','agent_evidence_agreement':None,'experiments':0,'seconds':0.}
+                'agent_assessment':'not_evaluated','agent_evidence_agreement':None,'agent_development_agreement':None,
+                'experiments':0,'seconds':0.,'stop_actions':0,'revision_actions':0,'scope_changes':[]}
         if r:
             if r['protocol_sha256']!=protocol['protocol_sha256']: raise ProtocolError('单元协议不一致')
-            if len(r['executions'])>4: raise ProtocolError('开发实验超过冻结额度')
+                if len(r['executions'])>4: raise ProtocolError('开发实验超过冻结额度')
             record.update(experiments=len(r['executions']),seconds=r['elapsed_seconds'],
                 agent_assessment=r.get('final_agent_assessment','not_evaluated'))
+            record.update(stop_actions=sum(d['action']=='finish' for d in r['decisions']),
+                revision_actions=sum(d['action']=='revise' for d in r['decisions']),
+                scope_changes=[d['revision']['applicability'] for d in r['decisions'] if d['action']=='revise'])
             c=ResearchController(root/'research')
             try:
                 integrity=c.store.verify()
                 if not integrity['ok']: raise ProtocolError('研究存储证据不能重算: '+cell['id'])
+                for execution in r['executions']:
+                    primary=next(c.store.get('judgment',jid) for jid in execution['judgment_ids']
+                        if c.store.get('judgment',jid)['hypothesis_id']==execution['hypothesis_id'])
+                    if (execution.get('selection_metric')!='equal_analysis_unit_mean_mae'
+                        or not math.isclose(execution['dev_value'],primary['evidence']['candidate_mae'],rel_tol=1e-12,abs_tol=1e-12)):
+                        raise ProtocolError('选择指标不是独立评估的冻结单位 MAE')
                 if r['finalist']:
                     best=min(r['executions'],key=lambda x:(x['dev_value'],x['hypothesis_id']))
                     if best['hypothesis_id']!=r['finalist']['hypothesis_id']: raise ProtocolError('最终候选不是冻结开发目标的最优值')
+                    judgments=[j for j in c.store.list('judgment') if j['judgment_id'] in r['finalist']['judgment_ids'] and j['hypothesis_id']==r['finalist']['hypothesis_id']]
+                    if record['agent_assessment']!='not_evaluated' and judgments:
+                        record['agent_development_agreement']=record['agent_assessment']==judgments[-1]['new_judgment']
                 path=root/'confirmation.json'
                 if path.exists():
                     receipt=read_json(path); record['confirmation_status']=receipt['status']
@@ -62,6 +76,9 @@ def audit(out):
                 'scientific_inconclusive':sum(r['scientific_judgment']=='inconclusive' for r in valid),
                 'agent_evidence_agreement_count':sum(r['agent_evidence_agreement'] is True for r in assessed),
                 'agent_evidence_assessed_count':len(assessed),
+                'agent_development_agreement_count':sum(r['agent_development_agreement'] is True for r in rows),
+                'agent_development_assessed_count':sum(r['agent_development_agreement'] is not None for r in rows),
+                'stop_actions':sum(r['stop_actions'] for r in rows),'revision_actions':sum(r['revision_actions'] for r in rows),
                 'development_experiments':sum(r['experiments'] for r in rows),
                 'elapsed_seconds':round(sum(r['seconds'] for r in rows),3),
                 'confirmation_effects':[r['mean_effect'] for r in valid]})
@@ -69,7 +86,7 @@ def audit(out):
     if (out/'model-calls.sqlite').exists():
         from popper.model_budget import ModelRequestBudget
         budget=ModelRequestBudget(out/'model-calls.sqlite',global_tokens=5000000,global_calls=180,
-            scope='preflight',scope_tokens=100000,scope_calls=6)
+            scope='preflight',scope_tokens=100000,scope_calls=6,unknown_usage_policy='reserve')
         try: usage=budget.snapshot()['global']
         finally: budget.close()
         if usage['calls']>180 or usage['accounted_tokens']>5000000: raise ProtocolError('真实请求超过冻结全局预算')

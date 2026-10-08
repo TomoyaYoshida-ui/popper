@@ -100,6 +100,8 @@ class ResearchController:
         if (confirmation_contract is None) != (confirmation_public_key is None):
             raise ProtocolError("确认合同与独立固定的服务公钥必须同时提供")
         if confirmation_contract is not None:
+            if set(spec.get('analysis_slice_splits',['dev','test']))!={'dev','test'}:
+                raise ProtocolError('外部签名确认尚不支持按阶段限定的分析切片；不能忽略该范围配置')
             if 'confirmation_train' in spec:
                 raise ProtocolError('外部确认合同尚不支持 confirmation_train 重拟合；不能静默改变训练身份')
             if getattr(pack, "units_from_data", False):

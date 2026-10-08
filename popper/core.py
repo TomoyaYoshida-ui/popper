@@ -266,6 +266,11 @@ def validate_spec(spec):
     slices = spec.get("analysis_slices", [])
     if not isinstance(slices, list) or len(slices) > 16:
         raise ProtocolError("analysis_slices must be a list with at most 16 items")
+    slice_splits=spec.get('analysis_slice_splits',['dev','test'])
+    if (not isinstance(slice_splits,list) or not slice_splits
+            or any(not isinstance(split,str) or split not in {'dev','test'} for split in slice_splits)
+            or len(set(slice_splits))!=len(slice_splits)):
+        raise ProtocolError('analysis_slice_splits must register a nonempty unique dev/test subset')
     slice_ids = set()
     for item in slices:
         if (not isinstance(item, dict) or set(item) != {"slice_id", "rule"}

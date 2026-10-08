@@ -269,7 +269,8 @@ class IndependentEvaluator:
         for item in predictions:
             if not Path(item["path"]).is_file() or file_hash(item["path"]) != item["sha256"]:
                 raise ProtocolError("预测制品缺失或摘要变化")
-        slices = state["spec"].get("analysis_slices", [])
+        slices = (state["spec"].get("analysis_slices", [])
+                  if split in state['spec'].get('analysis_slice_splits',['dev','test']) else [])
         request = {"schema_version": "3.0" if slices else "2.0", "request_id": request_id,
                    "dataset": str(data_path), "dataset_sha256": expected_hash,
                    "evaluator_id": state["evaluator_id"],

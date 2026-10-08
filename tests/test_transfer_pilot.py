@@ -21,6 +21,16 @@ class TransferTests(unittest.TestCase):
             with self.assertRaises(ProtocolError): run(Path(tmp),offline=False)
             model_preflight.assert_not_called()
 
+    def test_preflight_stops_auth_immediately_and_infrastructure_after_three_probes(self):
+        from evaluation.run_transfer_pilot import preflight
+        from popper.request_lifecycle import RequestFailure
+        for category,count in (('authentication_or_permission',1),('connect_timeout',3)):
+            with tempfile.TemporaryDirectory() as tmp,patch('evaluation.run_transfer_pilot.make_json_client') as factory:
+                factory.return_value.side_effect=RequestFailure(category,sent=False)
+                with self.assertRaises(RequestFailure): preflight(Path(tmp),{'protocol_sha256':'fixture'})
+                self.assertEqual(count,factory.return_value.call_count)
+                self.assertEqual('failed',read_json(Path(tmp)/'preflight.json')['status'])
+
     def test_confirmation_replays_without_reconsumption_and_ambiguous_step_stops(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); taskroot=root/'tasks/T03'
@@ -46,6 +56,20 @@ class TransferTests(unittest.TestCase):
             self.assertEqual('failed',stopped['status'])
             self.assertEqual([],stopped['executions'])
             with self.assertRaises(ProtocolError): require_environment_gates(root,protocol)
+
+    def test_shift_confirmation_does_not_score_inapplicable_source_slice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); taskroot=root/'tasks/T02'; info=prepare('T02',taskroot,root/'cache')
+            files={p.name:file_hash(p) for p in taskroot.iterdir() if p.is_file() and p.name!='oracle-private.json'}
+            protocol={'protocol_sha256':'fixture','tasks':[{**info,'files':files}]}
+            cell={'id':'T02-fixture','task':'T02','strategy':'fixed_queue','repeat':0,'candidate_order':[2,3,6,7,0,1,4,5]}
+            result=run_cell(root,protocol,cell,offline=True)
+            self.assertEqual('development_completed',result['status'])
+            roster={'finalists':{cell['id']:result['finalist']},'protocol_sha256':'fixture'}
+            receipt=confirm_cell(root,protocol,cell,roster)
+            self.assertEqual('completed',receipt['status'])
+            self.assertTrue(all(j['evidence']['n_units']==400 for j in receipt['judgments']))
+            self.assertTrue(receipt['integrity']['ok'])
 
     def test_sufficiency_gate_and_distinct_scientific_verdicts(self):
         for n,improvement,expected in ((30,.15,'supported'),(30,-.15,'refuted'),(16,.15,'inconclusive')):
