@@ -1,0 +1,1 @@
+{"case":"binary-accuracy-v1","contract_score":1,"evaluator_id":"binary-accuracy-v1","handwritten_score":1,"milestone":"M-C","model_called":false,"schema":"popper.task-contract-report/v1","scores_equal":true,"source_evaluator_id":"binary-accuracy-v1","status":"passed"}

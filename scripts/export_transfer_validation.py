@@ -14,7 +14,12 @@ def main():
     additions=['scripts/export_transfer_validation.py','evaluation/validate_transfer_environment.py',
                'evaluation/verify_transfer_pilot.py','scripts/Dockerfile.transfer']
     receipts=['evaluation/runs/data-intake/heart-disease-cleveland/report.json',
-              'evaluation/runs/data-intake/parquet-roundtrip.json','evaluation/runs/mlebench-lite/tree-report.json']
+              'evaluation/runs/data-intake/parquet-roundtrip.json','evaluation/runs/mlebench-lite/tree-report.json',
+              'evaluation/runs/format-adapter/fixture-tab/report.json',
+              'evaluation/runs/problem-formation/heart-disease-cleveland/report.json',
+              'evaluation/runs/contract-loop/heart-disease-cleveland/report.json']
+    receipts += ['evaluation/runs/task-contract/'+metric+'/report.json' for metric in
+        ('mse-v1','mae-v1','binary-accuracy-v1','binary-f1-v1','multiclass-macro-f1-v1')]
     args.output.parent.mkdir(parents=True,exist_ok=True)
     count=0
     with tarfile.open(args.output,'w:gz') as archive:
