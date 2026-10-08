@@ -1195,6 +1195,7 @@ class ResearchController:
         from .tree_search import best_node, choose_action, node_record
         hypothesis_id = self.manifest["candidate_hypothesis_ids"][0]
         nodes, seen = [], set()
+        consecutive_provider_failures = 0
         limit = 8 if max_steps is None else max_steps
         direction = self.manifest["metric"]["direction"]
         threshold = self.manifest["min_meaningful_effect"]
@@ -1236,7 +1237,11 @@ class ResearchController:
             except ProtocolError as error:
                 message = str(error)
                 if "模型调用失败" in message:
-                    time.sleep(20)
+                    from ..request_lifecycle import cancellable_wait
+                    consecutive_provider_failures += 1
+                    if consecutive_provider_failures >= 3:
+                        raise ProtocolError('连续三次模型基础设施失败，研究已停止；保留已完成节点') from error
+                    cancellable_wait(1, should_cancel)
                     nodes.append(node_record(
                         f"node-{step}", decision["kind"], decision["parent_id"], depth, "buggy"))
                     continue
@@ -1247,6 +1252,7 @@ class ResearchController:
                     "duplicate" if "重复节点" in message else "buggy"))
                 continue
             observation = outcome["observation"]
+            consecutive_provider_failures = 0
             revision = outcome.get("revision") or {}
             nodes.append(node_record(
                 f"node-{step}", decision["kind"], decision["parent_id"], depth, "scored",
