@@ -1,0 +1,19 @@
+{
+  "schema": "repair-baseline/v1",
+  "repository": "research-agent-v2 (nested Git repository)",
+  "records": 30107,
+  "outcomes": {
+    "unclassified": 28686,
+    "success": 552,
+    "failed": 58,
+    "completed": 153
+  },
+  "inventory_sha256": "bdd64f1ce85b434cb0f4bbb48ffed9e05f2c138bb4296164e27e41753c581ad4",
+  "inventory_local_path": ".acceptance/historical-records.json",
+  "raw_records_committed": false,
+  "databases_opened": false,
+  "initial_collection_errors": 3,
+  "initial_error_cause": "ml optional dependency absent; installed before full baseline",
+  "full_baseline": "pending frozen snapshot run",
+  "preexisting_deletions": "preserved unstaged"
+}

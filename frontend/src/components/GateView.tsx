@@ -98,10 +98,10 @@ export function GateView({ review, riskNames, gateStatusLabels, mode7Names }: {
         <h2 style={{ fontSize: 16, marginBottom: 12 }}>造假侧 · 7-mode</h2>
         <div className="modes">
           {review.fraud_side.modes.map((m) => (
-            <div key={m.mode} className={`mode ${m.status === 'hit' ? 'hit' : ''}`}>
+            <div key={m.mode} className={`mode ${m.status === 'hit' ? 'hit' : m.status === 'unknown' ? 'unknown' : 'clean'}`}>
               <div><strong>{mode7Names[m.mode] ?? ''}</strong></div>
               <div className="muted" style={{ fontSize: 12 }}>
-                {m.status === 'hit' ? `命中：${m.evidence ?? '证据缺失'}` : '干净'}
+                {m.status === 'hit' ? `命中：${m.evidence ?? '证据缺失'}` : m.status === 'clean' ? '已检查，未命中' : '未验证'}
               </div>
             </div>
           ))}

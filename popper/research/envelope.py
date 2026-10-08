@@ -21,7 +21,7 @@ DEV_TOOLS = frozenset({
 
 
 def build_envelope(study_id, *, max_dev_runs, max_model_tokens, max_wall_clock_minutes,
-                   code_files, state_version, allowed_actions=None, approved_at=None):
+                   code_files, state_version, allowed_actions=None, approved_at=None, contract_sha256=None):
     """规范化包络并计算稳定摘要。摘要不包含自身。"""
     actions = tuple(sorted(allowed_actions or ALLOWED_ACTIONS))
     if not isinstance(study_id, str) or not study_id.startswith("S-"):
@@ -38,7 +38,10 @@ def build_envelope(study_id, *, max_dev_runs, max_model_tokens, max_wall_clock_m
             or any(not isinstance(name, str) or name.startswith(("/", "\\")) or ".." in Path(name).parts
                    or not name.endswith(".py") for name in code_files)):
         raise ProtocolError("可修改文件必须是项目内的相对 Python 路径")
-    if any(action not in ALLOWED_ACTIONS for action in actions) or "confirm" in actions:
+    permitted = ALLOWED_ACTIONS | ({"design_dev"} if contract_sha256 is not None else set())
+    if contract_sha256 is not None and (not isinstance(contract_sha256, str) or len(contract_sha256) != 64):
+        raise ProtocolError("研究合同摘要不合法")
+    if any(action not in permitted for action in actions) or "confirm" in actions:
         raise ProtocolError("自治包络不能包含独立确认")
     body = {
         "schema_version": SCHEMA, "study_id": study_id, "state_version": state_version,
@@ -47,6 +50,8 @@ def build_envelope(study_id, *, max_dev_runs, max_model_tokens, max_wall_clock_m
         "code_files": tuple(sorted(set(code_files))), "allowed_actions": actions,
         "approved_at": approved_at or datetime.now(timezone.utc).isoformat(),
     }
+    if contract_sha256 is not None:
+        body.update(schema_version="2.0", contract_sha256=contract_sha256)
     return {**body, "envelope_sha256": digest(body)}
 
 
@@ -57,7 +62,8 @@ def save_envelope(run_dir, envelope):
         max_model_tokens=envelope["max_model_tokens"],
         max_wall_clock_minutes=envelope["max_wall_clock_minutes"],
         code_files=envelope["code_files"], state_version=envelope["state_version"],
-        allowed_actions=envelope["allowed_actions"], approved_at=envelope["approved_at"])
+        allowed_actions=envelope["allowed_actions"], approved_at=envelope["approved_at"],
+        contract_sha256=envelope.get("contract_sha256"))
     if current["envelope_sha256"] != envelope["envelope_sha256"]:
         raise ProtocolError("自治包络摘要与内容不一致")
     write_json(path, current)
@@ -90,7 +96,7 @@ def read_usage(run_dir):
             "tokens_used": usage.get("tokens_used", 0)}
 
 
-def assert_active(envelope, *, dev_runs_used, state_version, tokens_used=0, now=None):
+def assert_active(envelope, *, dev_runs_used, state_version, tokens_used=0, now=None, contract_sha256=None):
     """执行下一步之前核对包络仍有效。超限、过期或研究版本变化都拒绝。"""
     if envelope is None:
         raise ProtocolError("没有生效的自治包络")
@@ -99,14 +105,18 @@ def assert_active(envelope, *, dev_runs_used, state_version, tokens_used=0, now=
         max_model_tokens=envelope["max_model_tokens"],
         max_wall_clock_minutes=envelope["max_wall_clock_minutes"],
         code_files=envelope["code_files"], state_version=envelope["state_version"],
-        allowed_actions=envelope["allowed_actions"], approved_at=envelope["approved_at"])
+        allowed_actions=envelope["allowed_actions"], approved_at=envelope["approved_at"],
+        contract_sha256=envelope.get("contract_sha256"))
     if expected["envelope_sha256"] != envelope["envelope_sha256"]:
         raise ProtocolError("自治包络内容与摘要不一致")
-    if state_version != envelope["state_version"]:
+    if envelope.get("schema_version") == "2.0":
+        if contract_sha256 != envelope.get("contract_sha256"):
+            raise ProtocolError("研究合同已变化，自治包络失效")
+    elif state_version != envelope["state_version"]:
         raise ProtocolError("研究状态版本已变化，自治包络失效")
     if dev_runs_used >= envelope["max_dev_runs"]:
         raise ProtocolError("已达到自治包络的开发集运行上限")
-    if tokens_used > envelope["max_model_tokens"]:
+    if tokens_used >= envelope["max_model_tokens"]:
         raise ProtocolError("已超过自治包络的模型 token 上限")
     approved = datetime.fromisoformat(envelope["approved_at"])
     current = now or datetime.now(timezone.utc)
@@ -125,6 +135,9 @@ def covers_tool(envelope, tool_name, arguments):
         return False
     if tool_name == "research.study_action" and arguments.get("action") != "run":
         return False
+    if (tool_name in {"research.create_hypothesis", "research.create_design", "research.freeze_design"}
+            and envelope.get("schema_version") == "2.0" and "design_dev" not in envelope["allowed_actions"]):
+        return False
     if tool_name == "workspace.file_replace" and arguments.get("path") not in envelope["code_files"]:
         return False
     return True
@@ -141,7 +154,10 @@ def covering_envelope(root, tool_name, arguments, *, now=None):
             usage = read_usage(path.parent)
             assert_active(envelope, dev_runs_used=usage["dev_runs_used"],
                           tokens_used=usage["tokens_used"],
-                          state_version=envelope["state_version"], now=now)
+                          state_version=envelope["state_version"], now=now,
+                          contract_sha256=(__import__("popper.research.prediction", fromlist=["research_contract"])
+                              .research_contract(read_json(path.parent / "research.json"))
+                              if envelope.get("schema_version") == "2.0" else None))
         except (ProtocolError, OSError, ValueError, KeyError):
             continue
         if covers_tool(envelope, tool_name, arguments):

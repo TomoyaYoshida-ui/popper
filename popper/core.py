@@ -647,6 +647,35 @@ class Experiment:
             self.fail_run(rid, type(error).__name__)
             raise ProtocolError(f"执行失败 {rid}: {type(error).__name__}: {error}") from error
 
+    def authorize_candidate(self, config, envelope):
+        """Register an approved design without rewriting the frozen data or evaluator contract."""
+        from .research.envelope import build_envelope
+        expected = build_envelope(envelope["study_id"],
+            max_dev_runs=envelope["max_dev_runs"], max_model_tokens=envelope["max_model_tokens"],
+            max_wall_clock_minutes=envelope["max_wall_clock_minutes"], code_files=envelope["code_files"],
+            state_version=envelope["state_version"], allowed_actions=envelope["allowed_actions"],
+            approved_at=envelope["approved_at"], contract_sha256=envelope.get("contract_sha256"))
+        if digest(expected) != digest(envelope) or "design_dev" not in envelope["allowed_actions"]:
+            raise ProtocolError("候选缺少有效的自主设计授权")
+        if not isinstance(config, dict) or not config or len(canonical(config).encode()) > 16000:
+            raise ProtocolError("候选配置不合法")
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            state = self.verify_inputs()
+            if state["phase"] != "searching":
+                raise ProtocolError("开发搜索已关闭")
+            key = digest(config)
+            registered = state.setdefault("authorized_candidates", {})
+            entry = {"config": config, "envelope_sha256": envelope["envelope_sha256"],
+                     "contract_sha256": envelope["contract_sha256"]}
+            if key in registered and registered[key] != entry:
+                raise ProtocolError("相同候选的授权身份冲突")
+            if key not in registered:
+                registered[key] = entry
+                state["authorized_candidate_budget"] = max(state.get("authorized_candidate_budget", 0), envelope["max_dev_runs"])
+                self._save(state, "autonomous_candidate_authorized", entry)
+        return entry
+
     def register_run(self, config, split):
         """开始一次实验运行（原子事务），返回 (rid, state, prior)。
 
@@ -669,7 +698,8 @@ class Experiment:
             if self.db.execute("SELECT 1 FROM runs WHERE status='running'").fetchone():
                 raise ProtocolError("已有运行中的实验；中断后显式 recover")
             config_hash = digest(config)
-            allowed = [digest(spec["baseline"]), *map(digest, spec["candidates"])]
+            allowed = [digest(spec["baseline"]), *map(digest, spec["candidates"]),
+                       *state.get("authorized_candidates", {})]
             if config_hash not in allowed:
                 raise ProtocolError("未注册的候选配置")
             prior = self.db.execute(
@@ -687,7 +717,7 @@ class Experiment:
             if split == "dev" and not baseline:
                 count = self.db.execute("SELECT COUNT(*) FROM runs WHERE split='dev' AND config_hash!=?",
                                         (digest(spec["baseline"]),)).fetchone()[0]
-                if count >= spec["budget"]:
+                if count >= max(spec["budget"], state.get("authorized_candidate_budget", 0)):
                     raise ProtocolError("候选执行预算已用尽（失败/中断同样计费）")
             if split == "test" and self.db.execute(
                     "SELECT 1 FROM runs WHERE config_hash=? AND split='test'",
@@ -760,7 +790,7 @@ class Experiment:
         rows = self.db.execute("SELECT result FROM runs WHERE status='completed' ORDER BY rowid")
         return [value for row in rows if (value := json.loads(row[0])) and (split is None or value["split"] == split)]
 
-    def freeze(self):
+    def freeze(self, selected_config=None):
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             state = self.verify_inputs()
@@ -774,6 +804,10 @@ class Experiment:
             candidates = [r for r in results if r["config"] != spec["baseline"]]
             if not baselines or not candidates:
                 raise ProtocolError("需要成功的基线和至少一个候选")
+            if selected_config is not None:
+                candidates = [r for r in candidates if r["config"] == selected_config]
+                if not candidates:
+                    raise ProtocolError("冻结候选必须有已登记的成功开发结果")
             direction = spec["metric"]["direction"]
             best = (min if direction == "min" else max)(
                 candidates, key=lambda r: (r["mean"], digest(r["config"])))

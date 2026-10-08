@@ -15,6 +15,7 @@ from ..core import (Experiment, ProtocolError, dataset, digest, evaluator_pack, 
                     initialize, inside, read_json, validate_spec, write_json)
 from ..identity import EntityKind, parse_id
 from .store import ResearchStore
+from .successor import read_successor_proposal
 
 
 LINEAGE_FILE = "followup-lineage.json"
@@ -43,18 +44,31 @@ def validate_followup_lineage(lineage, spec, test_sha256):
     return lineage
 
 
-def prepare_followup_project(parent_run_dir, new_project, candidates, new_test,
-                             *, budget, objective=None):
+def assert_new_confirmation_disjoint(prior_rows, new_rows, pack):
+    """新确认集不得与父 train / dev / test 的 id 或样本身份重叠。"""
+    prior_flat = [row for rows in prior_rows for row in rows]
+    if {row["id"] for row in prior_flat} & {row["id"] for row in new_rows}:
+        raise ProtocolError("新确认集与父实验数据存在样本重叠")
+    prior_identity = {pack.row_identity(row) for row in prior_flat}
+    new_identity = set()
+    for row in new_rows:
+        try:
+            new_identity.add(pack.row_identity(row))
+        except ProtocolError:
+            continue
+    if prior_identity & new_identity:
+        raise ProtocolError("新确认集与父实验数据存在样本重叠")
+
+
+def parent_split_rows(parent_run_dir):
+    """读取父研究 train / dev / test。与后继项目准备使用同一套父研究校验。"""
+    _parent, _spec, state, pack, prior_rows = _load_parent(parent_run_dir)
+    del _parent, _spec, state
+    return pack, prior_rows
+
+
+def _load_parent(parent_run_dir):
     parent_run_dir = Path(parent_run_dir).resolve()
-    new_project = Path(new_project).resolve()
-    new_test = Path(new_test).resolve()
-    if new_project.exists():
-        raise ProtocolError("新实验项目目录必须尚不存在")
-    if not new_project.parent.is_dir():
-        raise ProtocolError("新实验项目的父目录不存在")
-    if not new_test.is_file():
-        raise ProtocolError("必须提供已有的独立新确认集文件")
-    new_test_sha = file_hash(new_test)
     manifest_path = parent_run_dir / "research.json"
     if not manifest_path.is_file() or not (parent_run_dir / "research.sqlite").is_file():
         raise ProtocolError("父研究未初始化")
@@ -80,6 +94,28 @@ def prepare_followup_project(parent_run_dir, new_project, candidates, new_test,
          "evaluator_hash": state["evaluator_hash"]} != manifest["input_identity"]):
         raise ProtocolError("父实验输入身份与研究清单不一致")
     spec = json.loads(json.dumps(state["spec"]))
+    pack = evaluator_pack(state["evaluator_id"])
+    prior_rows = [dataset(inside(parent_project, spec[split]), state["evaluator_id"])
+                  for split in ("train", "dev", "test")]
+    return parent_project, spec, state, pack, prior_rows
+
+
+def prepare_followup_project(parent_run_dir, new_project, candidates, new_test,
+                             *, budget, objective=None, min_improvement=None):
+    parent_run_dir = Path(parent_run_dir).resolve()
+    new_project = Path(new_project).resolve()
+    new_test = Path(new_test).resolve()
+    if new_project.exists():
+        raise ProtocolError("新实验项目目录必须尚不存在")
+    if not new_project.parent.is_dir():
+        raise ProtocolError("新实验项目的父目录不存在")
+    if not new_test.is_file():
+        raise ProtocolError("必须提供已有的独立新确认集文件")
+    new_test_sha = file_hash(new_test)
+    parent_project, spec, state, pack, prior_rows = _load_parent(parent_run_dir)
+    manifest_path = parent_run_dir / "research.json"
+    manifest = read_json(manifest_path)
+    spec = json.loads(json.dumps(state["spec"]))
     if not isinstance(candidates, list) or not candidates or any(
             not isinstance(item, dict) for item in candidates):
         raise ProtocolError("新候选必须是非空配置对象列表")
@@ -93,6 +129,10 @@ def prepare_followup_project(parent_run_dir, new_project, candidates, new_test,
     spec["budget"] = budget
     if objective is not None:
         spec["objective"] = objective.strip()
+    # 只有父运行目录已经写下后继提案时，才允许按提案改阈值；否则保持父实验原值。
+    successor = read_successor_proposal(parent_run_dir)
+    if successor is not None and min_improvement is not None:
+        spec["min_improvement"] = min_improvement
     provenance = list(spec.get("provenance_files", []))
     if LINEAGE_FILE in [*provenance, *spec["code_files"],
                         spec["train"], spec["dev"], spec["test"]]:
@@ -102,15 +142,17 @@ def prepare_followup_project(parent_run_dir, new_project, candidates, new_test,
     old_hashes = {state["input_hashes"][spec[split]] for split in ("train", "dev", "test")}
     if new_test_sha in old_hashes:
         raise ProtocolError("新确认集不能复用父实验任一数据划分")
-    pack = evaluator_pack(state["evaluator_id"])
-    prior_rows = [dataset(inside(parent_project, spec[split]), state["evaluator_id"])
-                  for split in ("train", "dev", "test")]
     new_rows = dataset(new_test, state["evaluator_id"])
-    prior_ids = {row["id"] for rows in prior_rows for row in rows}
-    prior_identity = {pack.row_identity(row) for rows in prior_rows for row in rows}
-    if (prior_ids & {row["id"] for row in new_rows}
-            or prior_identity & {pack.row_identity(row) for row in new_rows}):
-        raise ProtocolError("新确认集与父实验数据存在样本重叠")
+    if successor is not None:
+        from .successor import confirmation_row_set_sha256, reject_lower_threshold, reject_reused_holdout
+        reject_lower_threshold(successor["parent_threshold"], spec["min_improvement"])
+        reject_reused_holdout(
+            confirmation_row_set_sha256(prior_rows[2]),
+            confirmation_row_set_sha256(new_rows))
+        if ("revised_mechanism" in successor
+                and spec["objective"] != successor["revised_mechanism"]):
+            raise ProtocolError("后继研究不能沿用父问题")
+    assert_new_confirmation_disjoint(prior_rows, new_rows, pack)
     pack.validate_splits([prior_rows[0], prior_rows[1], new_rows])
     staging = Path(tempfile.mkdtemp(prefix=".popper-followup-", dir=new_project.parent))
     try:
@@ -137,6 +179,8 @@ def prepare_followup_project(parent_run_dir, new_project, candidates, new_test,
         }
         write_json(staging / LINEAGE_FILE, lineage)
         write_json(staging / "experiment.json", spec)
+        from .intake import link_parent_run
+        link_parent_run(staging, parent_run_dir)
         initialized = initialize(staging)
         staging.rename(new_project)
         return {"project": str(new_project), "lineage": lineage,
@@ -150,7 +194,7 @@ def prepare_followup_project(parent_run_dir, new_project, candidates, new_test,
 
 
 def create_followup_study(parent_run_dir, new_project, new_run_dir, candidates,
-                          new_test, *, budget, objective=None):
+                          new_test, *, budget, objective=None, min_improvement=None):
     """Create a follow-up Project and Study without masking partial failures.
 
     Filesystem project creation and SQLite Study initialization cannot share a
@@ -171,7 +215,7 @@ def create_followup_study(parent_run_dir, new_project, new_run_dir, candidates,
         raise ProtocolError("新研究运行目录的父目录不存在")
     prepared = prepare_followup_project(
         parent_run_dir, new_project, candidates, new_test,
-        budget=budget, objective=objective)
+        budget=budget, objective=objective, min_improvement=min_improvement)
     try:
         research = ResearchController.initialize(new_project, new_run_dir)
     except Exception as error:

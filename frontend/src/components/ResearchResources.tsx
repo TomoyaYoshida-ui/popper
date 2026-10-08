@@ -1,3 +1,4 @@
+import { PredictionSummary } from './PredictionSummary'
 import { useEffect, useRef, useState } from 'react'
 import { cancelStudyJob, fetchBoundDraft, fetchBoundDrafts, fetchDesignJob, fetchResearchEvidence, fetchRevisionJob, fetchStudyJobs, reviewBoundDraft, type BoundDraftRow, type CreatedBoundDraft, type ResearchEvidencePreview, type ResearchRunState, type ResearchState, type StudyLifecycleJob } from '../api'
 import type { ChatState, PopperState, Workspace } from '../types'
@@ -49,7 +50,7 @@ export function EntityPanel({ tab, research, onOpenResource }: { tab: WorkbenchT
       {claim ? <><div><dt>指标方向</dt><dd>{claim.metric_direction === 'max' ? '越大越好' : '越小越好'}</dd></div><div><dt>方向统一效应</dt><dd>{claim.oriented_delta}</dd></div><div><dt>预注册阈值</dt><dd>{claim.min_meaningful_effect}</dd></div></>
         : observation && <><div><dt>观察值</dt><dd>{observation.value} {observation.unit}</dd></div><div><dt>不确定度</dt><dd>{observation.uncertainty ?? '未提供'}</dd></div><div><dt>信任级别</dt><dd>{observation.trust}</dd></div></>}
     </dl>
-    {claim && <><h3>来源证据</h3><div className="resource-links">{claim.observation_refs.map((id, index) => <button type="button" key={id} title={id} onClick={() => onOpenResource({ kind: 'observation', ref: id, studyId: claim.study_id, title: '实验观察' })}>实验观察 {index + 1} ↗</button>)}</div><h3>适用限制</h3><ul>{claim.limitations.map((text, index) => <li key={index}>{limitations[text] ?? text}</li>)}</ul></>}
+    {claim && <><h3>来源证据</h3><PredictionSummary value={value} /><div className="resource-links">{claim.observation_refs.map((id, index) => <button type="button" key={id} title={id} onClick={() => onOpenResource({ kind: 'observation', ref: id, studyId: claim.study_id, title: '实验观察' })}>实验观察 {index + 1} ↗</button>)}</div><h3>适用限制</h3><ul>{claim.limitations.map((text, index) => <li key={index}>{limitations[text] ?? text}</li>)}</ul></>}
     <button type="button" className="btn" onClick={() => onOpenResource({ kind: 'study', studyId: run.manifest?.study_id })}>打开所属 Study →</button>
     <TechnicalDetails value={value} title="完整研究记录与对象标识" />
   </div>

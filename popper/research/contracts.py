@@ -263,6 +263,10 @@ class ExperimentDesign:
     seeds: tuple = field(default_factory=tuple)
     min_meaningful_effect: float = 0.0
     status: DesignStatus = DesignStatus.DRAFT
+    prediction_contract: Optional[dict] = None
+    execution_config: Optional[dict] = None
+    proposal_fingerprint: Optional[str] = None
+    proposal: Optional[dict] = None
 
     def __post_init__(self):
         if not self.design_id or not self.hypothesis_id:
@@ -271,6 +275,12 @@ class ExperimentDesign:
             raise ProtocolError(f"metric_direction 必须为 {'/'.join(VALID_DIRECTIONS)}")
         if not self.metric or not self.scorer_id:
             raise ProtocolError("metric/scorer_id 不能为空")
+        if self.prediction_contract is not None:
+            from .prediction import validate_prediction
+            p = validate_prediction(self.prediction_contract, evaluator_id=self.scorer_id,
+                                    threshold=self.min_meaningful_effect)
+            if p["metric"] != self.metric or p["direction"] != self.metric_direction:
+                raise ProtocolError("实验设计与预测契约不一致")
         if not self.analysis_unit:
             raise ProtocolError("analysis_unit 不能为空")
         if (isinstance(self.min_meaningful_effect, bool)

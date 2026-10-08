@@ -54,6 +54,8 @@ AUTHORITY = {
     "observation": "evaluation_service",
     "run": "research_controller",
     "audit_event": "research_store",
+    # 接入事件不是 Observation / Claim。写入方仍是本模块。
+    "dataset": "research_store",
 }
 
 # 已退役的权威名 → 当前名。历史研究库里 run 事件记录为 experiment_service，
@@ -269,6 +271,11 @@ def _signed_claim_from_evidence(study_id, decision_id, decision, observations,
                                "not_generalizable_beyond_registered_scope"],
                "confirmation_kind": kind, "receipt_sha256": receipt_hash,
                "trust": result["trust"], "slice_effects": slice_effects}
+    from .prediction import validate_design_prediction, evaluate_prediction
+    prediction = validate_design_prediction(candidate_design)
+    if prediction:
+        payload["prediction_result"] = evaluate_prediction(prediction, effect,
+            repeat_unit=candidate_design.get("analysis_unit", "train_seed"))
     return payload, status
 
 
@@ -747,6 +754,8 @@ class ResearchStore:
             if current is None:
                 raise ProtocolError(f"design 不存在: {design_id}")
             self._require_study_active(current["study_id"])
+            from .prediction import validate_design_prediction
+            validate_design_prediction(current)
             validate_design_transition(current["status"], DesignStatus.FROZEN)
             seq = self._conn.execute("SELECT COALESCE(MAX(seq),0)+1 FROM events").fetchone()[0]
             self._append("design", design_id, "frozen", {"to": "frozen"}, writer)
@@ -874,6 +883,8 @@ class ResearchStore:
                 return {"status": "recorded", "envelope_sha256": entity_id}
             payload = {key: envelope[key] for key in sorted(required)}
             payload["code_files"] = list(envelope["code_files"])
+            if envelope.get("contract_sha256"):
+                payload["contract_sha256"] = envelope["contract_sha256"]
             payload["actor"] = "envelope"
             self._append("audit_event", entity_id, "envelope_approved", payload, AUTHORITY["audit_event"])
             return {"status": "recorded", "envelope_sha256": entity_id}
@@ -940,6 +951,8 @@ class ResearchStore:
                      if direction == "min" else
                      evidence[1]["value"] - evidence[0]["value"])
             threshold = candidate_design["min_meaningful_effect"]
+            from .prediction import validate_design_prediction, evaluate_prediction
+            prediction = validate_design_prediction(candidate_design)
             status = ("supported_in_scope" if delta >= threshold
                       else "not_supported_in_scope")
             claim_id = content_id(EntityKind.CLAIM, {
@@ -957,6 +970,8 @@ class ResearchStore:
                 "metric": candidate_design["metric"], "metric_direction": direction,
                 "oriented_delta": delta, "min_meaningful_effect": threshold,
                 "scope": "registered_independent_confirmation",
+                **({"prediction_result": evaluate_prediction(prediction, delta,
+                    repeat_unit=candidate_design["analysis_unit"])} if prediction else {}),
                 "limitations": _claim_limitations(sum(
                     1 for row in self.list("observation")
                     if row.get("design_id") == evidence[1]["design_id"]
@@ -1480,6 +1495,8 @@ class ResearchStore:
                         "hypothesis_version", "design_id", "observation_refs",
                         "metric", "metric_direction", "oriented_delta",
                         "min_meaningful_effect", "scope", "limitations", "status"}
+                    if "prediction_result" in decoded:
+                        expected_fields.add("prediction_result")
                     if (not isinstance(decoded, dict) or set(decoded) != expected_fields
                             or ("claim", entity_id) in expected_snapshots):
                         return fail(f"Claim 创建载荷或唯一性不合法 @seq={row[0]}")
@@ -1552,6 +1569,13 @@ class ResearchStore:
                             or decision["action"] != "stop"
                             or decision["observation_refs"] != refs):
                         return fail(f"Claim 与确认依据不一致 @seq={row[0]}")
+                    from .prediction import validate_design_prediction, evaluate_prediction
+                    prediction = validate_design_prediction(candidate_design)
+                    if prediction is not None and decoded.get("prediction_result") != evaluate_prediction(
+                            prediction, delta, repeat_unit=candidate_design["analysis_unit"]):
+                        return fail(f"Claim 预测契约结果不一致 @seq={row[0]}")
+                    if prediction is None and "prediction_result" in decoded:
+                        return fail(f"历史 Claim 不能升级预测验证等级 @seq={row[0]}")
                 except (KeyError, TypeError, ValueError):
                     return fail(f"Claim 引用缺失或字段不合法 @seq={row[0]}")
 
@@ -1559,6 +1583,8 @@ class ResearchStore:
                 required = {"actor", "code_files", "envelope_sha256", "max_dev_runs",
                             "max_model_tokens", "max_wall_clock_minutes", "state_version",
                             "study_id"}
+                if "contract_sha256" in decoded:
+                    required.add("contract_sha256")
                 if (set(decoded) != required or decoded["envelope_sha256"] != entity_id
                         or decoded["actor"] != "envelope"):
                     return fail(f"自治包络批准事件不合法 @seq={row[0]}")
@@ -1580,6 +1606,14 @@ class ResearchStore:
                     "command_hash": decoded["command_hash"],
                     "result": decoded["result"], "created": decoded["created"],
                 }
+                count += 1
+                continue
+
+            if kind == "dataset":
+                from .intake import EVENT_PAYLOAD_KEYS
+                expected = EVENT_PAYLOAD_KEYS.get(event_type)
+                if expected is None or set(decoded) != expected:
+                    return fail(f"未知事件类型 {event_type} @seq={row[0]}")
                 count += 1
                 continue
 
@@ -1720,7 +1754,10 @@ def _hypothesis_payload(h):
 
 def _design_payload(d):
     """ExperimentDesign 快照载荷。"""
-    return {"design_id": d.design_id, "hypothesis_id": d.hypothesis_id,
+    return {**({"execution_config": d.execution_config, "proposal_fingerprint": d.proposal_fingerprint,
+                "proposal": d.proposal} if d.execution_config is not None else {}),
+            **({"prediction_contract": d.prediction_contract} if d.prediction_contract else {}),
+            "design_id": d.design_id, "hypothesis_id": d.hypothesis_id,
             "interventions": list(d.interventions), "control": d.control,
             "baseline": d.baseline, "metric": d.metric,
             "scorer_id": d.scorer_id,

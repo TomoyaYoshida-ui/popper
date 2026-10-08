@@ -1,0 +1,9 @@
+{
+  "schema": "popper.recipe/v1",
+  "target_column": "label",
+  "row_atom": "row",
+  "steps": [
+    {"op": "impute_median", "column": "income"},
+    {"op": "select_columns", "columns": ["age", "income"]}
+  ]
+}

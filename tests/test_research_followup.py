@@ -168,6 +168,14 @@ class FollowupTests(unittest.TestCase):
             self.new_test, budget=1, objective="独立检验")
         self.assertEqual(recovered["study_id"], replay["study_id"])
 
+    def test_followup_without_successor_proposal_keeps_parent_threshold(self):
+        self.assertFalse((self.run_dir / "successor-proposal.json").is_file())
+        new_project = self.root / "kept-threshold"
+        prepare_followup_project(
+            self.run_dir, new_project, [{"scheme": "heun"}], self.new_test,
+            budget=1, min_improvement=0.01)
+        self.assertEqual(0.5, read_json(new_project / "experiment.json")["min_improvement"])
+
     def test_resume_never_adopts_or_initializes_unrelated_directory(self):
         unrelated = self.root / "unrelated"
         unrelated.mkdir()

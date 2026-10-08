@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-from .core import Experiment, ProtocolError, initialize, read_json
+from .core import Experiment, ProtocolError, canonical, initialize, read_json
 from .demo import CASES as DEMO_CASES, initialize_demo
 from .evaluation import Evaluator
 from .brownfield import Brownfield
@@ -75,6 +75,67 @@ def main(argv=None):
     research_init.add_argument("--holdout-contract", type=Path, default=None)
     research_init.add_argument("--holdout-public-key", type=Path, default=None,
                                help="独立取得的服务 Ed25519 公钥文本文件；必须在研究开始前固定")
+    intake = research_commands.add_parser("intake", help="哈希原始表、封存确认集并写数据卡")
+    intake.add_argument("project", type=Path)
+    intake.add_argument("--raw", required=True)
+    intake.add_argument("--split-strategy", required=True)
+    intake.add_argument("--seed", type=int, required=True)
+    intake.add_argument("--train-ratio", required=True)
+    intake.add_argument("--dev-ratio", required=True)
+    intake.add_argument("--holdout-ratio", required=True)
+    intake.add_argument("--source-note", required=True)
+    intake.add_argument("--format", default=None)
+    intake.add_argument("--column", default=None)
+    intake.add_argument("--id-column", default=None)
+    intake.add_argument("--id-lists", default=None)
+    intake.add_argument("--target-column", default=None)
+    recipe = research_commands.add_parser("recipe", help="预处理配方的提案、批准与编译")
+    recipe_commands = recipe.add_subparsers(dest="recipe_command", required=True)
+    recipe_propose = recipe_commands.add_parser("propose")
+    recipe_propose.add_argument("project", type=Path)
+    recipe_propose.add_argument("--recipe", required=True)
+    recipe_approve = recipe_commands.add_parser("approve")
+    recipe_approve.add_argument("project", type=Path)
+    recipe_approve.add_argument("--proposal", required=True)
+    recipe_compile = recipe_commands.add_parser("compile")
+    recipe_compile.add_argument("project", type=Path)
+    recipe_compile.add_argument("--proposal", required=True)
+    recipe_compile.add_argument("--evaluator", required=True)
+    adapter = research_commands.add_parser("adapter", help="登记并批准格式适配器")
+    adapter_commands = adapter.add_subparsers(dest="adapter_command", required=True)
+    adapter_register = adapter_commands.add_parser("register")
+    adapter_register.add_argument("project", type=Path)
+    adapter_register.add_argument("--id", required=True)
+    adapter_register.add_argument("--suffix", action="append", required=True)
+    adapter_register.add_argument("--magic", required=True)
+    adapter_register.add_argument("--record-shape", required=True)
+    adapter_register.add_argument("--implementation", required=True)
+    adapter_approve = adapter_commands.add_parser("approve")
+    adapter_approve.add_argument("project", type=Path)
+    adapter_approve.add_argument("--id", required=True)
+    adapter_approve.add_argument("--approver", required=True)
+    formulate = research_commands.add_parser("formulate", help="提案并批准研究问题书")
+    formulate_commands = formulate.add_subparsers(dest="formulate_command", required=True)
+    formulate_propose = formulate_commands.add_parser("propose")
+    formulate_propose.add_argument("project", type=Path)
+    formulate_propose.add_argument("--proposal", required=True)
+    formulate_approve = formulate_commands.add_parser("approve")
+    formulate_approve.add_argument("project", type=Path)
+    formulate_approve.add_argument("--proposal", required=True)
+    contract = research_commands.add_parser("contract", help="编译或查看声明式任务契约")
+    contract_commands = contract.add_subparsers(dest="contract_command", required=True)
+    contract_compile = contract_commands.add_parser("compile")
+    contract_compile.add_argument("--contract", required=True)
+    contract_inspect = contract_commands.add_parser("inspect")
+    contract_inspect.add_argument("--contract", required=True)
+    metrics = research_commands.add_parser("metrics", help="登记一项尚未进入计分表的指标")
+    metrics_commands = metrics.add_subparsers(dest="metrics_command", required=True)
+    metrics_register = metrics_commands.add_parser("register")
+    metrics_register.add_argument("project", type=Path)
+    metrics_register.add_argument("--id", required=True)
+    metrics_register.add_argument("--implementation", required=True)
+    metrics_register.add_argument("--fixture", required=True)
+    metrics_register.add_argument("--approver", required=True)
     followup = research_commands.add_parser(
         "followup", help="以新独立确认集和新候选创建后继预注册实验及 Study")
     followup.add_argument("parent_run_dir", type=Path)
@@ -99,6 +160,10 @@ def main(argv=None):
             sub.add_argument("--max-steps", type=int, default=None)
             sub.add_argument("--auto-confirm", action="store_true",
                              help="达到开发阈值后自动冻结并一次性消费确认集")
+            sub.add_argument("--autonomous-design", action="store_true", help="在冻结研究包络内自主新增并执行实验")
+            sub.add_argument("--max-model-tokens", type=int, default=50000)
+            sub.add_argument("--max-model-calls", type=int, default=10)
+            sub.add_argument("--max-wall-clock-minutes", type=int, default=60)
             sub.add_argument("--autonomous-code", action="store_true",
                              help="由模型实现选中假设；生成代码只在 --sandbox worker 中执行")
             sub.add_argument("--harness", choices=harness_names(), default=None,
@@ -601,6 +666,63 @@ def main(argv=None):
                     confirmation_contract=read_json(args.holdout_contract) if args.holdout_contract else None,
                     confirmation_public_key=args.holdout_public_key.read_text(encoding="utf-8").strip()
                     if args.holdout_public_key else None)
+            elif args.research_command == "intake":
+                from .research.intake import intake as intake_project
+                result = intake_project(
+                    args.project, raw=args.raw, split_strategy=args.split_strategy,
+                    seed=args.seed, train_ratio=args.train_ratio, dev_ratio=args.dev_ratio,
+                    holdout_ratio=args.holdout_ratio, source_note=args.source_note,
+                    format=args.format, column=args.column, id_column=args.id_column,
+                    id_lists=args.id_lists, target_column=args.target_column)
+                print(canonical(result))
+                return 0
+            elif args.research_command == "recipe":
+                from .research.recipe import approve_recipe, compile_recipe, propose_recipe
+                if args.recipe_command == "propose":
+                    result = propose_recipe(args.project, args.recipe)
+                elif args.recipe_command == "approve":
+                    result = approve_recipe(args.project, args.proposal)
+                else:
+                    result = compile_recipe(args.project, args.proposal, args.evaluator)
+                print(canonical(result))
+                return 0
+            elif args.research_command == "adapter":
+                from .research.intake import approve_adapter, register_adapter
+                if args.adapter_command == "register":
+                    result = register_adapter(
+                        args.project, adapter_id=args.id, suffixes=args.suffix,
+                        magic=args.magic, record_shape=args.record_shape,
+                        implementation=args.implementation)
+                else:
+                    result = approve_adapter(
+                        args.project, adapter_id=args.id, approver=args.approver)
+                print(canonical(result))
+                return 0
+            elif args.research_command == "formulate":
+                from .research.formulate import approve_problem, propose_problem
+                if args.formulate_command == "propose":
+                    result = propose_problem(args.project, read_json(args.proposal))
+                else:
+                    result = approve_problem(args.project, args.proposal)
+                print(canonical(result))
+                return 0
+            elif args.research_command == "contract":
+                from .research.contract import compile_contract, inspect_contract
+                contract_body = read_json(args.contract)
+                if args.contract_command == "compile":
+                    compiled = compile_contract(contract_body)
+                    result = {"evaluator_id": compiled.evaluator_id,
+                              "evaluator_hash": compiled.evaluator_hash}
+                else:
+                    result = inspect_contract(contract_body)
+                print(canonical(result))
+                return 0
+            elif args.research_command == "metrics":
+                from .research.metrics import register_metric
+                result = register_metric(
+                    args.project, args.id, args.implementation, args.fixture, args.approver)
+                print(canonical(result))
+                return 0
             elif args.research_command == "followup":
                 result = create_followup_study(
                     args.parent_run_dir, args.new_project, args.new_run_dir,
@@ -818,9 +940,42 @@ def main(argv=None):
                                                              getattr(args, "model", None),
                                                              args.run_dir / "model-diagnostics"))
                 if args.research_command == "run":
-                    result = research_controller.run(
-                        args.trusted_local, args.sandbox, args.max_steps,
-                        args.auto_confirm, args.autonomous_code)
+                    model_requests = None
+                    if args.autonomous_design:
+                        if not args.model or not args.base_url:
+                            raise ProtocolError("自主设计需要可记账的模型端点")
+                        if args.harness not in {None, "json_agent"}:
+                            raise ProtocolError("自主设计需要可记账的 JSON 模型接入")
+                        from .model_budget import ModelRequestBudget
+                        from .scoop import make_json_client
+                        from .harness.json_agent import JSONAgentHarness
+                        model_requests = ModelRequestBudget(args.run_dir / "model-requests.sqlite",
+                            global_tokens=args.max_model_tokens, global_calls=args.max_model_calls,
+                            scope="autonomous-design", scope_tokens=args.max_model_tokens, scope_calls=args.max_model_calls)
+                        call = make_json_client(args.base_url, args.model, args.run_dir / "model-diagnostics",
+                                                request_budget=model_requests)
+                        research_controller.policy._call = call
+                        research_controller.harness = JSONAgentHarness(call, args.model)
+                        from .research.envelope import build_envelope, save_envelope, load_envelope
+                        from .research.prediction import research_contract
+                        if load_envelope(args.run_dir) is None:
+                            manifest = research_controller.manifest
+                            save_envelope(args.run_dir, build_envelope(manifest["study_id"],
+                                max_dev_runs=args.max_steps or 4, max_model_tokens=args.max_model_tokens,
+                                max_wall_clock_minutes=args.max_wall_clock_minutes,
+                                code_files=research_controller.exp.state()["spec"]["code_files"],
+                                state_version=research_controller.store.get("study", manifest["study_id"])["state_version"],
+                                allowed_actions=("design_dev", "implement", "repair", "execute_dev"),
+                                contract_sha256=research_contract(manifest)))
+                    try:
+                        result = research_controller.run(
+                            args.trusted_local, args.sandbox, args.max_steps,
+                            args.auto_confirm, args.autonomous_code, autonomous_design=args.autonomous_design)
+                        if model_requests is not None:
+                            result["model_request_usage"] = model_requests.snapshot()
+                    finally:
+                        if model_requests is not None:
+                            model_requests.close()
                 elif args.research_command == "confirm":
                     result = research_controller.confirm(args.trusted_local, args.sandbox)
                 elif args.research_command == "implement":

@@ -6,10 +6,11 @@ from ..harness.json_agent import JSONAgentHarness
 from ..scoop import make_json_client
 from .actions import (ADD_CONTROL, REQUEST_CONFIRMATION, RUN_EXPERIMENT, STOP,
                       ActionProposal)
+from .question_proposer import bind_primary_explanation, require_explanation_action
 
 
 class EvidenceDrivenPolicy:
-    """无模型离线基线。它依据证据改变动作，但不宣称生成新科学假设。"""
+    """无模型离线基线。它依据证据选择动作；正预测被内核杀掉后，用分数改写后继机制。"""
 
     name = "evidence_policy"
 
@@ -19,10 +20,10 @@ class EvidenceDrivenPolicy:
                      if c["status"] == "supported_in_scope"]
         if supported:
             chosen = supported[0]
-            return ActionProposal(
+            return self._bind(ActionProposal(
                 REQUEST_CONFIRMATION,
                 "开发证据已达到预注册的最小有意义效应，停止搜索并请求独立确认。",
-                chosen["hypothesis_id"], source=self.name)
+                chosen["hypothesis_id"], source=self.name), context)
         if not remaining:
             return ActionProposal(
                 STOP, "所有预注册假设均已检验，现有证据不足以继续投入。",
@@ -37,9 +38,10 @@ class EvidenceDrivenPolicy:
         else:
             remaining.sort(key=lambda c: c["hypothesis_id"])
             reason = "选择首个预注册且尚未检验的可证伪假设。"
-        return ActionProposal(RUN_EXPERIMENT, reason, remaining[0]["hypothesis_id"],
-                              alternatives=tuple(c["hypothesis_id"] for c in remaining[1:]),
-                              source=self.name)
+        proposal = ActionProposal(RUN_EXPERIMENT, reason, remaining[0]["hypothesis_id"],
+                                  alternatives=tuple(c["hypothesis_id"] for c in remaining[1:]),
+                                  source=self.name)
+        return self._bind(proposal, context)
 
     def after_observation(self, hypothesis_id, delta, threshold, has_remaining):
         if delta >= threshold:
@@ -61,6 +63,21 @@ class EvidenceDrivenPolicy:
             hypothesis_id if kind == ADD_CONTROL else None,
             alternatives=("增加独立数据",), source=self.name)
 
+    def _bind(self, proposal, context):
+        explanations = context.get("explanations")
+        if not explanations:
+            return proposal
+        return require_explanation_action(
+            bind_primary_explanation(proposal, explanations), explanations)
+
+    def revise_mechanism(self, *, killed_id, surviving_id, delta, threshold,
+                         explanations, parent_question, parent_holdout_sha256):
+        from .agenda import accept_revised_mechanism, offline_revision
+        text = offline_revision(killed_id, surviving_id, delta, threshold)
+        return accept_revised_mechanism(
+            text, explanations=explanations, parent_question=parent_question,
+            parent_holdout_sha256=parent_holdout_sha256)
+
 
 class DeepSeekResearchPolicy(EvidenceDrivenPolicy):
     """DeepSeek 只从内核给出的合法假设与动作中选择，不能自报结果。"""
@@ -69,6 +86,24 @@ class DeepSeekResearchPolicy(EvidenceDrivenPolicy):
         self.model = model
         self.name = "deepseek_json_policy"
         self._call = make_json_client(base_url, model, diagnostics_dir)
+
+    def propose_experiment(self, context):
+        payload = {key: context.get(key) for key in ("study_id", "metric", "min_meaningful_effect",
+            "prediction_contract", "budget", "candidates", "registered_configs", "attempts")}
+        payload["objective"] = context["study"]["question"]
+        payload["observations"] = [{key: row.get(key) for key in
+            ("observation_id", "value", "unit", "scope", "uncertainty", "hypothesis_id")}
+            for row in context["observations"] if row["scope"] == "dev" or row["scope"].startswith("dev:slice:")]
+        system = ("Propose a new executable computational experiment from development evidence only. "
+            "Return exactly schema (popper.experiment-proposal/v2), action (new_candidate/add_control/repair/stop/request_confirmation), "
+            "mechanism, config (nonempty object consumed by the prediction entrypoint), "
+            "intervention {kind: feature/model/algorithm/ablation/control/repair, parameters: nonempty object}, "
+            "contrasts (two objects with explanation and expected_direction gte/lt respectively), "
+            "prediction_contract (copy the frozen object exactly), evidence_refs (existing dev observation IDs), "
+            "rationale, parent_hypothesis_id (existing ID or null). "
+            "Select actual interventions, not reworded explanations. Never invent scores or access holdout labels. "
+            "Use distinct configurations and intervention parameters for distinct experiments.")
+        return self._call(system, payload)
 
     def generate_hypotheses(self, objective, candidates):
         system = (
@@ -125,6 +160,7 @@ class DeepSeekResearchPolicy(EvidenceDrivenPolicy):
         available = context.get("budget", {}).get("available", 0)
         allowed = ([REQUEST_CONFIRMATION] if supported else
                    ([RUN_EXPERIMENT] if remaining and available >= 1 else [STOP]))
+        explanations = context.get("explanations")
         compact = {"question": context["study"]["question"],
                    "metric": context["metric"],
                    "min_meaningful_effect": context["min_meaningful_effect"],
@@ -132,16 +168,21 @@ class DeepSeekResearchPolicy(EvidenceDrivenPolicy):
                    "candidates": context["candidates"],
                    "observations": context["observations"],
                    "allowed_actions": allowed}
+        if explanations:
+            compact["explanations"] = explanations
         system = (
             "Choose exactly one next research action using only supplied evidence. Return JSON "
             "with kind, hypothesis_id (or null for stop), rationale, alternatives (array). "
             "A schema-valid answer is still invalid if it cites an unavailable hypothesis. "
             "Do not reveal chain of thought; give a concise evidence-based rationale.")
+        if explanations:
+            system += (" When explanations are supplied, also return explanation_id equal to "
+                       "exactly one of their ids. The two predictions must stay different.")
         payload = compact
         for attempt in range(2):
             response = self._call(system, payload)
             try:
-                return self._parse_choice(response, allowed, supported, remaining)
+                return self._parse_choice(response, allowed, supported, remaining, explanations)
             except ProtocolError as error:
                 if attempt:
                     raise
@@ -159,7 +200,31 @@ class DeepSeekResearchPolicy(EvidenceDrivenPolicy):
                     ),
                 }
 
-    def _parse_choice(self, response, allowed, supported, remaining):
+    def revise_mechanism(self, *, killed_id, surviving_id, delta, threshold,
+                         explanations, parent_question, parent_holdout_sha256):
+        from .agenda import accept_revised_mechanism, reject_model_verdict
+        system = (
+            "The kernel already killed one explanation. Return JSON with only "
+            "revised_mechanism, a new mechanism sentence. Do not include a killed id, "
+            "a holdout hash, the parent question, or either parent statement.")
+        response = self._call(system, {
+            "killed_explanation_id": killed_id,
+            "surviving_explanation_id": surviving_id,
+            "delta": delta,
+            "threshold": threshold,
+            "parent_question": parent_question,
+            "statements": [row["statement"] for row in explanations],
+        })
+        reject_model_verdict(response)
+        if not isinstance(response, dict) or "revised_mechanism" not in response:
+            raise ProtocolError("后继机制必须改写")
+        return accept_revised_mechanism(
+            response["revised_mechanism"], explanations=explanations,
+            parent_question=parent_question, parent_holdout_sha256=parent_holdout_sha256)
+
+    def _parse_choice(self, response, allowed, supported, remaining, explanations=None):
+        from .agenda import reject_model_verdict
+        reject_model_verdict(response)
         if not isinstance(response, dict):
             raise ProtocolError("模型研究动作必须是 JSON 对象")
         kind = response.get("kind")
@@ -174,8 +239,14 @@ class DeepSeekResearchPolicy(EvidenceDrivenPolicy):
         alternatives = response.get("alternatives", [])
         if not isinstance(alternatives, list) or not all(isinstance(v, str) for v in alternatives):
             raise ProtocolError("模型 alternatives 格式错误")
-        return ActionProposal(kind, str(response.get("rationale") or ""), hypothesis_id,
-                              tuple(alternatives), source=self.name, model=self.model)
+        proposal = ActionProposal(kind, str(response.get("rationale") or ""), hypothesis_id,
+                                  tuple(alternatives), source=self.name, model=self.model,
+                                  explanation_id=response.get("explanation_id"))
+        if explanations:
+            return require_explanation_action(proposal, explanations)
+        if proposal.explanation_id is not None:
+            raise ProtocolError("没有竞争解释的研究不能指定 explanation_id")
+        return proposal
 
     def propose_revision(self, objective, hypothesis, config, code_files,
                          parent_revision=None, failure=None):

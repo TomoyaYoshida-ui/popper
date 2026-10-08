@@ -7,6 +7,9 @@ __pycache__/
 *.egg-info/
 .venv/
 .venv-gpu/
+.venv-reliability/
+.acceptance/
+*.tsbuildinfo
 
 # ---- 密钥与本地状态库：绝不入库 ----
 # 历史上只挡了 signing-key.pem / runner-key.pem，而 evaluation/runs 下还有大量
@@ -49,3 +52,14 @@ evaluation/data/
 evaluation/runs/**
 !evaluation/runs/*/
 !evaluation/runs/*/*.json
+# M-A 只入库验收报告，不入库确认集、状态库和原始表
+!evaluation/runs/data-intake/*/
+!evaluation/runs/data-intake/*/report.json
+!evaluation/runs/format-adapter/*/
+!evaluation/runs/format-adapter/*/report.json
+!evaluation/runs/problem-formation/*/
+!evaluation/runs/problem-formation/*/report.json
+!evaluation/runs/task-contract/*/
+!evaluation/runs/task-contract/*/report.json
+!evaluation/runs/contract-loop/*/
+!evaluation/runs/contract-loop/*/report.json

@@ -285,7 +285,9 @@ def l1_mode7_semantic(context, state, semantic_llm=None):
     statement = context.get("claim_statement")
     if not statement:
         return {"passed": True, "reason": "无声明（跳过语义 7-mode）"}
-    signals = semantic_llm(statement, {"category": "mode7"}) if semantic_llm else {}
+    if semantic_llm is None:
+        return {"passed": False, "status": "unknown", "reason": "未接入语义检查，尚未验证"}
+    signals = semantic_llm(statement, {"category": "mode7"})
     hits = [s for s in _MODE7_SEMANTIC_SIGNALS if signals.get(s)]
     result = {"passed": len(hits) == 0, "signals": hits}
     if hits:

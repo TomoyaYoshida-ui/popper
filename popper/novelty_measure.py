@@ -100,8 +100,12 @@ def run(case_dir, n_negative=40, rng=None, verifier=None):
     report = {
         "schema": "a3-1.0",
         "controlled_corpus": {"n_negative_hard_samples": n_negative,
-                              "includes_near_miss": True},
+                              "includes_near_miss": False,
+                              "unique_report_patterns": len({digest(s["report"]) for s in samples}),
+                              "measurement_kind": "rule_control_flow_fixture"},
         "fpr": round(fpr, 3),
+        "real_novelty_fpr": None,
+        "novelty_status": "not_measured",
         "reverse_citation_hallucination_rate": hyp["hallucination_rate"],
         "hallucination_status": hyp["status"],
         "pass": (fpr <= 0.1 and hyp["hallucination_rate"] <= 0.10)

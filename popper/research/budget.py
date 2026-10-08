@@ -17,7 +17,7 @@ import math
 
 from ..core import ProtocolError
 
-RESERVATION_KINDS = ("dev", "confirmation", "external")
+RESERVATION_KINDS = ("dev", "confirmation", "external", "design")
 
 
 class BudgetError(ProtocolError):

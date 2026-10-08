@@ -22,13 +22,13 @@ AXES = ("problem_framing", "core_mechanism", "key_insight", "application_domain"
 TRIAGE_CAP = 30
 
 
-def make_json_client(base_url, model, diagnostics_dir=None):
+def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=None, api_key=None):
     parsed = urlparse(base_url)
     if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}):
         raise ProtocolError("模型地址必须是 HTTPS，或本机 HTTP")
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ProtocolError("模型地址不能含凭据、查询参数或 fragment")
-    key = os.environ.get("POPPER_API_KEY")
+    key = api_key if api_key is not None else os.environ.get("POPPER_API_KEY")
     if not key:
         raise ProtocolError("请通过 POPPER_API_KEY 环境变量提供 key")
 
@@ -40,6 +40,8 @@ def make_json_client(base_url, model, diagnostics_dir=None):
     spent = {"tokens": 0}
 
     def call(system, payload):
+        if "json" not in system.casefold():
+            system += "\nReturn exactly one JSON object."
         call_id = uuid.uuid4().hex
         repair_json = False
         for attempt in range(2):
@@ -57,6 +59,9 @@ def make_json_client(base_url, model, diagnostics_dir=None):
                 body["messages"].append({"role": "user", "content":
                     "The previous response was truncated or invalid JSON. Return one complete JSON "
                     "object matching the requested schema. Keep explanations concise; no Markdown."})
+            reservation = request_budget.reserve(body) if request_budget is not None else None
+            settled = False
+            usage = None
             request = urllib.request.Request(base_url.rstrip("/") + "/chat/completions",
                                              data=canonical(body).encode(), method="POST",
                                              headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
@@ -75,7 +80,11 @@ def make_json_client(base_url, model, diagnostics_dir=None):
                 envelope = json.loads(text)
                 choice = envelope["choices"][0]
                 diagnostic["finish_reason"] = choice.get("finish_reason")
-                diagnostic["usage"] = envelope.get("usage")
+                usage = envelope.get("usage")
+                diagnostic["usage"] = usage
+                if reservation is not None:
+                    settled = True
+                    request_budget.settle(reservation, usage)
                 total = (envelope.get("usage") or {}).get("total_tokens")
                 if type(total) is int and total >= 0:
                     spent["tokens"] += total
@@ -106,14 +115,23 @@ def make_json_client(base_url, model, diagnostics_dir=None):
                     raise ProtocolError(f"Scoop 模型调用失败: {type(error).__name__}；"
                                         f"诊断编号 {call_id}，尝试 {attempt + 1} 次") from None
             finally:
+                budget_error = None
+                if reservation is not None and not settled:
+                    settled = True
+                    try:
+                        request_budget.settle(reservation, usage)
+                    except ProtocolError as caught:
+                        budget_error = caught
                 if diagnostics_dir is not None:
                     folder = Path(diagnostics_dir)
                     folder.mkdir(parents=True, exist_ok=True)
                     serialized = json.dumps(diagnostic, ensure_ascii=False, indent=2)
                     serialized = serialized.replace(key, "[REDACTED]")
                     (folder / f"{call_id}-{attempt + 1}.json").write_text(serialized + "\n", encoding="utf-8")
+                if budget_error is not None:
+                    raise budget_error
 
-    call.tokens_used = lambda: spent["tokens"]
+    call.tokens_used = lambda: request_budget.tokens_used if request_budget is not None else spent["tokens"]
     return call
 
 

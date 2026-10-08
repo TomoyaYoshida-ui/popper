@@ -32,7 +32,7 @@ export type RiskEntry = {
   user_adjudication?: boolean
 }
 
-export type Mode7Entry = { mode: string; status: 'hit' | 'clean'; evidence: string | null }
+export type Mode7Entry = { mode: string; status: 'hit' | 'clean' | 'unknown'; evidence: string | null }
 
 export type Review = {
   rejection_side: {

@@ -521,7 +521,7 @@ def request_output_limits(base_url, model):
     return {"max_tokens": MODEL_MAX_TOKENS}
 
 
-def make_chat_client(base_url, model, *, enable_file_tools=False):
+def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None):
     """构造 OpenAI 兼容 /chat/completions 文本聊天客户端（stdlib-only）。
 
     返回 call(system, messages) -> str；messages 为 [{"role", "content"}]。
@@ -535,7 +535,7 @@ def make_chat_client(base_url, model, *, enable_file_tools=False):
         raise ProtocolError("模型地址不能含凭据、查询参数或 fragment")
     if not isinstance(model, str) or not model.strip():
         raise ProtocolError("模型名不能为空")
-    key = os.environ.get("POPPER_API_KEY")
+    key = api_key if api_key is not None else os.environ.get("POPPER_API_KEY")
     if not key:
         raise ProtocolError("请通过 POPPER_API_KEY 环境变量提供 key")
 

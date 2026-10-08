@@ -1292,3 +1292,12 @@ export async function adjudicate(riskId: string, verdict: 'allow' | 'reject', re
   if (!res.ok) throw new Error(body.error || `裁定失败：HTTP ${res.status}`)
   return body as import('./types').Adjudication
 }
+
+export type ProviderConfig = {
+  schema_version: string; base_url: string; model: string; configured: boolean
+  credential_available: boolean; credential_storage: string; source: string; workspace_id: string
+  token_budget: number | null; cost_budget_micros: number | null
+}
+export const fetchProviderConfig = () => contextRequest<ProviderConfig>('/api/v1/provider-config')
+export const saveProviderConfig = (data: { workspace_id: string; base_url: string; model: string; api_key?: string; token_budget: number | null; cost_budget_micros: number | null }) => contextRequest<ProviderConfig>('/api/v1/provider-config', data)
+export const testProviderConfig = () => contextRequest<{ ok: boolean; model: string }>('/api/v1/provider-config/test', {})

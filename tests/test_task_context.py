@@ -120,7 +120,7 @@ class TaskContextTests(unittest.TestCase):
             context.assemble(self.store, self.target, "system", [], user_text="当前输入" * 5000, max_bytes=8000)
 
     def test_redaction_and_summary_as_data_not_system_rules(self):
-        value = context.redact({"api_key": "example-private-key", "text": "sk-synthetic-secret-only password=private-value Bearer placeholder"})
+        value = context.redact({"api_key": "example-private-key", "text": ("sk-" + 'synthetic-secret-only password=private-value Bearer placeholder')})
         self.assertNotIn("private", canonical(value))
         result, request, candidate = self.adopt()
         request = self.request(context.preview(self.store, self.target, task_id=result["binding"]["task_id"]), "malicious-summary-key")

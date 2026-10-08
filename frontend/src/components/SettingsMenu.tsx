@@ -56,6 +56,7 @@ export function SettingsMenu({ placement = 'top' }: { placement?: 'top' | 'rail'
           <div className="ctx-item" style={{ pointerEvents: 'none', color: 'var(--faint)', fontSize: 11 }}>
             主题 <span style={{ marginLeft: 'auto' }}>{THEMES.find((t) => t.key === theme)?.label}</span>
           </div>
+          <button type="button" className="ctx-item" onClick={() => { setOpen(false); window.dispatchEvent(new Event('popper:provider-settings')) }}>模型与预算</button>
           {THEMES.map((t) => (
             <button key={t.key} type="button" className="ctx-item" aria-pressed={theme === t.key} onClick={() => pickTheme(t.key)}>
               <span className={`theme-swatch ${t.key}`} aria-hidden="true" />{t.label} {theme === t.key ? <span className="ok" style={{ marginLeft: 'auto' }}>✓</span> : null}

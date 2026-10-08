@@ -28,6 +28,7 @@ class ActionProposal:
     alternatives: tuple = field(default_factory=tuple)
     source: str = "evidence_policy"
     model: str | None = None
+    explanation_id: str | None = None
 
     def __post_init__(self):
         if self.kind not in ALLOWED_ACTIONS:
@@ -42,6 +43,9 @@ class ActionProposal:
             raise ProtocolError("alternatives 必须为 tuple")
 
     def as_dict(self):
-        return {"kind": self.kind, "hypothesis_id": self.hypothesis_id,
+        body = {"kind": self.kind, "hypothesis_id": self.hypothesis_id,
                 "rationale": self.rationale, "alternatives": list(self.alternatives),
                 "source": self.source, "model": self.model}
+        if self.explanation_id is not None:
+            body["explanation_id"] = self.explanation_id
+        return body

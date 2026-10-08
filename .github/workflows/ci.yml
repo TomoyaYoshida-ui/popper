@@ -123,7 +123,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest
-          python -m pip install -e ".[ml,research,orchestration,confirmation,workstation]"
+          python -m pip install -e ".[ml,intake,research,orchestration,confirmation,workstation]"
       - name: 全量测试（覆盖需要可选依赖的分支）
         # -rs 与 PYTHONIOENCODING 的理由同 test job：skip 名单要能递出来、递出来要读得懂。
         id: pytest
@@ -185,7 +185,7 @@ jobs:
           python -m pip install pytest
           # workstation 的 pywinpty 带 Windows 环境标记，Linux 会合法跳过其平台包；
           # extra 本身仍必须出现在安装清单，确保声明、探针和 CI 契约不漂移。
-          python -m pip install -e ".[ml,research,orchestration,confirmation,workstation]"
+          python -m pip install -e ".[ml,intake,research,orchestration,confirmation,workstation]"
       - name: 准备 bubblewrap 沙箱环境
         # 装 bwrap / 开 AppArmor 的 userns 例外 / 按真实形状探活——三步都在
         # `.github/actions/sandbox-env`，与下面的端到端 job 共用一个出处（为什么必须共用、

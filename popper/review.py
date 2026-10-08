@@ -63,8 +63,9 @@ class RejectionReview:
     reversal: 是否有反向文献覆盖声明用于 R1。
     """
 
-    def __init__(self, evidence=None, manuscript_path=None):
+    def __init__(self, evidence=None, manuscript_path=None, *, verified_checks=None):
         self.evidence = evidence
+        self.verified_checks = dict(verified_checks or {})
         self.manuscript_path = Path(manuscript_path) if manuscript_path else None
 
     # ---------- 拒稿侧 R1-R7 ----------
@@ -110,15 +111,19 @@ class RejectionReview:
         missing = [m for m in mechanism_claims if not m.get("ablation")]
         if missing:
             return self._entry("R3", "fail", f"机制未绑定消融: {[m['name'] for m in missing]}")
-        return self._entry("R3", "pass", "机制均绑定消融/反事实")
+        if not all(m.get("ablation_verified") is True for m in mechanism_claims):
+            return self._entry("R3", "warn", "已声明消融关联，真实性与区分能力尚未核验")
+        return self._entry("R3", "pass", "已核验消融/反事实关联；不据此自动证实机制")
 
     def _r4(self, report):
         # R4 overclaim：L1 contradiction + 证据方向一致
         contradiction = report.get("contradiction")
-        evidence_consistent = report.get("evidence_consistent", True)
+        evidence_consistent = report.get("evidence_consistent")
         if contradiction:
             return self._entry("R4", "fail", "注入矛盾：证据方向不一致 → overclaim")
-        if not evidence_consistent:
+        if evidence_consistent is None:
+            return self._entry("R4", "warn", "结论一致性尚未验证")
+        if evidence_consistent is False:
             return self._entry("R4", "fail", "结论方向与证据方向不一致")
         return self._entry("R4", "pass", "无矛盾，结论与证据方向一致")
 
@@ -170,18 +175,27 @@ class RejectionReview:
 
     # ---------- 造假侧 7-mode ----------
     def _mode7(self, report):
-        evidence_flags = report.get("mode7") or {}
-        return [
-            {"mode": mode, "status": "hit" if evidence_flags.get(mode) else "clean",
-             "evidence": evidence_flags.get(mode) or None}
-            for mode in MODE7
-        ]
+        flags = report.get("mode7") or {}
+        checks = self.verified_checks
+        modes = []
+        for mode in MODE7:
+            check = checks.get(mode)
+            hit = flags.get(mode)
+            verified = (isinstance(check, dict) and check.get("completed") is True
+                        and check.get("status") in {"clean", "hit"}
+                        and isinstance(check.get("evidence"), str) and bool(check["evidence"].strip()))
+            status = "hit" if hit or (verified and check["status"] == "hit") else (
+                "clean" if verified else "unknown")
+            evidence = hit or (check.get("evidence") if verified else None)
+            modes.append({"mode": mode, "status": status, "evidence": evidence})
+        return modes
 
     def _mode7_summary(self, report):
-        flags = report.get("mode7") or {}
-        hits = [m for m in MODE7 if flags.get(m)]
-        return {"count": len(hits), "hits": hits,
-                "status": "fail" if hits else "pass"}
+        modes = self._mode7(report)
+        hits = [row["mode"] for row in modes if row["status"] == "hit"]
+        unknown = [row["mode"] for row in modes if row["status"] == "unknown"]
+        return {"count": len(hits), "hits": hits, "unknown": unknown,
+                "status": "fail" if hits else "incomplete" if unknown else "pass"}
 
     # ---------- 稿件级集成（读 evidence/稿件文件） ----------
     def from_manuscript(self, manuscript_path=None, report=None):
@@ -192,7 +206,7 @@ class RejectionReview:
             lint = lint_manuscript(path, self.evidence)
             refs = check_references(path, self.evidence)
             report = report or {}
-            report.setdefault("evidence_consistent", True)
+            report.setdefault("evidence_consistent", None)
             if not lint["passed"]:
                 report["mode7"] = dict(report.get("mode7") or {})
                 # 未绑定的裸数字 / 未绑定 claim 归入造假侧风险（证据链断裂）

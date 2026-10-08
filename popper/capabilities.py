@@ -19,6 +19,7 @@ import importlib.util
 #: 新增 extra 时必须同步这里，否则探测会假报"可用"。
 EXTRA_IMPORTS = {
     "ml": ("sklearn",),
+    "intake": ("pyarrow",),
     "research": ("requests", "pypdf"),
     "orchestration": ("langgraph",),
     "confirmation": ("cryptography",),

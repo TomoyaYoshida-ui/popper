@@ -137,8 +137,10 @@ class ResearchController:
         configs = {control_hypothesis_id: spec["baseline"]}
         configs.update(zip(candidate_ids, spec["candidates"]))
         cap = float(budget_cap if budget_cap is not None else spec["budget"] + 3)
-        if cap < 4:
+        from .intake import STUDY_BUDGET_FLOOR, assert_study_budget_floor
+        if cap < STUDY_BUDGET_FLOOR:
             raise ProtocolError("research budget 至少需要覆盖基线、一个候选和两次确认计分")
+        assert_study_budget_floor(project, cap)
         manifest = {
             "schema_version": "1.0", "project": str(project), "study_id": study_id,
             "family_id": family_id, "control_hypothesis_id": control_hypothesis_id,
@@ -160,6 +162,14 @@ class ResearchController:
             "policy": getattr(policy, "name", type(policy).__name__),
             "hypotheses": generated,
         }
+        from .prediction import build_prediction
+        manifest["schema_version"] = "2.0"
+        manifest["prediction_contract"] = build_prediction(state["evaluator_id"],
+            spec["min_improvement"], scope=digest(input_identity))
+        from .formulate import load_approved_explanations
+        explanations = load_approved_explanations(project)
+        if explanations:
+            manifest["explanations"] = explanations
         if external_confirmation is not None:
             manifest["external_confirmation"] = external_confirmation
         if followup_lineage is not None:
@@ -167,12 +177,17 @@ class ResearchController:
         write_json(manifest_path, manifest)
         store = ResearchStore(run_dir / "research.sqlite")
         try:
+            from .intake import import_intake_events, record_study_budget
+            import_intake_events(store, project)
             scope = canonical({"project": str(project),
                                "manifest_sha256": file_hash(manifest_path),
                                "trust": "development_evaluation_in_separate_process_same_account"})
             store.create_study(Study(study_id, family_id, spec["objective"], scope,
                                      data_exposure=(spec["train"], spec["dev"]),
                                      budget_cap=cap))
+            if (project / ".popper-intake" / "intake.sqlite").is_file():
+                record_study_budget(project, budget_cap=cap, family_id=family_id,
+                                    study_id=study_id, run_dir=run_dir)
             _create_hypothesis_and_design(
                 store, manifest, control_hypothesis_id,
                 {"mechanism": "预注册基线作为方向统一效应的对照",
@@ -209,6 +224,12 @@ class ResearchController:
             # 可通过构造注入替换后端（默认本地分离式 worker），面向 Worker Protocol 解耦。
             self.worker: Worker = worker if worker is not None else LocalWorker(
                 self.run_dir / "jobs", self.revisions)
+            for design in self.store.list("design"):
+                if design.get("execution_config") is not None and design.get("study_id") == self.manifest["study_id"]:
+                    hid = design["hypothesis_id"]
+                    self.manifest["configs"][hid] = design["execution_config"]
+                    if hid not in self.manifest["candidate_hypothesis_ids"]:
+                        self.manifest["candidate_hypothesis_ids"].append(hid)
             self._verify_inputs()
             # 启动对账：回收上次崩溃/中断遗留的开发集悬空预留，不依赖崩溃前补偿是否跑完。
             self.store.reconcile_budget(self.manifest["study_id"])
@@ -285,6 +306,33 @@ class ResearchController:
             raise ProtocolError(
                 "旧 research 未绑定计分源码，只允许读取和审计；请创建新的 research 运行目录。"
                 "新目录仍使用原研究家族预算，不能把历史分数与新计分实现混用")
+
+    def _write_prediction_successor(self, tested_explanation_id, baseline, observation,
+                                    threshold, revised_mechanism=None):
+        """预测没达到冻结阈值时写下后继提案。工程失败不走这里。"""
+        from .successor import successor_for_failure, write_successor_proposal
+        from .prediction import evaluate_prediction
+        spec = read_json(self.project / "experiment.json")
+        holdout_sha = self.manifest["input_identity"]["input_hashes"][spec["test"]]
+        study = self.store.get("study", self.manifest["study_id"])
+        if self.manifest.get("prediction_contract") and revised_mechanism is None:
+            revised_mechanism = (f"待验证后继研究：基于开发观察设计不同干预的对照，"
+                                 f"在新确认数据上检验 {self.manifest['metric']['name']}，"
+                                 "不据本次阈值结果裁定机制胜负。")
+        proposal = successor_for_failure(
+            explanations=self.manifest["explanations"],
+            tested_explanation_id=tested_explanation_id,
+            observation_refs=(baseline["observation_id"], observation["observation_id"]),
+            parent_threshold=threshold,
+            parent_question=study["question"],
+            parent_holdout_sha256=holdout_sha,
+            revised_mechanism=revised_mechanism,
+            prediction_result=(evaluate_prediction(self.manifest["prediction_contract"],
+                    baseline["value"] - observation["value"] if self.manifest["metric"]["direction"] == "min"
+                    else observation["value"] - baseline["value"],
+                    repeat_unit=self.manifest.get("repeat_unit", "train_seed"))
+                if self.manifest.get("prediction_contract") else None))
+        write_successor_proposal(self.run_dir, proposal)
 
     def _record(self, proposal, observation_refs=(), budget_request=0.0):
         study = self.store.get("study", self.manifest["study_id"])
@@ -709,7 +757,7 @@ class ResearchController:
 
     def implement(self, hypothesis_id, parent_revision_id=None, gpu_count=0,
                   should_cancel=None, search_node=False, fidelity=None, seen_diffs=None,
-                  node_kind=None):
+                  node_kind=None, design_reservation=None):
         """Generate, freeze, execute and independently score one code revision.
 
         Generated code always goes through LocalWorker's OS sandbox. There is no
@@ -814,7 +862,7 @@ class ResearchController:
                     "该 CodeRevision 已终态失败；修复必须创建带 parent_revision 的新版本")
             # 记账 + Run 登记 + 状态推进同库同事务：登记失败时预留一并回滚。
             with self.store.transaction():
-                reservation = ledger.reserve(self.manifest["family_id"], run_id, 1.0)
+                reservation = design_reservation or ledger.reserve(self.manifest["family_id"], run_id, 1.0)
                 if existing_run is None:
                     self._record(proposal, budget_request=1.0)
                     self.store.runs.register(
@@ -981,7 +1029,7 @@ class ResearchController:
                     self.exp.fail_run(core_rid, type(error).__name__)
                 except Exception:
                     pass
-            latest = ledger.reserve(self.manifest["family_id"], run_id, 1.0)
+            latest = design_reservation or ledger.reserve(self.manifest["family_id"], run_id, 1.0)
             if latest["status"] == "reserved":
                 ledger.settle(latest["reservation_id"], 1.0)
             raise
@@ -1221,12 +1269,14 @@ class ResearchController:
         return self.status()
 
     def run(self, trusted_local=False, sandboxed=False, max_steps=None, auto_confirm=False,
-            autonomous_code=False, should_cancel=None, search=None):
+            autonomous_code=False, should_cancel=None, search=None, autonomous_design=False):
         def check_cancelled():
             if should_cancel is not None and should_cancel():
                 raise ProtocolError("研究执行已取消")
 
         check_cancelled()
+        if autonomous_design:
+            autonomous_code = True
         if trusted_local == sandboxed:
             raise ProtocolError("research run 必须且只能选择 --trusted-local 或 --sandbox")
         if autonomous_code and not sandboxed:
@@ -1242,7 +1292,7 @@ class ResearchController:
         if max_steps is not None and (type(max_steps) is not int or max_steps < 0):
             raise ProtocolError("max_steps 必须是非负整数")
         if search is None:
-            search = bool(autonomous_code)
+            search = bool(autonomous_code and not hasattr(self.policy, "reflect"))
         self._verify_inputs()
         self._require_scoring_binding()
         before = self.status()
@@ -1271,6 +1321,9 @@ class ResearchController:
                 trusted_local, sandboxed, should_cancel=should_cancel)
             self.store.set_hypothesis_status(control_id, 1, HypothesisStatus.INCONCLUSIVE)
 
+        if autonomous_design:
+            from .autonomy import run_autonomous
+            return run_autonomous(self, baseline, max_steps, should_cancel)
         if search:
             if not (autonomous_code and sandboxed):
                 raise ProtocolError("实验树搜索只能在沙箱中的自主代码模式下运行")
@@ -1294,6 +1347,14 @@ class ResearchController:
             proposal = (ActionProposal(RUN_EXPERIMENT, latest["rationale"],
                                        pending["hypothesis_id"], source=latest["actor"],
                                        model=latest.get("model")) if pending else self.policy.choose(context))
+            if self.manifest.get("explanations"):
+                from .question_proposer import (bind_primary_explanation,
+                                                require_explanation_action)
+                if pending:
+                    proposal = bind_primary_explanation(
+                        proposal, self.manifest["explanations"])
+                proposal = require_explanation_action(
+                    proposal, self.manifest["explanations"])
             if proposal.kind == REQUEST_CONFIRMATION:
                 self._record(proposal)
                 return self.confirm(trusted_local, sandboxed) if auto_confirm else self.status()
@@ -1348,9 +1409,38 @@ class ResearchController:
                                           self.manifest)["candidates"])
             analysis = self.policy.after_observation(
                 hypothesis_id, delta, threshold, remaining)
+            explanations = self.manifest.get("explanations")
+            revised_mechanism = None
+            tested_explanation_id = proposal.explanation_id
+            if explanations:
+                from .agenda import has_contrasts, verdict
+                if has_contrasts(explanations) and not self.manifest.get("prediction_contract"):
+                    outcome = verdict(explanations, delta, threshold)
+                    if outcome["positive_killed"] and analysis.kind == STOP:
+                        spec = read_json(self.project / "experiment.json")
+                        holdout_sha = self.manifest["input_identity"]["input_hashes"][spec["test"]]
+                        question = self.store.get("study", self.manifest["study_id"])["question"]
+                        revised_mechanism = self.policy.revise_mechanism(
+                            killed_id=outcome["killed_explanation_id"],
+                            surviving_id=outcome["surviving_explanation_id"],
+                            delta=delta, threshold=threshold, explanations=explanations,
+                            parent_question=question, parent_holdout_sha256=holdout_sha)
+                        tested_explanation_id = outcome["killed_explanation_id"]
+                    elif not outcome["positive_killed"]:
+                        killed = outcome["killed_explanation_id"]
+                        analysis = ActionProposal(
+                            analysis.kind,
+                            f"{analysis.rationale} 内核判定已杀掉解释 {killed}。",
+                            analysis.hypothesis_id, analysis.alternatives,
+                            source="research_controller",
+                            explanation_id=killed)
             self._record(analysis,
                          observation_refs=(baseline["observation_id"],
                                            observation["observation_id"]))
+            if analysis.kind == STOP and explanations:
+                self._write_prediction_successor(
+                    tested_explanation_id, baseline, observation, threshold,
+                    revised_mechanism=revised_mechanism)
             steps += 1
             if analysis.kind == REQUEST_CONFIRMATION:
                 return self.confirm(trusted_local, sandboxed) if auto_confirm else self.status()
@@ -1833,10 +1923,16 @@ def _default_hypothesis(config, metric):
 
 def _create_hypothesis_and_design(store, manifest, hypothesis_id, content,
                                   is_control=False):
+    predictions = content.get("predictions", [])
+    if manifest.get("prediction_contract") and not is_control:
+        from .prediction import render_prediction, validate_prediction_text
+        for text in predictions:
+            validate_prediction_text(text, manifest["scorer_id"])
+        predictions = [render_prediction(manifest["prediction_contract"])]
     hypothesis = Hypothesis(
         hypothesis_id, manifest["study_id"], 1, None,
         str(content["mechanism"]), str(content["applicability"]),
-        tuple(content.get("predictions", [])), tuple(content.get("falsification", [])),
+        tuple(predictions), tuple(content.get("falsification", [])),
         tuple(content.get("alternatives", [])))
     store.add_hypothesis(hypothesis)
     config = manifest["configs"][hypothesis_id]
@@ -1851,6 +1947,6 @@ def _create_hypothesis_and_design(store, manifest, hypothesis_id, content,
         splits=("dev", "confirmation") if not is_control else ("dev", "confirmation"),
         seeds=tuple(manifest.get("repeat_values", manifest["seeds"])),
         min_meaningful_effect=manifest["min_meaningful_effect"],
-        status=DesignStatus.DRAFT)
+        status=DesignStatus.DRAFT, prediction_contract=manifest.get("prediction_contract"))
     store.create_design(design)
     store.freeze_design(design.design_id)

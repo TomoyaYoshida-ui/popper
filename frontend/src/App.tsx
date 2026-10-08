@@ -86,6 +86,20 @@ export default function App() {
     try { const value = await fetchWorkspace(); if (epoch === contextEpoch.current && !navigationLock.current) setWorkspace(value) }
     catch (e) { if (epoch === contextEpoch.current && !navigationLock.current) setError((e as Error).message) }
   }, [])
+  useEffect(() => {
+    const refresh = () => {
+      const epoch = contextEpoch.current
+      const origin = currentContext.current.root
+      void fetchChat().then((value) => {
+        if (epoch === contextEpoch.current && origin === currentContext.current.root) setChat(value)
+      }).catch((reason) => {
+        if (epoch === contextEpoch.current && origin === currentContext.current.root) setChatError((reason as Error).message)
+      })
+    }
+    window.addEventListener('popper:provider-changed', refresh)
+    return () => window.removeEventListener('popper:provider-changed', refresh)
+  }, [])
+
   const loadCampaign = useCallback(async () => {
     const epoch = contextEpoch.current
     try { const value = await fetchCampaign(); if (epoch === contextEpoch.current && !navigationLock.current) setCampaign(value) }

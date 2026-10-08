@@ -1,3 +1,4 @@
+import { currencyToMicros, microsToCurrency, validCurrency } from '../money'
 import { useEffect, useRef, useState } from 'react'
 import type { ChatState, PopperState } from '../types'
 import type { WorkbenchResource } from '../workbench'
@@ -109,10 +110,10 @@ export function AgentChatPane({ chat, chatPending, requestError, contextKey, pro
           <button type="button" disabled={!chat?.session_id || chatPending || (!!budgetDraft.trim() && !/^[1-9]\d*$/.test(budgetDraft.trim()))}
             onClick={() => { void onSetBudget(budgetDraft.trim() ? Number(budgetDraft) : null) }}>设置 Token 额度</button>
           {chat?.usage.currency && <><span>{chat.usage.currency} {(chat.usage.cost_micros / 1_000_000).toFixed(6)} 已用</span>
-            <label>费用额度（微单位）<input aria-label="会话费用额度" value={costDraft} placeholder={chat.usage.cost_budget_micros?.toString() ?? '无限额'} onChange={(event) => setCostDraft(event.target.value)} /></label>
-            <button type="button" disabled={!chat?.session_id || chatPending || (!!costDraft.trim() && !/^[1-9]\d*$/.test(costDraft.trim()))}
-              onClick={() => { void onSetCostBudget(costDraft.trim() ? Number(costDraft) : null) }}>设置费用额度</button></>}
-          {!chat?.configured && <p>在 Popper 项目配置中设置模型与 API 凭据后即可发送。</p>}
+            <label>费用额度<input aria-label="会话费用额度" value={costDraft} placeholder={microsToCurrency(chat.usage.cost_budget_micros) || '无限额'} onChange={(event) => setCostDraft(event.target.value)} /></label>
+            <button type="button" disabled={!chat?.session_id || chatPending || !validCurrency(costDraft)}
+              onClick={() => { void onSetCostBudget(currencyToMicros(costDraft)) }}>设置费用额度</button></>}
+          {!chat?.configured && <p>设置模型与 API 凭据后即可发送。<button type="button" onClick={() => window.dispatchEvent(new Event('popper:provider-settings'))}>打开模型配置</button></p>}
         </div>
       </details>
     </header>
@@ -128,7 +129,8 @@ export function AgentChatPane({ chat, chatPending, requestError, contextKey, pro
       {!chat && <div className="chat-empty"><span className="popper-mark"><WorkbenchIcon kind="orbit" /></span><h2>正在连接科研工作区</h2><p>读取会话与项目状态…</p></div>}
       {chat && chat.turns.length === 0 && <div className="chat-empty">
         <span className="popper-mark"><WorkbenchIcon kind="orbit" /></span><h2>从一个研究问题开始</h2>
-        <p>{chat.configured ? '与 Agent 讨论方案，在右侧查看实验、证据和稿件。' : chat.labels.unconfigured_notice}</p>
+        <p>{chat.configured ? '与 Agent 讨论方案，在右侧查看实验、证据和稿件。' : '尚未配置对话模型。设置模型与凭据后即可开始。'}</p>
+        {!chat.configured && <button type="button" onClick={() => window.dispatchEvent(new Event('popper:provider-settings'))}>配置对话模型</button>}
         <div className="chat-suggestions">{['梳理当前研究的目标与下一步', '核查已有实验与证据', '提出一个可验证的研究方案'].map((text) =>
           <button type="button" key={text} onClick={() => { setDraft(text); composer.current?.focus() }}>{text}<WorkbenchIcon kind="arrowOut" /></button>)}</div>
       </div>}

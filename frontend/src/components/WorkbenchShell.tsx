@@ -6,6 +6,7 @@ import { defaultLayout, openStudyResource, removeTab, restoreProjectLayout, proj
 import type { SessionIndex, SessionSummary } from '../sessionNavigation'
 import { ProjectSessionTree } from './ProjectSessionTree'
 import { SettingsMenu } from './SettingsMenu'
+import { ProviderSettings } from './ProviderSettings'
 import { PanelBoundary } from './PanelBoundary'
 import { FileTree } from './FileTree'
 import { WorkbenchIcon as Icon } from './WorkbenchIcon'
@@ -181,6 +182,7 @@ export function WorkbenchShell({ workspace, research, chat, error, connected, te
     }} />
 
   return <div className={`workbench ${layout.sidebarOpen ? 'sidebar-open' : ''} ${layout.maximized ? 'work-maximized' : ''} mobile-${layout.mobileView}`}>
+    <ProviderSettings workspaceId={projectId} />
     <nav className="activity-rail" aria-label="工作台导航">
       <button className="rail-brand" type="button" title="Popper · 返回当前 Study" aria-label="返回当前 Study" onClick={() => openResource({ kind: 'study' })}>P</button>
       <button type="button" title="Agent 会话" aria-label="Agent 会话" onClick={() => { update((current) => ({ ...current, mobileView: 'chat', maximized: false })); requestAnimationFrame(() => workspaceRef.current?.querySelector<HTMLTextAreaElement>('.agent-composer textarea')?.focus()) }}><Icon kind="chat" /></button>

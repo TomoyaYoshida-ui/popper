@@ -35,4 +35,5 @@ def build_context(store, study_id, manifest):
             "budget": budget,
             "metric": manifest["metric"],
             "min_meaningful_effect": manifest["min_meaningful_effect"],
-            "capability_mode": manifest["capability_mode"]}
+            "capability_mode": manifest["capability_mode"],
+            "explanations": manifest.get("explanations")}
