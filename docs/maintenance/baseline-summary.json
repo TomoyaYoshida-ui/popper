@@ -14,6 +14,12 @@
   "databases_opened": false,
   "initial_collection_errors": 3,
   "initial_error_cause": "ml optional dependency absent; installed before full baseline",
-  "full_baseline": "pending frozen snapshot run",
-  "preexisting_deletions": "preserved unstaged"
+  "full_baseline": {
+    "passed": 1459,
+    "skipped": 59,
+    "subtests_passed": 734,
+    "source_commit": "a95c34b"
+  },
+  "preexisting_deletions": "preserved unstaged",
+  "inventory_scope": "JSON/log hashes and database metadata only; protected databases not opened"
 }

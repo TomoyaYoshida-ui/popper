@@ -1,0 +1,40 @@
+{
+  "schema": "native-repair-validation/v1",
+  "repository": "research-agent-v2",
+  "branch": "autopilot",
+  "baseline": {
+    "passed": 1459,
+    "skipped": 59,
+    "subtests_passed": 734,
+    "source_commit": "a95c34b"
+  },
+  "regression": {
+    "passed": 1501,
+    "skipped": 44,
+    "subtests_passed": 738
+  },
+  "frontend": {
+    "passed": 162,
+    "build": "passed"
+  },
+  "wheel": {
+    "web_assets": "passed",
+    "offline_demos": "passed",
+    "isolated_installed_cli": "passed"
+  },
+  "figs_offline": "completed",
+  "figs_qwen_live": "completed",
+  "model_attempts": 6,
+  "model_attempt_ceiling": 30,
+  "historical_unknown_attempts_retained": 3,
+  "fresh_scientific_confirmation": false,
+  "linux_sandbox": "not_executed",
+  "skip_reasons": [
+    "optional orchestration dependency absent",
+    "Windows ConPTY dependency absent",
+    "platform-specific fonts/symlink/sandbox cases"
+  ],
+  "original_records_modified": false,
+  "credentials_committed": false,
+  "remote_push": false
+}

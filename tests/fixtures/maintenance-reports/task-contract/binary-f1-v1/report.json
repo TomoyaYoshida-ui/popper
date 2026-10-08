@@ -1,0 +1,12 @@
+{
+  "case": "binary-f1-v1",
+  "contract_score": 1.0,
+  "evaluator_id": "binary-f1-v1",
+  "handwritten_score": 1.0,
+  "milestone": "M-C",
+  "model_called": false,
+  "schema": "popper.task-contract-report/v1",
+  "scores_equal": true,
+  "source_evaluator_id": "binary-f1-v1",
+  "status": "passed"
+}

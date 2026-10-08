@@ -24,6 +24,7 @@ EXTRA_IMPORTS = {
     "orchestration": ("langgraph",),
     "confirmation": ("cryptography",),
     "workstation": ("winpty",),
+    'figs': ('imodels', 'numpy', 'pandas', 'sklearn'),
 }
 
 

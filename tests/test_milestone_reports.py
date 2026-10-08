@@ -5,6 +5,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 RUNS = REPO / "evaluation" / "runs"
+if not (RUNS / 'data-intake/heart-disease-cleveland/report.json').is_file():
+    RUNS = REPO / 'tests/fixtures/maintenance-reports'
 INTAKE = json.loads((RUNS / "data-intake" / "heart-disease-cleveland" / "report.json").read_text(encoding="utf-8"))
 FORMAT_KEYS = {
     "schema", "case", "milestone", "status", "model_called", "adapter_id", "record_shape",

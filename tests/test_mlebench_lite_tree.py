@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 
 from popper.core import ProtocolError
+from popper.capabilities import extra_available
+if not extra_available('ml'):
+    raise unittest.SkipTest('ml extra is required for MLE-bench Lite tree tests')
 from evaluation.mlebench_lite import materialize
 from evaluation.run_mlebench_lite_tree import (
     apply_min_improvement, beats_linear, drive_tree, margin_from_rows, oriented_delta,

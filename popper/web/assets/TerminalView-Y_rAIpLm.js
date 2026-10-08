@@ -1,4 +1,4 @@
-var e,t,i;import{r as s,t as r,j as n}from"./index-BzMtjy57.js";
+var e,t,i;import{r as s,t as r,j as n}from"./index-CotF3Tvv.js";
 /**
  * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
  * @license MIT

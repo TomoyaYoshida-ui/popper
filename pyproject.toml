@@ -22,6 +22,8 @@ research = ["requests>=2.31,<3", "pypdf>=5,<7"]
 orchestration = ["langgraph>=0.2", "langgraph-checkpoint-sqlite>=2"]
 confirmation = ["cryptography>=48,<49"]
 workstation = ["pywinpty>=3,<4; platform_system == 'Windows'"]
+figs = ["numpy==2.2.6", "scikit-learn==1.7.2", "pandas==2.3.3",
+        "imodels @ git+https://github.com/csinva/imodels.git@e8efb7e7b599e4d0f3e3399174e6684d125acb6f"]
 
 [project.scripts]
 popper = "popper.cli:main"

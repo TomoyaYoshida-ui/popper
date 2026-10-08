@@ -1,0 +1,230 @@
+{
+  "schema": "native-figs-acceptance/v1",
+  "status": "completed",
+  "live": true,
+  "model": "qwen3.8-flash",
+  "phase": "concluded",
+  "integrity": {
+    "events": 39,
+    "ok": true,
+    "reason": "事件链、快照和状态版本一致"
+  },
+  "final_scientific_judgments": [
+    "inconclusive",
+    "inconclusive"
+  ],
+  "decision_actions": [
+    "run_experiment",
+    "run_experiment",
+    "request_confirmation",
+    "stop"
+  ],
+  "fresh_confirmation_evidence": false,
+  "scope": "Migration reproduction of a previously evaluated public benchmark; not a new independent scientific confirmation",
+  "confirmation_observations": 2,
+  "judgments": [
+    {
+      "hypothesis_id": "H-91fe6e68d4106388",
+      "hypothesis_version": 1,
+      "old_judgment": "not_recorded",
+      "new_judgment": "supported",
+      "scope": "dev",
+      "next_action": "continue_sampling",
+      "evidence": {
+        "actual_rule_budgets_match": true,
+        "baseline_group_mae": 7.724604041429233,
+        "candidate_group_mae": 5.666195341241631,
+        "ci95": [
+          0.1432648332488496,
+          0.37729248790408476
+        ],
+        "hypothesis_predictions": {
+          "H-91fe6e68d4106388": {
+            "operator": "gt",
+            "threshold": 0.05
+          },
+          "H-figs-single-sufficient": {
+            "operator": "between",
+            "threshold": [
+              -0.05,
+              0.05
+            ]
+          }
+        },
+        "mean_effect": 0.2664743317777552,
+        "mechanism_proven": false,
+        "metric": "relative_mae_improvement",
+        "model_audit_sha256": [
+          "b183c0cf8fb0c2a4de1ff0f2cc4b716f437aa026f1cfe4bb870613426a5ac83f",
+          "769e4442ce44d0a1ae7800e4a6e5a61074bb461634d2ccdf25585e30644984b3"
+        ],
+        "n_groups": 85,
+        "prediction": {
+          "operator": "gt",
+          "threshold": 0.05
+        },
+        "quality": "valid",
+        "request_sha256": "b6e1c3193242b921f36db8b7d1f2bc17173b1e7b22fd3cf56a61fc5be717bdc9",
+        "schema": "grouped-comparison/v1",
+        "service_sha256": "1ca0eb557a249f8d04b7f129bed909de6b46cb271ed62740983ea3ddafd1f8c3",
+        "trust": "separate_process_same_account",
+        "unit": "ratio"
+      },
+      "mechanism_proven": false
+    },
+    {
+      "hypothesis_id": "H-figs-single-sufficient",
+      "hypothesis_version": 1,
+      "old_judgment": "not_recorded",
+      "new_judgment": "refuted",
+      "scope": "dev",
+      "next_action": "revise_hypothesis",
+      "evidence": {
+        "actual_rule_budgets_match": true,
+        "baseline_group_mae": 7.724604041429233,
+        "candidate_group_mae": 5.666195341241631,
+        "ci95": [
+          0.1432648332488496,
+          0.37729248790408476
+        ],
+        "hypothesis_predictions": {
+          "H-91fe6e68d4106388": {
+            "operator": "gt",
+            "threshold": 0.05
+          },
+          "H-figs-single-sufficient": {
+            "operator": "between",
+            "threshold": [
+              -0.05,
+              0.05
+            ]
+          }
+        },
+        "mean_effect": 0.2664743317777552,
+        "mechanism_proven": false,
+        "metric": "relative_mae_improvement",
+        "model_audit_sha256": [
+          "b183c0cf8fb0c2a4de1ff0f2cc4b716f437aa026f1cfe4bb870613426a5ac83f",
+          "769e4442ce44d0a1ae7800e4a6e5a61074bb461634d2ccdf25585e30644984b3"
+        ],
+        "n_groups": 85,
+        "prediction": {
+          "operator": "gt",
+          "threshold": 0.05
+        },
+        "quality": "valid",
+        "request_sha256": "b6e1c3193242b921f36db8b7d1f2bc17173b1e7b22fd3cf56a61fc5be717bdc9",
+        "schema": "grouped-comparison/v1",
+        "service_sha256": "1ca0eb557a249f8d04b7f129bed909de6b46cb271ed62740983ea3ddafd1f8c3",
+        "trust": "separate_process_same_account",
+        "unit": "ratio"
+      },
+      "mechanism_proven": false
+    },
+    {
+      "hypothesis_id": "H-91fe6e68d4106388",
+      "hypothesis_version": 1,
+      "old_judgment": "supported",
+      "new_judgment": "inconclusive",
+      "scope": "confirmation",
+      "next_action": "add_control",
+      "evidence": {
+        "actual_rule_budgets_match": true,
+        "baseline_group_mae": 7.665136805194259,
+        "candidate_group_mae": 6.9243323371668914,
+        "ci95": [
+          -0.07875428856482976,
+          0.2436434160304608
+        ],
+        "hypothesis_predictions": {
+          "H-91fe6e68d4106388": {
+            "operator": "gt",
+            "threshold": 0.05
+          },
+          "H-figs-single-sufficient": {
+            "operator": "between",
+            "threshold": [
+              -0.05,
+              0.05
+            ]
+          }
+        },
+        "mean_effect": 0.09664595516747511,
+        "mechanism_proven": false,
+        "metric": "relative_mae_improvement",
+        "model_audit_sha256": [
+          "84ab2a8739823845c54c54bb987390a3bacd01289bb360411eee3e6b4fa8af58",
+          "6d3efb783fc6ff4ed2529647a57ce060a367f7cec6635cafb0a99bac029ff648"
+        ],
+        "n_groups": 86,
+        "prediction": {
+          "operator": "gt",
+          "threshold": 0.05
+        },
+        "quality": "valid",
+        "request_sha256": "e2b4a66b22f50af268f7e5cc8045ce569f0bb7a43f846d09244d6ad4df9f1dba",
+        "schema": "grouped-comparison/v1",
+        "service_sha256": "1ca0eb557a249f8d04b7f129bed909de6b46cb271ed62740983ea3ddafd1f8c3",
+        "trust": "separate_process_same_account",
+        "unit": "ratio"
+      },
+      "mechanism_proven": false
+    },
+    {
+      "hypothesis_id": "H-figs-single-sufficient",
+      "hypothesis_version": 1,
+      "old_judgment": "refuted",
+      "new_judgment": "inconclusive",
+      "scope": "confirmation",
+      "next_action": "add_control",
+      "evidence": {
+        "actual_rule_budgets_match": true,
+        "baseline_group_mae": 7.665136805194259,
+        "candidate_group_mae": 6.9243323371668914,
+        "ci95": [
+          -0.07875428856482976,
+          0.2436434160304608
+        ],
+        "hypothesis_predictions": {
+          "H-91fe6e68d4106388": {
+            "operator": "gt",
+            "threshold": 0.05
+          },
+          "H-figs-single-sufficient": {
+            "operator": "between",
+            "threshold": [
+              -0.05,
+              0.05
+            ]
+          }
+        },
+        "mean_effect": 0.09664595516747511,
+        "mechanism_proven": false,
+        "metric": "relative_mae_improvement",
+        "model_audit_sha256": [
+          "84ab2a8739823845c54c54bb987390a3bacd01289bb360411eee3e6b4fa8af58",
+          "6d3efb783fc6ff4ed2529647a57ce060a367f7cec6635cafb0a99bac029ff648"
+        ],
+        "n_groups": 86,
+        "prediction": {
+          "operator": "gt",
+          "threshold": 0.05
+        },
+        "quality": "valid",
+        "request_sha256": "e2b4a66b22f50af268f7e5cc8045ce569f0bb7a43f846d09244d6ad4df9f1dba",
+        "schema": "grouped-comparison/v1",
+        "service_sha256": "1ca0eb557a249f8d04b7f129bed909de6b46cb271ed62740983ea3ddafd1f8c3",
+        "trust": "separate_process_same_account",
+        "unit": "ratio"
+      },
+      "mechanism_proven": false
+    }
+  ],
+  "model_requests": {
+    "ceiling": 30,
+    "attempts_including_failed": 6,
+    "successful_with_known_usage": 3,
+    "historical_unknown_attempts": 3,
+    "historical_unknown_reservations_retained": true
+  }
+}

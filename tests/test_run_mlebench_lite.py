@@ -5,6 +5,9 @@ import unittest
 from pathlib import Path
 
 from popper.core import ProtocolError, score
+from popper.capabilities import extra_available
+if not extra_available('ml'):
+    raise unittest.SkipTest('ml extra is required for MLE-bench Lite runner tests')
 from popper.research.models import EvidenceDrivenPolicy
 
 from evaluation.mlebench_lite import materialize

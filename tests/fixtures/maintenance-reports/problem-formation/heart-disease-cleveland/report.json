@@ -1,0 +1,58 @@
+{
+  "approval": {
+    "experiment_sha256": "bf9e9b5f69c0646124c34b662cfa647a0c1396cbea1e776192d66ee39ef1d052",
+    "holdout_sealed_seq": 2,
+    "problem_approved_seq": 8,
+    "problem_sha256": "7c3521ffc7e83549cc3a4f1168d0cf7f5399e44b27b92a65718efbe4ecc22a25",
+    "proposal_id": "7c3521ffc7e83549"
+  },
+  "case": "heart-disease-cleveland",
+  "confirmation": {
+    "claim_status": "supports_threshold",
+    "confirmation_calls": 1,
+    "confirmation_consumed_once": true,
+    "evaluator_id": "multiclass-macro-f1-v1",
+    "observation_seq": 12,
+    "trust": "controller_scored_trusted_local"
+  },
+  "holdout_row_set_sha256": "492af5191da997bcb079ee3918652b2003b6c6aedbe4df573960b5023bab854e",
+  "input_identity_sha256": "51e916516cef62d1f42d99161f8c756c9a905f0981922f79a7bcfe4c5d67955d",
+  "milestone": "M-B",
+  "model_called": false,
+  "problem": {
+    "hypothesis": {
+      "explanations": [
+        {
+          "id": "clinical-linear",
+          "statement": "临床指标的线性组合优于常数基线",
+          "prediction": "线性候选的开发集宏平均 F1 高于常数基线 0.05"
+        },
+        {
+          "id": "class-balance",
+          "statement": "改善只来自类别不平衡，而不是临床指标的组合",
+          "prediction": "线性候选的开发集宏平均 F1 不高于常数基线 0.05"
+        }
+      ]
+    },
+    "metric": "multiclass-macro-f1-v1",
+    "min_improvement": {
+      "value": 0.05,
+      "unit": "macro_f1",
+      "reason": "确认前写死的描述性阈值，不根据确认集调整"
+    },
+    "question": "在预注册切分上，线性候选相对常数基线的宏平均 F1 是否达到 0.05",
+    "repeat_unit": "train_seed",
+    "split_declaration_sha256": "a944fff91c1cd4e0c1c21e7a25e9fa090b9b3dcc18c324bc6fd000d1054f92d5",
+    "stop_rule": {
+      "kind": "budget",
+      "max_candidates": 1
+    },
+    "target_column": "num",
+    "task_shape": "aligned_prediction"
+  },
+  "protocol_sha256": "bf9e9b5f69c0646124c34b662cfa647a0c1396cbea1e776192d66ee39ef1d052",
+  "schema": "popper.problem-formation-report/v1",
+  "source_raw_sha256": "868cd646a53ffbc55611192bae7496911a163937c185710f6b8aa11549b88df1",
+  "status": "passed",
+  "proposer": "fixture"
+}

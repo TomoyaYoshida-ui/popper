@@ -268,7 +268,7 @@ class RequestLifecycle:
             class HTTPS(urllib.request.HTTPSHandler):
                 def https_open(self, req):
                     result = self.do_open(connection_factory(http.client.HTTPSConnection), req,
-                                          context=self._context, check_hostname=self._check_hostname)
+                                          context=self._context)
                     lifecycle.transport_phase = 'response_headers'
                     return result
             class NoRedirect(urllib.request.HTTPRedirectHandler):
