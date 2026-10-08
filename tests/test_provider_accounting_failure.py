@@ -46,7 +46,7 @@ class FailureHandler(BaseHTTPRequestHandler):
         if self.server.mode == 'framing_overhead':
             delta = {'content': 'synthetic reply with bounded payload'}
         frames = [{'id': 'synthetic-provider-response', 'choices': [{'delta': delta}]},
-                  {'choices': [{'delta': {}, 'finish_reason': 'length'}]}]
+                  {'choices': [{'delta': {}, 'finish_reason': 'stop' if self.server.mode == 'framing_overhead' else 'length'}]}]
         if self.server.mode != 'missing_usage':
             frames.append({'choices': [], 'usage': {'prompt_tokens': 80,
                 'completion_tokens': 20, 'total_tokens': 100}})

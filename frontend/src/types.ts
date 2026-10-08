@@ -202,6 +202,7 @@ export type ChatState = {
     status: 'running' | 'completed' | 'failed' | 'interrupted'
     assistant_message: string | null
     assistant_draft: string
+    request_progress?: { state: 'waiting' | 'receiving' | 'retrying' | 'failed' | 'completed'; elapsed_seconds: number } | null
     error: { type: string; message: string } | null
     cancel_requested: number
     created: string

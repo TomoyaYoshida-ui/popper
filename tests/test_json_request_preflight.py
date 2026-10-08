@@ -1,4 +1,5 @@
 import json
+import io
 import unittest
 from unittest.mock import patch
 
@@ -9,11 +10,14 @@ class JsonRequestPreflightTests(unittest.TestCase):
     def test_json_format_requires_explicit_json_instruction(self):
         captured = []
         class Response:
+            def __init__(self):
+                frames = [{'choices': [{'delta': {'content': '{"ok":true}'}, 'finish_reason': 'stop'}]},
+                          {'choices': [], 'usage': {'total_tokens': 5}}]
+                self.stream = io.BytesIO((''.join('data: '+json.dumps(f)+'\n\n' for f in frames)+'data: [DONE]\n\n').encode())
             def __enter__(self): return self
             def __exit__(self, *args): pass
-            def read(self, limit):
-                return json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": '{"ok":true}'}}],
-                                   "usage": {"total_tokens": 5}}).encode()
+            def readline(self, limit): return self.stream.readline(limit)
+            def close(self): self.stream.close()
         class Opener:
             def open(self, request, timeout):
                 captured.append(json.loads(request.data))
@@ -22,3 +26,4 @@ class JsonRequestPreflightTests(unittest.TestCase):
             call = make_json_client('https://provider.example/v1', 'test-model', api_key='example-key')
             self.assertTrue(call('Propose a structured experiment.', {})['ok'])
         self.assertIn('json', captured[0]['messages'][0]['content'].lower())
+        self.assertTrue(captured[0]['stream'])

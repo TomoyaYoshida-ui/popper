@@ -6,6 +6,8 @@ import re
 import uuid
 import shutil
 import subprocess
+import threading
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -22,7 +24,8 @@ AXES = ("problem_framing", "core_mechanism", "key_insight", "application_domain"
 TRIAGE_CAP = 30
 
 
-def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=None, api_key=None):
+def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=None, api_key=None,
+                     request_limits=None):
     parsed = urlparse(base_url)
     if parsed.scheme != "https" and not (parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}):
         raise ProtocolError("模型地址必须是 HTTPS，或本机 HTTP")
@@ -39,13 +42,23 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
 
     spent = {"tokens": 0}
 
-    def call(system, payload):
+    def call(system, payload, *, cancel_event=None, on_progress=None):
+        from .request_lifecycle import (RequestLifecycle, RequestFailure, failure_category,
+                                        cancellable_wait)
+        from .structured_stream import collect_json_stream
+        cancel_event = cancel_event or threading.Event()
+        if cancel_event.is_set():
+            raise RequestFailure('cancelled', sent=False)
+        logical_started = time.monotonic()
         if "json" not in system.casefold():
             system += "\nReturn exactly one JSON object."
         call_id = uuid.uuid4().hex
         repair_json = False
         for attempt in range(2):
+            lifecycle = RequestLifecycle(cancel_event, request_limits, on_progress)
+            lifecycle.started = logical_started
             body = {"model": model, "temperature": 0, "max_tokens": 16000 if repair_json else 8000,
+                    "stream": True, "stream_options": {"include_usage": True},
                     "response_format": {"type": "json_object"},
                     "messages": [{"role": "system", "content": system},
                                  {"role": "user", "content": canonical(payload)}]}
@@ -55,6 +68,8 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                 # 这个端点默认深度思考，非流式连接大约 76 秒会被掐断。
                 body["enable_thinking"] = limits["enable_thinking"]
                 body["thinking_budget"] = limits["thinking_budget"]
+                body.pop('max_tokens')
+                body['max_completion_tokens'] = limits['max_completion_tokens']
             if repair_json:
                 body["messages"].append({"role": "user", "content":
                     "The previous response was truncated or invalid JSON. Return one complete JSON "
@@ -67,17 +82,11 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                                              headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
             diagnostic = {"call_id": call_id, "attempt": attempt + 1, "model": model,
                           "request_sha256": hashlib.sha256(canonical(body).encode()).hexdigest(),
-                          "max_tokens": body["max_tokens"]}
+                          "max_tokens": body.get('max_completion_tokens', body.get('max_tokens'))}
             retryable = False
             try:
-                with opener.open(request, timeout=120) as response:
-                    raw = response.read(1_000_001)
-                if len(raw) > 1_000_000:
-                    raise ProtocolError("模型响应超过大小上限")
-                text = raw.decode("utf-8")
-                diagnostic["response"] = re.sub(r"sk-[A-Za-z0-9_-]+", "[REDACTED]", text.replace(key, "[REDACTED]"))
+                envelope = collect_json_stream(lifecycle, opener, request, diagnostic)
                 retryable = True
-                envelope = json.loads(text)
                 choice = envelope["choices"][0]
                 diagnostic["finish_reason"] = choice.get("finish_reason")
                 usage = envelope.get("usage")
@@ -96,9 +105,11 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                 diagnostic["status"] = "success"
                 return result
             except Exception as error:
+                usage = lifecycle.usage or usage
                 repair_json = retryable
                 diagnostic["status"] = "failed"
                 diagnostic["error_type"] = type(error).__name__
+                diagnostic['failure_category'] = failure_category(error)
                 diagnostic["http_status"] = getattr(error, "code", None)
                 if isinstance(error, urllib.error.HTTPError):
                     retryable = error.code in {429, 502, 503, 504}
@@ -111,15 +122,30 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                 elif isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError)):
                     retryable = True
                     diagnostic["network_reason_type"] = type(getattr(error, "reason", error)).__name__
+                elif isinstance(error, RequestFailure):
+                    retryable = error.category in {'connection_failure', 'connect_timeout',
+                        'read_timeout', 'temporary_service', 'output_truncated'}
+                    repair_json = error.category == 'output_truncated'
+                if isinstance(error, ValueError):
+                    diagnostic['failure_category'] = 'invalid_json'
+                if cancel_event.is_set() or time.monotonic()-logical_started >= lifecycle.limits.total:
+                    retryable = False
                 if attempt == 1 or not retryable:
                     raise ProtocolError(f"Scoop 模型调用失败: {type(error).__name__}；"
                                         f"诊断编号 {call_id}，尝试 {attempt + 1} 次") from None
+                lifecycle.progress('retrying')
+                cancellable_wait(min(1, max(0, lifecycle.limits.total-(time.monotonic()-logical_started))),
+                                 cancel_event.is_set)
             finally:
+                diagnostic['usage'] = usage
+                diagnostic['usage_status'] = 'known' if isinstance(usage, dict) and type(usage.get('total_tokens')) is int else ('unknown' if lifecycle.sent else 'not_sent')
+                diagnostic['usage_reason'] = diagnostic.get('failure_category', 'missing_provider_usage') if diagnostic['usage_status'] != 'known' else None
                 budget_error = None
                 if reservation is not None and not settled:
                     settled = True
                     try:
-                        request_budget.settle(reservation, usage)
+                        request_budget.settle(reservation, usage,
+                                              reason=diagnostic.get('failure_category'), sent=lifecycle.sent)
                     except ProtocolError as caught:
                         budget_error = caught
                 if diagnostics_dir is not None:

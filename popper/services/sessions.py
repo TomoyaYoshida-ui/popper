@@ -458,7 +458,9 @@ class SessionsService(HostService):
                         raise ProtocolError('模型输出或思考限制已变化，拒绝发送旧输入快照；请重新核对')
                 else:
                     history = store.model_messages(session_id, turn_id)
-                reply = self._invoke_budgeted_harness(frozen, turn_id, system_prompt, history, cancel_event, lambda delta: store.append_turn_delta(turn_id, delta))
+                reply = self._invoke_budgeted_harness(frozen, turn_id, system_prompt, history, cancel_event,
+                    lambda delta: store.append_turn_delta(turn_id, delta),
+                    on_progress=lambda progress: store.update_request_progress(turn_id, progress))
                 usage = getattr(reply, 'usage', {})
                 if isinstance(reply, str):
                     return (store.complete_turn(turn_id, reply), getattr(reply, 'usage', {}))
@@ -520,7 +522,7 @@ class SessionsService(HostService):
         finally:
             store.close()
 
-    def _invoke_budgeted_harness(self, frozen, turn_id, system_prompt, history, cancel_event, on_delta):
+    def _invoke_budgeted_harness(self, frozen, turn_id, system_prompt, history, cancel_event, on_delta, on_progress=None):
         """One dispatch boundary for send, tool continuation, steer and retry.
 
         The durable reservation precedes provider I/O. A crash/transport error
@@ -543,7 +545,8 @@ class SessionsService(HostService):
                     raise ProtocolError('评测预留与执行快照不一致，拒绝发送')
             capabilities = harness.descriptor.capabilities
             if 'cooperative_cancel' in capabilities:
-                reply = harness.invoke(system_prompt, history, cancel_event=cancel_event, on_delta=on_delta)
+                extra = {'on_progress': on_progress} if getattr(harness, 'supports_progress', False) else {}
+                reply = harness.invoke(system_prompt, history, cancel_event=cancel_event, on_delta=on_delta, **extra)
             else:
                 reply = harness.invoke(system_prompt, history)
             if ledger is not None:

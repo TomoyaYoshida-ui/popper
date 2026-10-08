@@ -57,6 +57,7 @@ class CallableConversationHarness:
         if not callable(target):
             raise ProtocolError("conversation harness 必须可调用")
         self._target = target
+        self.supports_progress = getattr(target, 'supports_progress', False)
         if hasattr(target, "context_tools"):
             self.context_tools = target.context_tools
         if hasattr(target, "context_request_limits"):
@@ -70,10 +71,11 @@ class CallableConversationHarness:
             capabilities=frozenset(capabilities),
             model=getattr(target, "model", None))
 
-    def invoke(self, system, messages, *, cancel_event=None, on_delta=None):
+    def invoke(self, system, messages, *, cancel_event=None, on_delta=None, on_progress=None):
         if "cooperative_cancel" in self.descriptor.capabilities:
+            extra = {'on_progress': on_progress} if self.supports_progress else {}
             return self._target(
-                system, messages, cancel_event=cancel_event, on_delta=on_delta)
+                system, messages, cancel_event=cancel_event, on_delta=on_delta, **extra)
         return self._target(system, messages)
 
 

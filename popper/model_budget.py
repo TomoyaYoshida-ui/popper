@@ -20,6 +20,10 @@ class ModelRequestBudget:
         self.db.execute("CREATE TABLE IF NOT EXISTS limits(scope TEXT PRIMARY KEY, tokens INTEGER, calls INTEGER)")
         self.db.execute("CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, scope TEXT, reserved INTEGER, "
                         "used INTEGER, status TEXT, request_hash TEXT, created TEXT DEFAULT CURRENT_TIMESTAMP)")
+        columns = {r[1] for r in self.db.execute('PRAGMA table_info(requests)')}
+        for name in ('usage_status', 'usage_reason'):
+            if name not in columns:
+                self.db.execute(f'ALTER TABLE requests ADD COLUMN {name} TEXT')
         with self.db:
             for name, tokens, calls in (("__global__", global_tokens, global_calls), (scope, scope_tokens, scope_calls)):
                 if type(tokens) is not int or tokens < 1 or type(calls) is not int or calls < 1:
@@ -40,7 +44,7 @@ class ModelRequestBudget:
         from .core import digest
         # UTF-8 byte length is a conservative token bound; reserve framing and hidden reasoning separately.
         input_bound = len(canonical(body.get("messages", [])).encode("utf-8")) + 4096
-        output_bound = int(body.get("max_tokens", 8000)) + int(body.get("thinking_budget", 0))
+        output_bound = int(body.get('max_completion_tokens', body.get("max_tokens", 8000))) + int(body.get("thinking_budget", 0))
         amount = input_bound + output_bound
         with self._lock, self.db:
             self.db.execute("BEGIN IMMEDIATE")
@@ -57,7 +61,7 @@ class ModelRequestBudget:
                             (request_id, self.scope, amount, digest(body)))
             return request_id
 
-    def settle(self, request_id, usage):
+    def settle(self, request_id, usage, *, reason=None, sent=True):
         total = usage.get("total_tokens") if isinstance(usage, dict) else None
         if total is None and isinstance(usage, dict):
             a, b = usage.get("prompt_tokens"), usage.get("completion_tokens")
@@ -69,14 +73,21 @@ class ModelRequestBudget:
             if row is None or row[0] != self.scope:
                 raise ProtocolError("模型调用预留不存在")
             if row[3] != "reserved":
-                if row[3] == "settled" and row[2] == total:
+                if (row[3] == "settled" and row[2] == total) or (row[3] == 'unknown' and total is None):
                     return
                 raise ProtocolError("模型调用预留已结算或用量未知")
+            if not sent:
+                self.db.execute("UPDATE requests SET used=0,status='not_sent',usage_status='not_sent',usage_reason=? WHERE id=?",
+                                (reason or 'cancelled_before_dispatch', request_id))
+                return
             if type(total) is not int or total < 0:
-                self.db.execute("UPDATE requests SET status='unknown' WHERE id=?", (request_id,))
+                self.db.execute("UPDATE requests SET status='unknown',usage_status='unknown',usage_reason=? WHERE id=?",
+                                (reason or 'missing_provider_usage', request_id))
             else:
                 status = "settled" if total <= row[1] else "unknown"
                 self.db.execute("UPDATE requests SET used=?,status=? WHERE id=?", (total, status, request_id))
+                self.db.execute("UPDATE requests SET usage_status='known',usage_reason=? WHERE id=?",
+                                ('usage_over_reservation' if status == 'unknown' else None, request_id))
         if type(total) is not int or total < 0:
             raise ProtocolError("提供商缺少有效用量，保留预留并停止该运行")
         if total > row[1]:
@@ -84,9 +95,9 @@ class ModelRequestBudget:
 
     def snapshot(self):
         with self._lock:
-            rows = self.db.execute("SELECT id,scope,reserved,used,status,request_hash,created FROM requests ORDER BY rowid").fetchall()
+            rows = self.db.execute("SELECT id,scope,reserved,used,status,request_hash,created,usage_status,usage_reason FROM requests ORDER BY rowid").fetchall()
             return {"global": self._balance("__global__"), "scope": self._balance(self.scope),
-                    "attempts": [dict(zip(("id", "scope", "reserved_tokens", "used_tokens", "status", "request_sha256", "created"), r)) for r in rows]}
+                    "attempts": [dict(zip(("id", "scope", "reserved_tokens", "used_tokens", "status", "request_sha256", "created", 'usage_status', 'usage_reason'), r)) for r in rows]}
 
     @property
     def tokens_used(self):

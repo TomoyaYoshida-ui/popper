@@ -40,6 +40,12 @@ export function AgentChatPane({ chat, chatPending, requestError, contextKey, pro
   const composing = useRef(false)
   const scrollKey = `popper-scroll:${contextKey}`
   const running = chat?.turns.find((turn) => turn.status === 'running')
+  const [requestClock, setRequestClock] = useState(Date.now())
+  useEffect(() => {
+    if (!running) return
+    const timer = window.setInterval(() => setRequestClock(Date.now()), 5000)
+    return () => window.clearInterval(timer)
+  }, [running?.turn_id])
   const latest = chat?.turns[chat.turns.length - 1]
   const latestCalls = chat?.tool_calls.filter((call) => call.turn_id === latest?.turn_id) ?? []
   const continuation = chat?.continuation
@@ -140,7 +146,10 @@ export function AgentChatPane({ chat, chatPending, requestError, contextKey, pro
           <div className="chat-meta"><span className="agent-dot" />{chat.model ?? 'Agent'}</div>
           <div className="chat-text"><Markdown text={turn.assistant_message ?? turn.assistant_draft} /></div>
         </div>}
-        {turn.status === 'running' && !turn.assistant_draft && <div className="agent-working"><span className="pulse-dot" />Agent 正在工作…</div>}
+        {turn.status === 'running' && <div className="agent-working" role="status"><span className="pulse-dot" />
+          {turn.request_progress?.state === 'retrying' ? '正在重试' : turn.assistant_draft ? '正在接收回复' : '等待模型响应'}
+          {' · '}{Math.max(0, Math.floor((requestClock - Date.parse(turn.created)) / 1000))} 秒
+        </div>}
         {chat.tool_calls.filter((call) => call.turn_id === turn.turn_id).map((call) =>
           <ToolCallCard key={call.call_id} call={call} projectName={projectName} chatPending={chatPending} onToolAction={onToolAction} onOpenResource={onOpenResource} />)}
         {(turn.error || ['failed', 'interrupted'].includes(turn.status)) && <div className="turn-error" role="status">

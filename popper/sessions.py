@@ -335,6 +335,8 @@ class AgentSessionStore:
             if "assistant_draft" not in columns:
                 self._conn.execute(
                     "ALTER TABLE turns ADD COLUMN assistant_draft TEXT NOT NULL DEFAULT ''")
+            if 'request_progress_json' not in columns:
+                self._conn.execute('ALTER TABLE turns ADD COLUMN request_progress_json TEXT')
             if "parent_turn_id" not in columns:
                 self._conn.execute("ALTER TABLE turns ADD COLUMN parent_turn_id TEXT")
             session_columns = {row[1] for row in self._conn.execute(
@@ -1260,6 +1262,8 @@ class AgentSessionStore:
         result = dict(row)
         encoded_error = result.pop("error_json")
         result["error"] = json.loads(encoded_error) if encoded_error else None
+        progress = result.pop('request_progress_json', None)
+        result['request_progress'] = json.loads(progress) if progress else None
         return result
 
     def _finish(self, turn_id, status, assistant_message=None, error=None):
@@ -1325,6 +1329,14 @@ class AgentSessionStore:
         except Exception:
             self._conn.rollback()
             raise
+
+    def update_request_progress(self, turn_id, progress):
+        """Ephemeral display projection, never scientific evidence or model text."""
+        if progress.get('state') not in {'waiting', 'receiving', 'retrying', 'failed', 'completed'}:
+            raise ProtocolError('请求进度状态不合法')
+        with self._conn.transaction(write=True):
+            self._conn.execute("UPDATE turns SET request_progress_json=?,updated=? WHERE turn_id=? AND status='running'",
+                               (json.dumps(progress), _now(), turn_id))
 
     def complete_turn_with_tool_calls(self, turn_id, assistant_message, proposals):
         """Persist valid proposals and unexecuted validation failures atomically."""

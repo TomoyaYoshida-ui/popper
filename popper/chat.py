@@ -521,7 +521,8 @@ def request_output_limits(base_url, model):
     return {"max_tokens": MODEL_MAX_TOKENS}
 
 
-def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None):
+def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
+                     request_limits=None):
     """构造 OpenAI 兼容 /chat/completions 文本聊天客户端（stdlib-only）。
 
     返回 call(system, messages) -> str；messages 为 [{"role", "content"}]。
@@ -552,6 +553,7 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None):
 
     class StreamingChatClient:
         supports_cancellation = True
+        supports_progress = True
         context_tools = declared_tools
         context_request_limits = output_limits
 
@@ -563,16 +565,19 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None):
                                         "cooperative_cancel", "native_tools",
                                         "provider_usage"}), model=model)
 
-        def __call__(self, system, messages, *, cancel_event=None, on_delta=None):
-            return self.invoke(system, messages, cancel_event=cancel_event, on_delta=on_delta)
+        def __call__(self, system, messages, *, cancel_event=None, on_delta=None, on_progress=None):
+            return self.invoke(system, messages, cancel_event=cancel_event, on_delta=on_delta,
+                               on_progress=on_progress)
 
-        def invoke(self, system, messages, *, cancel_event=None, on_delta=None):
+        def invoke(self, system, messages, *, cancel_event=None, on_delta=None, on_progress=None):
             cancel_event = cancel_event or threading.Event()
             if cancel_event.is_set():
                 raise ChatCancelled("模型调用已取消")
-            return _call_stream(system, messages, cancel_event, on_delta)
+            return _call_stream(system, messages, cancel_event, on_delta, on_progress)
 
-    def _call_stream(system, messages, cancel_event, on_delta):
+    def _call_stream(system, messages, cancel_event, on_delta, on_progress):
+        from .request_lifecycle import RequestLifecycle, RequestFailure
+        lifecycle = RequestLifecycle(cancel_event, request_limits, on_progress)
         call_id = uuid.uuid4().hex
         body = {"model": model, "temperature": 0.7, **output_limits,
                 "messages": [{"role": "system", "content": system}, *messages],
@@ -583,7 +588,7 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None):
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
             headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
         try:
-            with opener.open(request, timeout=120) as response:
+            with lifecycle.open(opener, request) as response:
                 done = threading.Event()
 
                 def close_on_cancel():
@@ -630,6 +635,7 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None):
                                 "prompt_tokens", "completion_tokens", "total_tokens")
                                      if type(provider_usage.get(name)) is int
                                      and provider_usage[name] >= 0}
+                            lifecycle.usage = usage
                         choices = envelope.get("choices") or []
                         if not choices:
                             continue
@@ -645,6 +651,7 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None):
                             if payload_bytes > MODEL_PAYLOAD_LIMIT:
                                 raise ProtocolError("模型有效回复超过大小上限")
                             content.append(piece)
+                            lifecycle.progress('receiving')
                             if on_delta is not None:
                                 on_delta(piece)
                         for item in delta.get("tool_calls") or []:
@@ -670,17 +677,21 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None):
                 if cancel_event.is_set():
                     raise ChatCancelled("模型调用已取消", usage, stream_completed=stream_completed)
                 if not stream_completed:
-                    raise ProtocolError("模型流提前断开；已保留部分回复，请核对用量后手动重试")
+                    raise RequestFailure('stream_interrupted', usage=usage)
             try:
+                if finish_reason == 'length':
+                    raise ProtocolError("输出达到限制；已保留用量，禁止执行截断响应中的工具")
                 reply = _decode_model_message("".join(content),
                                              [tools[index] for index in sorted(tools)], usage)
-                if (isinstance(reply, dict) and any(call.get("validation_error")
-                        for call in reply["tool_calls"]) and finish_reason == "length"):
-                    raise ProtocolError("输出达到限制且工具参数不完整；已结算用量，禁止自动纠错")
                 return reply
             except ProtocolError as error:
                 raise ChatReplyError(str(error), usage, response_id=response_id,
                                      finish_reason=finish_reason) from None
+        except RequestFailure as error:
+            if error.category == 'cancelled':
+                raise ChatCancelled("模型调用已取消", error.usage,
+                                    stream_completed=False) from None
+            raise
         except ChatCancelled:
             raise
         except ProtocolError:

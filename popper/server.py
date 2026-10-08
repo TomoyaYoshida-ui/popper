@@ -1192,8 +1192,8 @@ class Workstation(ThreadingHTTPServer):
     def _run_session_turn(self, root, session_id, turn_id, trace_id, system_prompt, cancel_event=None):
         return self._service('sessions').dispatch('_run_session_turn', root, session_id, turn_id, trace_id, system_prompt, cancel_event)
 
-    def _invoke_budgeted_harness(self, frozen, turn_id, system_prompt, history, cancel_event, on_delta):
-        return self._service('sessions').dispatch('_invoke_budgeted_harness', frozen, turn_id, system_prompt, history, cancel_event, on_delta)
+    def _invoke_budgeted_harness(self, frozen, turn_id, system_prompt, history, cancel_event, on_delta, on_progress=None):
+        return self._service('sessions').dispatch('_invoke_budgeted_harness', frozen, turn_id, system_prompt, history, cancel_event, on_delta, on_progress)
 
     def _validate_turn_input(self, text):
         return self._service('sessions').dispatch('_validate_turn_input', text)
