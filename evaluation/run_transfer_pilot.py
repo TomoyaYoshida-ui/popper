@@ -234,6 +234,8 @@ def run_cell(out,p,cell,*,offline=False):
                 'selection_metric':'equal_analysis_unit_mean_mae','judgment_ids':[j['judgment_id'] for j in executed['judgments']]})
             write_json(checkpoint,result)
             write_json(step_path,{'status':'completed','decision':decision})
+        if result['model_called'] and (not result['decisions'] or result['decisions'][-1]['action']!='finish'):
+            raise ProtocolError('模型决策预算不足，未提交最终判断；单元保持未完成')
         if result['executions']:
             best=min(result['executions'],key=lambda x:(x['dev_value'],x['hypothesis_id']))
             result['finalist']={**best,'hypothesis_version':c.store.get('hypothesis',best['hypothesis_id'])['version'],

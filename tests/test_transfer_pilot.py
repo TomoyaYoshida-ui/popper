@@ -71,6 +71,29 @@ class TransferTests(unittest.TestCase):
             self.assertTrue(all(j['evidence']['n_units']==400 for j in receipt['judgments']))
             self.assertTrue(receipt['integrity']['ok'])
 
+    def test_logical_decision_limit_does_not_promote_partial_model_unit_to_completed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); taskroot=root/'tasks/T03'; info=prepare('T03',taskroot,root/'cache')
+            files={p.name:file_hash(p) for p in taskroot.iterdir() if p.is_file() and p.name!='oracle-private.json'}
+            protocol={'protocol_sha256':'fixture','tasks':[{**info,'files':files}]}
+            cell={'id':'T03-model-limit','task':'T03','strategy':'generic_iteration','repeat':0,'candidate_order':list(range(8))}
+            calls=[]
+            def decision(system,context,**kwargs):
+                index=len(calls); calls.append(index)
+                action='experiment' if index<2 else 'revise'
+                hid=context['candidates'][2+index if index<2 else 0]['hypothesis_id']
+                result={'action':action,'hypothesis_id':hid,'rationale':'Bounded local model-limit fixture',
+                    'evidence_refs':context['raw_evidence'][0]['evidence_refs'] if context['raw_evidence'] else [],
+                    'agent_assessment':'inconclusive'}
+                if action=='revise': result['revision']={'mechanism':'Fixed predictive intervention','applicability':'Independent units','predictions':['Relative MAE improvement exceeds 5%.']}
+                return result
+            with patch('evaluation.run_transfer_pilot.make_json_client',return_value=decision):
+                result=run_cell(root,protocol,cell)
+            self.assertEqual(9,len(calls))
+            self.assertEqual('incomplete',result['status'])
+            self.assertEqual('request_budget_exhausted',result['failure_category'])
+            self.assertIsNone(result['finalist'])
+
     def test_sufficiency_gate_and_distinct_scientific_verdicts(self):
         for n,improvement,expected in ((30,.15,'supported'),(30,-.15,'refuted'),(16,.15,'inconclusive')):
             result=paired_statistics([1.]*n,[1.-improvement]*n,20261009)
