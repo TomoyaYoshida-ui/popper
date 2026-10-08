@@ -205,10 +205,14 @@ class ResearchController:
                 for alternate_id in protocol['hypothesis_predictions']:
                     if alternate_id in candidate_ids:
                         continue
-                    shadow = {**manifest, 'configs': {**manifest['configs'], alternate_id: spec['candidates'][0]}}
+                    alternate_config = spec['candidates'][0]
+                    if protocol.get('schema')=='paired-unit-ci/v1':
+                        primary = next(h for h,c in protocol['hypothesis_contrasts'].items() if c['alternative_id']==alternate_id)
+                        alternate_config = manifest['configs'][primary]
+                    shadow = {**manifest, 'configs': {**manifest['configs'], alternate_id: alternate_config}}
                     _create_hypothesis_and_design(store, shadow, alternate_id, {
-                        'mechanism': 'Single-tree structure suffices at the fixed rule budget',
-                        'applicability': 'Frozen Concrete recipe groups',
+                        'mechanism': 'Performance lies within the frozen practical-equivalence interval',
+                        'applicability': 'Frozen analysis units and registered scope',
                         'predictions': ['Relative grouped MAE improvement lies between -0.05 and 0.05'],
                         'falsification': ['Confidence interval falls outside the registered interval'],
                         'alternatives': ['Additive multi-tree structure improves held-out prediction']})
@@ -371,9 +375,14 @@ class ResearchController:
         ids = [observation['hypothesis_id']]
         state = self._verify_inputs()
         if 'judgment-protocol.json' in state['spec'].get('provenance_files', []):
-            from .grouped_comparison import compare_observations
+            protocol=read_json(self.project/'judgment-protocol.json')
+            if protocol.get('schema')=='paired-unit-ci/v1':
+                from .paired_comparison import compare_observations
+                ids=[observation['hypothesis_id'],protocol['hypothesis_contrasts'][observation['hypothesis_id']]['alternative_id']]
+            else:
+                from .grouped_comparison import compare_observations
+                ids=list(protocol['hypothesis_predictions'])
             descriptor = compare_observations(self.project, self.run_dir, baseline, observation)
-            ids = list(read_json(self.project/'judgment-protocol.json')['hypothesis_predictions'])
         return [self.store.record_judgment(hid, self.store.get('hypothesis',hid)['version'],
                     (baseline['observation_id'],observation['observation_id']), comparison_artifact=descriptor)
                 for hid in ids]
@@ -721,6 +730,42 @@ class ResearchController:
                 raise
         finally:
             ledger.close()
+
+    def execute_registered_candidate(self, hypothesis_id, *, expected_version, trusted_local=False,
+                                     sandboxed=False, should_cancel=None):
+        """One frozen candidate execution, independent of strategy/point-estimate decisions."""
+        if trusted_local==sandboxed:
+            raise ProtocolError('必须明确选择 trusted_local 或 sandbox')
+        self._verify_inputs(); self._require_scoring_binding()
+        study=self.store.get('study',self.manifest['study_id'])
+        if study['state_version']!=expected_version:
+            raise ProtocolError('候选执行基于陈旧状态版本')
+        if study['status']!=StudyStatus.ACTIVE.value or self.exp.state()['phase']!='searching' or self._external_is_frozen():
+            raise ProtocolError('开发执行通道已关闭')
+        if hypothesis_id not in self.manifest['candidate_hypothesis_ids']:
+            raise ProtocolError('未注册的候选假设')
+        if sandboxed: self._require_sandbox_backend()
+        control=self.manifest['control_hypothesis_id']
+        baseline=self._execute_development(control,ActionProposal(RUN_EXPERIMENT,'冻结基线',control),
+                                           trusted_local,sandboxed,should_cancel=should_cancel)
+        observation=self._execute_development(hypothesis_id,ActionProposal(RUN_EXPERIMENT,'冻结候选执行',hypothesis_id),
+                                              trusted_local,sandboxed,should_cancel=should_cancel)
+        protocol_path=self.project/'judgment-protocol.json'
+        if protocol_path.exists():
+            protocol=read_json(protocol_path)
+            if protocol.get('schema')=='paired-unit-ci/v1' and protocol['primary_dev_prefix']:
+                source_baseline=self._observation_for_design(self._current_design_id(control),'dev:slice:s1')
+                source_observation=self._observation_for_design(self._current_design_id(hypothesis_id),'dev:slice:s1')
+                if source_baseline is None or source_observation is None:
+                    raise ProtocolError('缺少注册源环境观察')
+                self._update_judgments(source_baseline,source_observation)
+                baseline=self._observation_for_design(self._current_design_id(control),'dev:slice:s2')
+                observation=self._observation_for_design(self._current_design_id(hypothesis_id),'dev:slice:s2')
+        if baseline is None or observation is None:
+            raise ProtocolError('缺少主分析范围的独立观察')
+        judgments=self._update_judgments(baseline,observation)
+        return {'observation':observation,'baseline':baseline,'judgments':judgments,
+                'state_version':self.store.get('study',self.manifest['study_id'])['state_version']}
 
     def execute_registered_design(self, design_id, *, sandboxed=True,
                                   should_cancel=None):

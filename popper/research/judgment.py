@@ -36,7 +36,12 @@ def derive(hypothesis, design, observations, previous=None, comparison_artifact=
             raise ProtocolError('判断必须引用独立评估制品')
         state, reason = 'inconclusive', 'descriptive_threshold_is_not_statistical_support'
         if comparison_artifact:
-            from .grouped_comparison import verify_artifact
+            if comparison_artifact.get('comparison_schema')=='paired-unit-ci/v1':
+                from .paired_comparison import verify_artifact
+            elif comparison_artifact.get('comparison_schema') is None:
+                from .grouped_comparison import verify_artifact
+            else:
+                raise ProtocolError('未注册的比较协议')
             evidence = verify_artifact(comparison_artifact, observations)
             prediction = evidence['hypothesis_predictions'].get(hypothesis['hypothesis_id'])
             if prediction is None:
