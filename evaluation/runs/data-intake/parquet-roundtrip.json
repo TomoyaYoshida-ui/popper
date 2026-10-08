@@ -1,0 +1,1 @@
+{"data_card_written_seq":3,"format":"parquet","holdout_sealed_seq":2,"model_called":false,"n_columns":3,"n_rows":8,"raw_sha256":"566eb0400ca06e9986961d00493ae8a465de8f4739037cc997bf7d9cbb7e47d3","schema":"popper.parquet-roundtrip/v1","seal_sha256":"9971883eeca8c8e172424250803b9fa65826241422c195df54f973e889a6582a","status":"passed"}

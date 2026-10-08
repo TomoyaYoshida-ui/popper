@@ -15,15 +15,16 @@ from popper.model_budget import ModelRequestBudget
 from popper.scoop import make_json_client
 from popper.research.actions import ActionProposal,RUN_EXPERIMENT,STOP
 from popper.research.contracts import Hypothesis,ExperimentDesign,DesignStatus,RunStatus,Observation
-from popper.research.controller import ResearchController
+from popper.research.controller import ResearchController, _design_id
 from popper.research.evaluation_service import IndependentEvaluator
 from evaluation.transfer_tasks import prepare,ROOT,DATA_SEED
 
 ARMS=('fixed_queue','generic_iteration','evidence_driven')
-IMPLEMENTATION=('popper/core.py','popper/research/controller.py','popper/research/store.py',
+IMPLEMENTATION=('popper/core.py','popper/cli.py','popper/research/controller.py','popper/research/store.py',
  'popper/research/judgment.py','popper/research/paired_comparison.py','popper/request_lifecycle.py',
  'popper/model_budget.py','popper/scoop.py','evaluation/transfer_tasks.py',
- 'evaluation/run_transfer_pilot.py','integrations/transfer_pilot/model.py')
+ 'evaluation/run_transfer_pilot.py','integrations/transfer_pilot/model.py',
+ 'evaluation/validate_transfer_environment.py','evaluation/verify_transfer_pilot.py','scripts/Dockerfile.transfer')
 BASE='https://maas.qianwenaiapi.com/compatible-mode/v1'
 MODEL='qwen3.8-flash'
 SYSTEM=("You are an experimental prediction agent operating inside frozen research permissions. "
@@ -147,7 +148,9 @@ def revise_unexecuted(c,hid,revision):
         c.store.revise_hypothesis(h)
         fields={f.name for f in dataclasses.fields(ExperimentDesign)}
         data={k:v for k,v in old.items() if k in fields}
-        data['design_id']='D-'+digest({'hypothesis_id':target,'version':v})[:20]; data['status']=DesignStatus.DRAFT
+        data['design_id']=_design_id(target,v); data['status']=DesignStatus.DRAFT
+        if data.get('proposal'):
+            data['proposal']={**data['proposal'],'expected_hypothesis_version':v}
         for key in ('interventions','splits','seeds'): data[key]=tuple(data[key])
         c.store.create_design(ExperimentDesign(**data)); c.store.freeze_design(data['design_id'])
 
@@ -168,6 +171,11 @@ def run_cell(out,p,cell,*,offline=False):
     c=ResearchController(run); budget=None; started=time.monotonic()
     result={**cell,'protocol_sha256':p['protocol_sha256'],'status':'running','decisions':[],
             'executions':[],'finalist':None,'model_called':False,'offline_fixture':offline}
+    checkpoint=root/'checkpoint.json'
+    if checkpoint.exists():
+        result=read_json(checkpoint)
+        if result['protocol_sha256']!=p['protocol_sha256'] or result['offline_fixture']!=offline:
+            c.close(); raise ProtocolError('恢复点与冻结模式不一致')
     try:
         if cell['strategy']!='fixed_queue' and not offline:
             budget=ModelRequestBudget(Path(out)/'model-calls.sqlite',global_tokens=5000000,global_calls=180,
@@ -175,10 +183,17 @@ def run_cell(out,p,cell,*,offline=False):
             call=make_json_client(BASE,MODEL,root/'diagnostics',request_budget=budget)
         control=c.manifest['control_hypothesis_id']
         c._execute_development(control,ActionProposal(RUN_EXPERIMENT,'Registered baseline',control),True,False)
-        seen=set()
-        for step in range(9):
+        seen={e['hypothesis_id'] for e in result['executions']}
+        for step in range(len(result['decisions']),9):
             context=agent_context(c,cell,seen)
-            if len(seen)>=4: break
+            if len(seen)>=4 and (cell['strategy']=='fixed_queue' or offline): break
+            if result['executions']:
+                context['selected_by_development']=min(result['executions'],key=lambda x:(x['dev_value'],x['hypothesis_id']))['hypothesis_id']
+            step_path=root/f'step-{step}.json'
+            if step_path.exists():
+                raise ProtocolError('该步骤曾开始但未完成持久化；停止恢复以防重复发送或修订')
+            write_json(step_path,{'status':'started','context_sha256':digest(context)})
+            write_json(root/f'context-{step}.json',context)
             if cell['strategy']=='fixed_queue' or offline:
                 hid=next((c.manifest['candidate_hypothesis_ids'][i] for i in cell['candidate_order'] if c.manifest['candidate_hypothesis_ids'][i] not in seen),None)
                 decision={'action':'experiment' if hid else 'finish','hypothesis_id':hid,'rationale':'Frozen queue or offline fixture',
@@ -191,22 +206,33 @@ def run_cell(out,p,cell,*,offline=False):
                     write_json(root/f'rejected-decision-{step}.json',{'decision':decision,'error':str(error)})
                     decision=validate_decision(call(SYSTEM,{'context':context,'validation_error':str(error),
                         'previous_invalid_decision':decision},logical_request_id=f"{cell['id']}:correction:{step}"),context)
-            write_json(root/f'context-{step}.json',context)
+                if len(seen)>=4 and decision['action']!='finish':
+                    raise ProtocolError('开发实验额度已用完，只允许给出最后的停止判断')
             result['decisions'].append(decision)
-            if decision['action']=='finish': break
+            if decision['action']=='finish':
+                write_json(checkpoint,result)
+                write_json(step_path,{'status':'completed','decision':decision})
+                break
             hid=decision['hypothesis_id']
             if decision['action']=='revise':
-                revise_unexecuted(c,hid,decision['revision']); continue
+                revise_unexecuted(c,hid,decision['revision'])
+                write_json(checkpoint,result)
+                write_json(step_path,{'status':'completed','decision':decision})
+                continue
             before=c.store.get('study',c.manifest['study_id'])['state_version']
             executed=c.execute_registered_candidate(hid,expected_version=before,trusted_local=True)
             seen.add(hid)
             result['executions'].append({'hypothesis_id':hid,'observation_id':executed['observation']['observation_id'],
                 'dev_value':executed['observation']['value'],'judgment_ids':[j['judgment_id'] for j in executed['judgments']]})
-            write_json(root/'checkpoint.json',result)
+            write_json(checkpoint,result)
+            write_json(step_path,{'status':'completed','decision':decision})
         if result['executions']:
             best=min(result['executions'],key=lambda x:(x['dev_value'],x['hypothesis_id']))
             result['finalist']={**best,'hypothesis_version':c.store.get('hypothesis',best['hypothesis_id'])['version'],
                                 'config':c.manifest['configs'][best['hypothesis_id']]}
+        result['final_agent_assessment']=(result['decisions'][-1]['agent_assessment']
+            if result['model_called'] and result['decisions'] and result['decisions'][-1]['action']=='finish' else 'not_evaluated')
+        result['agent_assessment_trust']='unverified'
         result['status']='development_completed' if result['finalist'] else 'abstained'
         result['integrity']=c.store.verify()
     except Exception as error:
@@ -234,13 +260,14 @@ def confirm_cell(out,p,cell,roster):
     ticket=root/'confirmation-consumed.json'
     if ticket.exists(): raise ProtocolError('确认已开始但回执缺失；禁止重跑')
     write_json(ticket,{'cell_id':cell['id'],'roster_sha256':digest(roster),'consumed_once':True})
-    c=ResearchController(root/'research')
+    c=ResearchController(root/'research'); ledger=None; pair_reservation=None; started=False; settled=False
     try:
         # Evaluation-only confirmation never publishes the model's assessment as a scientific claim.
         c.exp.freeze(selected_config=selected['config'])
         ledger=c.store.budget(c.manifest['study_id'])
-        pair_reservation=ledger.reserve(c.manifest['family_id'],'transfer-confirm-'+digest(roster)+':'+cell['id'],2.)
+        pair_reservation=ledger.reserve(c.manifest['family_id'],'transfer-confirm-'+digest(roster)+':'+cell['id'],2.,kind='confirmation')
         frozen=c.exp.begin_confirmation(True,False)
+        started=True
         a=c.exp.evaluate(frozen['spec']['baseline'],'test',True,False)
         b=c.exp.evaluate(selected['config'],'test',True,False)
         c.exp.finalize_confirmation(a,b)
@@ -257,13 +284,17 @@ def confirm_cell(out,p,cell,roster):
             c.store.observations.add(obs); observations.append(c.store.get('observation',obs.observation_id))
         judgments=c._update_judgments(*observations)
         ledger.settle(pair_reservation['reservation_id'],2.)
+        settled=True
         receipt={'schema':'transfer-confirmation/v1','status':'completed','cell_id':cell['id'],
             'protocol_sha256':p['protocol_sha256'],'roster_sha256':digest(roster),'selection_sha256':digest(selected),
             'confirmation_consumed_once':True,'judgments':judgments,'integrity':c.store.verify()}
         write_json(path,receipt); return receipt
     except Exception as error:
+        if pair_reservation is not None and not settled:
+            # Uncertain execution after confirmation starts consumes the conservative pair bound.
+            ledger.settle(pair_reservation['reservation_id'],2. if started else 0.)
         write_json(path,{'status':'failed','cell_id':cell['id'],'roster_sha256':digest(roster),'error_type':type(error).__name__,
-                         'confirmation_consumed_once':True})
+                         'confirmation_consumed_once':True,'budget_accounted':2. if started else 0.})
         raise
     finally: c.close()
 
@@ -273,15 +304,44 @@ def require_environment_gates(out,p):
         path=Path(out)/'environment'/(name+'.json')
         if not path.is_file(): raise ProtocolError('付费评测环境门禁未完成: '+name)
         gate=read_json(path)
-        if gate.get('status')!='passed' or gate.get('implementation')!=p['implementation']:
+        if (gate.get('schema')!='transfer-environment-gate/v1' or gate.get('name')!=name
+            or gate.get('status')!='passed' or gate.get('implementation')!=p['implementation']
+            or gate.get('returncode')!=0 or not gate.get('artifacts') or not gate.get('source_unchanged')):
             raise ProtocolError('环境门禁未通过或不是冻结实现: '+name)
         for artifact in gate.get('artifacts',[]):
             if file_hash(Path(artifact['path']))!=artifact['sha256']: raise ProtocolError('门禁证据制品已变')
 
 
+def preflight(out,p):
+    path=Path(out)/'preflight.json'
+    if path.exists():
+        receipt=read_json(path)
+        if receipt.get('status')!='passed' or receipt.get('protocol_sha256')!=p['protocol_sha256']:
+            raise ProtocolError('模型预检未通过，不能重跑以冲淡失败')
+        return receipt
+    marker=Path(out)/'preflight-started.json'
+    if marker.exists(): raise ProtocolError('模型预检曾中断，禁止重复发送')
+    write_json(marker,{'protocol_sha256':p['protocol_sha256']})
+    budget=ModelRequestBudget(Path(out)/'model-calls.sqlite',global_tokens=5000000,global_calls=180,
+        scope='preflight',scope_tokens=100000,scope_calls=6)
+    try:
+        call=make_json_client(BASE,MODEL,Path(out)/'preflight-diagnostics',request_budget=budget)
+        response=call('Return exactly one JSON object {"ready":true}.',{'check':'JSON streaming and final usage'},logical_request_id='transfer-preflight-v1')
+        if response!={'ready':True}: raise ProtocolError('预检 JSON 模式不符合请求')
+        receipt={'status':'passed','protocol_sha256':p['protocol_sha256'],'usage':budget.snapshot()}
+        write_json(path,receipt); return receipt
+    except Exception as error:
+        write_json(path,{'status':'failed','protocol_sha256':p['protocol_sha256'],'error_type':type(error).__name__,
+                         'failure_category':getattr(error,'category','preflight_failure'),'usage':budget.snapshot()})
+        raise
+    finally: budget.close()
+
+
 def run(out,*,offline=False,limit=None):
     out=Path(out).resolve(); p=prepare_cohort(out)
-    if not offline: require_environment_gates(out,p)
+    if not offline:
+        require_environment_gates(out,p)
+        preflight(out,p)
     cells=p['cells'] if limit is None else p['cells'][:limit]
     results=[]; streak=0
     for cell in cells:
@@ -295,7 +355,7 @@ def run(out,*,offline=False,limit=None):
         write_json(out/'report.json',report); return report
     roster={'schema':'transfer-finalists/v1','protocol_sha256':p['protocol_sha256'],
             'finalists':{r['id']:r['finalist'] for r in results},
-            'agent_assessments':{r['id']:[d['agent_assessment'] for d in r['decisions']] for r in results}}
+            'agent_assessments':{r['id']:r.get('final_agent_assessment','not_evaluated') for r in results}}
     roster_path=out/'finalists.json'
     if roster_path.exists() and read_json(roster_path)!=roster: raise ProtocolError('不能更改已冻结确认名单')
     if not roster_path.exists(): write_json(roster_path,roster)

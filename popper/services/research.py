@@ -1277,7 +1277,7 @@ class ResearchService(HostService):
         thread = threading.Thread(target=target, daemon=True)
         with self.job_threads_lock:
             self._job_threads.append(thread)
-        thread.start()
+            thread.start()
         return thread
 
     def wait_for_jobs(self, timeout=120):
@@ -1287,17 +1287,20 @@ class ResearchService(HostService):
         本身，而不是在一个自己造的错误里丢掉现场。
         """
         time = self.dependencies.time
-        with self.job_threads_lock:
-            pending = list(self._job_threads)
-            self._job_threads.clear()
-        deadline = time.time() + timeout
-        for thread in pending:
-            thread.join(max(0.0, deadline - time.time()))
-        still_alive = [thread for thread in pending if thread.is_alive()]
-        if still_alive:
+        deadline = time.monotonic() + timeout
+        while True:
             with self.job_threads_lock:
-                self._job_threads.extend(still_alive)
-        return len(still_alive)
+                pending = list(self._job_threads)
+                self._job_threads.clear()
+            for thread in pending:
+                thread.join(max(0.0, deadline - time.monotonic()))
+            with self.job_threads_lock:
+                self._job_threads.extend(thread for thread in pending if thread.is_alive())
+                self._job_threads[:] = list(dict.fromkeys(self._job_threads))
+                alive = [thread for thread in self._job_threads if thread.is_alive()]
+                self._job_threads[:] = alive
+                if not alive or time.monotonic() >= deadline:
+                    return len(alive)
 
     def approve_campaign(self, decision, reason='', materialize=None):
         """工作台交互审批：记录决定，批准时在后台线程真正恢复执行 campaign。

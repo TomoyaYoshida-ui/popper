@@ -1,0 +1,10 @@
+# Build from the source-only export; no runtime databases or credentials in the context.
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
+WORKDIR /opt/popper
+COPY pyproject.toml ./
+COPY popper ./popper
+RUN python -m pip install --no-cache-dir . && useradd --create-home runner
+USER runner
+ENTRYPOINT ["popper"]
+CMD ["--help"]

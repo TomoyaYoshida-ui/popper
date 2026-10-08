@@ -13,6 +13,8 @@ def main():
     paths=subprocess.check_output(['git','ls-files','-z'],cwd=root).decode().split('\0')
     additions=['scripts/export_transfer_validation.py','evaluation/validate_transfer_environment.py',
                'evaluation/verify_transfer_pilot.py','scripts/Dockerfile.transfer']
+    receipts=['evaluation/runs/data-intake/heart-disease-cleveland/report.json',
+              'evaluation/runs/data-intake/parquet-roundtrip.json','evaluation/runs/mlebench-lite/tree-report.json']
     args.output.parent.mkdir(parents=True,exist_ok=True)
     count=0
     with tarfile.open(args.output,'w:gz') as archive:
@@ -23,6 +25,18 @@ def main():
             source=root/name
             if source.is_file() and source.suffix.lower() not in {'.sqlite','.db','.zip','.pem','.key'}:
                 archive.add(source,arcname=name,recursive=False); count+=1
+        # Only these small aggregate historical receipts are required by regression tests.
+        # No raw traces, datasets, confirmation databases or other runtime files are exported.
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('secret_check',root/'.github/scripts/check_tracked_secrets.py')
+        checker=importlib.util.module_from_spec(spec); spec.loader.exec_module(checker)
+        for name in receipts:
+            source=root/name
+            if not source.is_file(): raise FileNotFoundError(name)
+            if checker.content_issues(source.read_bytes()): raise ValueError('Unsafe receipt: '+name)
+            archive.add(source,arcname=name,recursive=False); count+=1
+        directory=tarfile.TarInfo('integrations/runs'); directory.type=tarfile.DIRTYPE; directory.mode=0o755
+        archive.addfile(directory)
     print(f'Exported {count} source files')
 
 
