@@ -6,13 +6,32 @@ import math
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from popper.core import ProtocolError,digest,read_json,write_json
+from popper.core import ProtocolError,digest,read_json,write_json,file_hash
 from popper.research.controller import ResearchController
-from evaluation.run_transfer_pilot import ARMS,validate_cohort
+from evaluation.run_transfer_pilot import ARMS,validate_cohort,snapshot
 
 
-def audit(out):
-    out=Path(out).resolve(); protocol=read_json(out/'protocol.json'); validate_cohort(protocol,out)
+def verify_frozen_sources(protocol,allow_verifier_upgrade=False):
+    actual=snapshot(); expected=protocol['implementation']
+    changes={p for p in set(actual)|set(expected) if actual.get(p)!=expected.get(p)}
+    if changes and (not allow_verifier_upgrade or changes!={'evaluation/verify_transfer_pilot.py'}):
+        raise ProtocolError('冻结的实验、决策或评估实现已变；核验器升级仅允许修改核验器本身')
+    return bool(changes)
+
+
+def audit(out,*,allow_verifier_upgrade=False):
+    out=Path(out).resolve(); protocol=read_json(out/'protocol.json')
+    upgraded=verify_frozen_sources(protocol,allow_verifier_upgrade)
+    if not upgraded: validate_cohort(protocol,out)
+    else:
+        if (protocol.get('schema')!='transfer-pilot/v1' or len(protocol['cells'])!=27
+            or len({c['id'] for c in protocol['cells']})!=27
+            or digest({k:v for k,v in protocol.items() if k!='protocol_sha256'})!=protocol['protocol_sha256']
+            or (protocol['global_calls'],protocol['cell_calls'],protocol['preflight_calls'],protocol['candidate_attempts'])!=(180,9,6,4)):
+            raise ProtocolError('历史协议身份、数量或预算不合法')
+        for task in protocol['tasks']:
+            for name,sha in task['files'].items():
+                if file_hash(out/'tasks'/task['task']/name)!=sha: raise ProtocolError('冻结数据或模型制品已变')
     roster=read_json(out/'finalists.json') if (out/'finalists.json').exists() else None
     groups=[]; cells=[]
     for cell in protocol['cells']:
@@ -23,7 +42,7 @@ def audit(out):
                 'experiments':0,'seconds':0.,'stop_actions':0,'revision_actions':0,'scope_changes':[]}
         if r:
             if r['protocol_sha256']!=protocol['protocol_sha256']: raise ProtocolError('单元协议不一致')
-                if len(r['executions'])>4: raise ProtocolError('开发实验超过冻结额度')
+            if len(r['executions'])>4: raise ProtocolError('开发实验超过冻结额度')
             record.update(experiments=len(r['executions']),seconds=r['elapsed_seconds'],
                 agent_assessment=r.get('final_agent_assessment','not_evaluated'))
             record.update(stop_actions=sum(d['action']=='finish' for d in r['decisions']),
@@ -91,6 +110,7 @@ def audit(out):
         finally: budget.close()
         if usage['calls']>180 or usage['accounted_tokens']>5000000: raise ProtocolError('真实请求超过冻结全局预算')
     result={'schema':'transfer-audit/v1','protocol_sha256':protocol['protocol_sha256'],'planned':27,
+        'verifier_upgrade':upgraded,'verifier_sha256':file_hash(Path(__file__)),
         'cells':cells,'descriptive_groups':groups,'usage':usage,
         'general_superiority_claimed':False,'repeats_are_independent_datasets':False,
         'offline_fixture':not (out/'model-calls.sqlite').exists(),
@@ -101,6 +121,7 @@ def audit(out):
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(); parser.add_argument('--out',type=Path,required=True); args=parser.parse_args()
-    result=audit(args.out)
+    parser=argparse.ArgumentParser(); parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--allow-verifier-upgrade',action='store_true',help='仅允许只读核验器自身的版本变化，实验/决策/计分源码必须完全一致')
+    args=parser.parse_args(); result=audit(args.out,allow_verifier_upgrade=args.allow_verifier_upgrade)
     print(json.dumps({'planned':result['planned'],'usage':result['usage'],'offline_fixture':result['offline_fixture']}))
