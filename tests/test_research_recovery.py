@@ -15,8 +15,10 @@ from popper.vendor_worker import run_source_workers
 
 
 def response(content, finish="stop"):
-    return io.BytesIO(json.dumps({"choices": [{"finish_reason": finish,
-        "message": {"content": content}}], "usage": {"total_tokens": 9}}).encode())
+    frames = [{'choices': [{'finish_reason': finish, 'delta': {'content': content}}]},
+              {'choices': [], 'usage': {'total_tokens': 9}}]
+    return io.BytesIO((''.join('data: '+json.dumps(frame)+'\n\n' for frame in frames)
+                       +'data: [DONE]\n\n').encode())
 
 
 class JsonRecoveryTests(unittest.TestCase):
@@ -50,7 +52,9 @@ class JsonRecoveryTests(unittest.TestCase):
             body = json.loads(opener.open.call_args.args[0].data)
             self.assertEqual(1024, body["thinking_budget"])
             self.assertTrue(body["enable_thinking"])
-            self.assertEqual(8000, body["max_tokens"])
+            self.assertEqual(4096, body["max_completion_tokens"])
+            self.assertNotIn('max_tokens', body)
+            self.assertTrue(body['stream'])
 
     def test_transient_network_error_has_one_recovery_attempt(self):
         with patch.dict("os.environ", {"POPPER_API_KEY": "test"}):

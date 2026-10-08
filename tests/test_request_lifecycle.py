@@ -20,6 +20,8 @@ class Handler(BaseHTTPRequestHandler):
         mode = self.server.mode
         try:
             if mode == 'headers': time.sleep(2)
+            if mode == 'auth':
+                self.send_response(401); self.end_headers(); return
             if mode == 'retry' and len(self.server.bodies) == 1:
                 self.send_response(503); self.end_headers(); return
             self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers()
@@ -104,3 +106,24 @@ class LifecycleTests(unittest.TestCase):
             self.assertGreater(budget.tokens_used,0)
             with self.assertRaises(ProtocolError): call('return json',{})
             self.assertEqual(1,len(self.server.bodies)); budget.close()
+
+    def test_auth_failure_is_not_retried(self):
+        self.server.mode='auth'
+        with self.assertRaises(RequestFailure) as error:
+            make_json_client(self.url,'local',api_key='synthetic-placeholder')('json',{})
+        self.assertEqual('authentication_or_permission', error.exception.category)
+        self.assertEqual(1,len(self.server.bodies))
+
+    def test_temporary_failure_retries_only_once(self):
+        self.server.mode='retry'
+        self.assertTrue(make_json_client(self.url,'local',api_key='synthetic-placeholder')('json',{})['ok'])
+        self.assertEqual(2,len(self.server.bodies))
+
+    def test_cancel_during_retry_wait(self):
+        self.server.mode='retry'; event=threading.Event()
+        timer=threading.Timer(.15,event.set); timer.start(); start=time.monotonic()
+        with self.assertRaises(RequestFailure) as error:
+            make_json_client(self.url,'local',api_key='synthetic-placeholder')('json',{},cancel_event=event)
+        self.assertEqual('cancelled', error.exception.category)
+        self.assertLess(time.monotonic()-start,1)
+        self.assertEqual(1,len(self.server.bodies)); timer.cancel()

@@ -131,9 +131,11 @@ def make_json_client(base_url, model, diagnostics_dir=None, *, request_budget=No
                 if cancel_event.is_set() or time.monotonic()-logical_started >= lifecycle.limits.total:
                     retryable = False
                 if attempt == 1 or not retryable:
-                    raise ProtocolError(f"Scoop 模型调用失败: {type(error).__name__}；"
-                                        f"诊断编号 {call_id}，尝试 {attempt + 1} 次") from None
-                lifecycle.progress('retrying')
+                    failure = RequestFailure(diagnostic['failure_category'], usage=usage, sent=lifecycle.sent)
+                    failure.call_id = call_id
+                    raise failure from None
+                if on_progress is not None:
+                    on_progress({'state': 'retrying', 'elapsed_seconds': round(time.monotonic()-logical_started,1)})
                 cancellable_wait(min(1, max(0, lifecycle.limits.total-(time.monotonic()-logical_started))),
                                  cancel_event.is_set)
             finally:
