@@ -35,6 +35,9 @@ def main():
     tx=np.asarray([[FEATURES[int(r['x'])][i] for i in selected] for r in train]); ty=np.asarray([r['y'] for r in train])
     ix=np.asarray([[FEATURES[int(r['x'])][i] for i in selected] for r in inputs])
     np.random.seed(seed)
+    libraries={k:importlib.metadata.version(k) for k in ('numpy','scikit-learn','pandas')}
+    if libraries!={'numpy':'2.2.6','scikit-learn':'1.7.2','pandas':'2.3.3'}:
+        raise ValueError('Frozen library versions mismatch')
     if config['kind']=='zero':
         predictions=np.zeros(len(inputs)); trees=[{'value':[0.]}]; rules=0
     elif config['kind']=='cart':
@@ -54,7 +57,8 @@ def main():
     output.write_text(json.dumps([{'id':r['id'],'prediction':float(v)} for r,v in zip(inputs,predictions)],allow_nan=False),encoding='utf-8')
     config_hash=hashlib.sha256(json.dumps(config,ensure_ascii=False,sort_keys=True,allow_nan=False,separators=(',',':')).encode()).hexdigest()
     audit={'kind':config['kind'],'config_sha256':config_hash,'seed':seed,'selected_features':selected,
-           'actual_rules':rules,'tree_count':len(trees),'trees':trees}
+           'actual_rules':rules,'tree_count':len(trees),'trees':trees,'libraries':libraries,
+           'figs_commit':'e8efb7e7b599e4d0f3e3399174e6684d125acb6f' if config['kind'].startswith('figs') else None}
     (output.parent/'model-audit-17.json').write_text(json.dumps(audit,allow_nan=False),encoding='utf-8')
 
 

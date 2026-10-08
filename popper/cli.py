@@ -269,8 +269,6 @@ def main(argv=None):
     ideate_new.add_argument("--operator", default="gap-to-problem",
                             help="基础算子名或已登记的组合算子名")
     ideate_new.add_argument("--question")
-    metrics = research_commands.add_parser("metrics", help="指标注册表管理")
-    metrics_commands = metrics.add_subparsers(dest="metrics_command", required=True)
     metrics_list = metrics_commands.add_parser("list")
     metrics_list.add_argument("--registry", type=Path, default=None)
     evidence = research_commands.add_parser("evidence", help="claim registry + 稿件校验（CS 语义版）")
@@ -717,7 +715,7 @@ def main(argv=None):
                     result = inspect_contract(contract_body)
                 print(canonical(result))
                 return 0
-            elif args.research_command == "metrics":
+            elif args.research_command == "metrics" and args.metrics_command == "register":
                 from .research.metrics import register_metric
                 result = register_metric(
                     args.project, args.id, args.implementation, args.fixture, args.approver)

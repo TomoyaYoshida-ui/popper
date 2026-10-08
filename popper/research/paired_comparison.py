@@ -9,6 +9,7 @@ from ..core import ProtocolError, digest, file_hash, read_json, write_json
 from .grouped_comparison import _observation_identity, _tree_predict
 
 SCHEMA = 'paired-unit-ci/v1'
+LIBRARIES={'numpy':'2.2.6','scikit-learn':'1.7.2','pandas':'2.3.3'}
 
 
 def validate_protocol(p):
@@ -58,6 +59,11 @@ def _prediction_rows(obs, protocol):
         raise ProtocolError('模型制品配置未注册')
     if audit['kind']!=config['kind']:
         raise ProtocolError('模型类型与冻结配置不一致')
+    raw_config={k:config[k] for k in ('kind','features','max_rules','min_samples_leaf')}
+    if digest(raw_config)!=audit['config_sha256'] or audit.get('libraries')!=LIBRARIES:
+        raise ProtocolError('模型配置摘要或依赖版本与冻结规则不一致')
+    if config['kind'].startswith('figs') and audit.get('figs_commit')!='e8efb7e7b599e4d0f3e3399174e6684d125acb6f':
+        raise ProtocolError('FIGS 依赖提交不一致')
     trees=audit['trees']
     def count(t):
         return 0 if 'value' in t else 1+count(t['left'])+count(t['right'])
@@ -108,19 +114,27 @@ def evaluate(packet):
     if not grouped[0] or set(grouped[0])!=set(grouped[1]):
         raise ProtocolError('配对分析单位缺失或不一致')
     units=sorted(grouped[0]); a=np.array([grouped[0][u] for u in units]); b=np.array([grouped[1][u] for u in units])
-    if a.mean()<=1e-12: raise ProtocolError('相对 MAE 分母为零')
-    idx=np.random.default_rng(p['bootstrap_seed']).integers(0,len(a),size=(10000,len(a)))
-    aa,bb=a[idx].mean(axis=1),b[idx].mean(axis=1)
-    if np.any(aa<=1e-12): raise ProtocolError('重采样分母为零')
+    stats=paired_statistics(a,b,p['bootstrap_seed'])
     alternate=p['hypothesis_contrasts'][candidate]['alternative_id']
     return {'schema':SCHEMA,'request_sha256':digest(packet),'service_sha256':file_hash(Path(__file__)),
-        'metric':p['effect'],'unit':p['unit'],'mean_effect':float((a.mean()-b.mean())/a.mean()),
-        'ci95':np.quantile((aa-bb)/aa,[.025,.975]).tolist(),
-        'quality':'valid' if len(a)>=p['minimum_units'] else 'insufficient',
-        'n_units':len(a),'baseline_mae':float(a.mean()),'candidate_mae':float(b.mean()),
+        'metric':p['effect'],'unit':p['unit'],**stats,
         'analysis_prefix':prefix,'model_audit_sha256':[d[3] for d in decoded],
         'hypothesis_predictions':{h:p['hypothesis_predictions'][h] for h in (candidate,alternate)},
         'mechanism_proven':False,'trust':'separate_process_same_account'}
+
+
+def paired_statistics(baseline,candidate,seed):
+    import numpy as np
+    a,b=np.asarray(baseline,dtype=float),np.asarray(candidate,dtype=float)
+    if a.ndim!=1 or a.shape!=b.shape or len(a)==0 or not np.isfinite(a).all() or not np.isfinite(b).all() or np.any(a<0) or np.any(b<0):
+        raise ProtocolError('配对单位误差不合法')
+    if a.mean()<=1e-12: raise ProtocolError('相对 MAE 分母为零')
+    idx=np.random.default_rng(seed).integers(0,len(a),size=(10000,len(a)))
+    aa,bb=a[idx].mean(axis=1),b[idx].mean(axis=1)
+    if np.any(aa<=1e-12): raise ProtocolError('重采样分母为零')
+    return {'mean_effect':float((a.mean()-b.mean())/a.mean()),'ci95':np.quantile((aa-bb)/aa,[.025,.975]).tolist(),
+            'quality':'valid' if len(a)>=30 else 'insufficient','n_units':len(a),
+            'baseline_mae':float(a.mean()),'candidate_mae':float(b.mean())}
 
 
 def verify_artifact(descriptor, observations):
