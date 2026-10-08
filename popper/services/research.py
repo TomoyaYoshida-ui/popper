@@ -171,7 +171,16 @@ class ResearchService(HostService):
                         result = controller.run(sandboxed=True, max_steps=request['max_steps'], auto_confirm=False, should_cancel=cancelled)
                     else:
                         result = controller.confirm(sandboxed=True, should_cancel=cancelled)
-                    store.finish(job_id, 'succeeded', result={'phase': result['phase'], 'observation_ids': [row['observation_id'] for row in result['observations']], 'claim_ids': [row['claim_id'] for row in result['claims']]})
+                    summary = {'phase': result['phase'], 'observation_ids': [row['observation_id'] for row in result['observations']], 'claim_ids': [row['claim_id'] for row in result['claims']]}
+                    planning = result.get('planning_runtime')
+                    if planning is not None:
+                        summary['planning_runtime'] = planning
+                    planner = (planning or {}).get('planner', {})
+                    if planner.get('status') in {'failed', 'exhausted', 'cancelled', 'recovery_blocked'}:
+                        store.finish(job_id, 'cancelled' if planner['status'] == 'cancelled' else 'failed',
+                                     result=summary, error='研究规划未完成: ' + str(planner.get('reason')))
+                    else:
+                        store.finish(job_id, 'succeeded', result=summary)
                 except Exception as error:
                     store.finish(job_id, 'cancelled' if store.get(job_id)['cancel_requested'] else 'failed', error=f'{type(error).__name__}: {error}')
             finally:
@@ -1256,15 +1265,39 @@ class ResearchService(HostService):
         def work():
             try:
                 if self.mode == 'experiment':
-                    target = Experiment(self.project)
+                    spec = self.dependencies.read_json(self.project / 'experiment.json')
+                    protocol = spec.get('metadata', {}).get('planning_protocol')
+                    if protocol not in {None, 'research-runtime/v1'}:
+                        raise ProtocolError('未支持的研究规划协议，不能退回旧执行通道')
+                    if protocol and action in {'search', 'freeze', 'confirm'}:
+                        from ..research.controller import ResearchController
+                        run_dir = self.project / '.popper' / 'research-runtime'
+                        if action == 'search' and not (run_dir / 'research.json').is_file():
+                            ResearchController.initialize(self.project, run_dir)
+                        target = ResearchController(run_dir)
+                    else:
+                        target = Experiment(self.project)
                     try:
-                        result = getattr(target, action)(True) if action in {'search', 'confirm'} else getattr(target, action)()
+                        if protocol and action in {'search', 'freeze', 'confirm'}:
+                            if action == 'freeze':
+                                result = {'selection_receipt': target.prepare_registered_selection(), **target.status()}
+                            else:
+                                method = target.run if action == 'search' else target.confirm
+                                result = method(trusted_local=True)
+                        else:
+                            result = getattr(target, action)(True) if action in {'search', 'confirm'} else getattr(target, action)()
                     finally:
                         target.close()
                 else:
                     target = ReproductionTask(self.project)
                     result = getattr(target, action)(trusted_local=True)
-                self.job = {'status': 'completed', 'action': action, 'result': result}
+                planner = (result.get('planning_runtime') or {}).get('planner', {}) if isinstance(result, dict) else {}
+                if planner.get('status') in {'failed', 'exhausted', 'cancelled', 'recovery_blocked'}:
+                    self.job = {'status': 'cancelled' if planner['status'] == 'cancelled' else 'failed',
+                                'action': action, 'result': result,
+                                'error': '研究规划未完成: ' + str(planner.get('reason'))}
+                else:
+                    self.job = {'status': 'completed', 'action': action, 'result': result}
             except Exception as error:
                 self.job = {'status': 'failed', 'action': action, 'error': str(error)}
             finally:

@@ -6,6 +6,7 @@ import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from ..core import Experiment, ProtocolError, canonical, digest, file_hash, read_json
 from ..eventlog import GENESIS_HASH, chained_body, verify_hash_chain
@@ -43,6 +44,43 @@ def preview_study_action(run_dir, action, max_steps=1, envelope=None):
                      if row["hypothesis_id"] in manifest["candidate_hypothesis_ids"]
                      and row["status"] == "supported_in_scope"), None)
     ready = last_action == "request_confirmation"
+    protocol = core["spec"].get("metadata", {}).get("planning_protocol")
+    if protocol not in {None, "research-runtime/v1"}:
+        raise ProtocolError("未支持的研究规划协议，不能退回旧执行通道")
+    if protocol == "research-runtime/v1":
+        if action == "autopilot":
+            raise ProtocolError("当前冻结规划适配器未声明生成代码权限，不支持 autopilot")
+        registered = [d for d in decisions if d.get("actor") == "registered_confirmation_controller"
+                      and d["action"] == "request_confirmation"]
+        ready = bool(registered)
+        selected = None
+        if registered:
+            try:
+                receipt = json.loads(registered[-1]["rationale"])
+            except (ValueError, TypeError):
+                raise ProtocolError("登记的候选选择回执无法读取") from None
+            from .project_adapter import RegisteredProjectAdapter
+            from .store import ResearchStore
+            store = ResearchStore(run_dir / "research.sqlite", readonly=True)
+            try:
+                if not store.verify()["ok"]:
+                    raise ProtocolError("研究存储完整性检查失败")
+                reader = SimpleNamespace(project=Path(manifest["project"]), manifest=manifest,
+                                         store=store, _verify_inputs=lambda: core)
+                adapter = RegisteredProjectAdapter(reader)
+                policy = (adapter.protocol or {}).get("confirmation_policy", {})
+                if policy.get("schema") != "selected_by_registered_dev_metric/v1":
+                    raise ProtocolError("研究初始化时未冻结候选选择确认策略")
+                replay = adapter.confirmation_selection_receipt()
+                if replay is None:
+                    raise ProtocolError("没有有效独立开发证据，不能确认")
+                replay["state_version"] = receipt.get("state_version")
+                replay["receipt_sha256"] = digest({k: v for k, v in replay.items() if k != "receipt_sha256"})
+                if replay != receipt:
+                    raise ProtocolError("候选选择回执与冻结开发规则重算不一致")
+                selected = store.get("hypothesis", receipt["hypothesis_id"])
+            finally:
+                store.close()
     if action == "confirm":
         if manifest.get("external_confirmation"):
             raise ProtocolError("此 Study 使用外部签名确认，不能用本地确认替代")

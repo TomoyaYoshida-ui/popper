@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .core import Experiment, read_json
+from .core import Experiment, ProtocolError, read_json
 from .candidate_contract import contract_from_spec, validate_candidate
 from .materialize import Materializer
 from .orchestrator import CampaignFatal
@@ -54,6 +54,27 @@ def _experiment(state) -> Experiment:
     if not (root / ".popper" / "state.db").is_file():
         raise CampaignFatal("项目未初始化，请先运行 popper experiment init")
     return Experiment(root)
+
+
+def _registered_planning(state):
+    project = state.get("active_project") or state.get("project")
+    if not project:
+        raise CampaignFatal("campaign 缺少 project 配置")
+    root = Path(project)
+    if not (root / ".popper" / "state.db").is_file():
+        raise CampaignFatal("项目未初始化，请先运行 popper experiment init")
+    protocol = read_json(root / "experiment.json").get("metadata", {}).get("planning_protocol")
+    if protocol not in {None, "research-runtime/v1"}:
+        raise ProtocolError("未支持的研究规划协议，不能退回旧执行通道")
+    return root if protocol else None
+
+
+def _planning_controller(project, *, initialize=False):
+    from .research.controller import ResearchController
+    run_dir = Path(project) / ".popper" / "research-runtime"
+    if initialize and not (run_dir / "research.json").is_file():
+        ResearchController.initialize(project, run_dir)
+    return ResearchController(run_dir)
 
 
 def _llm(state):
@@ -274,6 +295,20 @@ def dev_node(run_dir, state):
     """Popper 开发集搜索（基线 + 候选循环，预算内可恢复；冻结后跳过）。"""
     if not state.get("mode"):
         raise CampaignFatal("dev 节点需要 --trusted-local 或 --sandbox")
+    project = _registered_planning(state)
+    if project is not None:
+        controller = _planning_controller(project, initialize=True)
+        try:
+            result = controller.run(trusted_local=state["mode"] == "trusted_local",
+                                    sandboxed=state["mode"] == "sandboxed")
+            planned = result.get("planning_runtime")
+            if planned and planned["planner"]["status"] != "stopped":
+                return _incomplete("研究规划未完成；保留有效证据，停止后续自动确认", planning_runtime=planned)
+            return {"outcome": "success", "phase": result["phase"],
+                    "dev_runs": len([o for o in result["observations"] if o["scope"].startswith("dev")]),
+                    "planning_runtime": planned}
+        finally:
+            controller.close()
     exp = _experiment(state)
     try:
         phase = exp.state()["phase"]
@@ -289,6 +324,15 @@ def dev_node(run_dir, state):
 
 def freeze_node(run_dir, state):
     """冻结 dev 最优候选（仅 searching 可冻结）。"""
+    project = _registered_planning(state)
+    if project is not None:
+        controller = _planning_controller(project)
+        try:
+            receipt = controller.prepare_registered_selection()
+            return {"outcome": "success", "phase": "ready_for_confirmation",
+                    "selected": receipt["hypothesis_id"], "selection_receipt": receipt}
+        finally:
+            controller.close()
     exp = _experiment(state)
     try:
         phase = exp.state()["phase"]
@@ -304,6 +348,16 @@ def confirm_node(run_dir, state):
     """一次性最终确认：消费测试集产出 claim。"""
     if not state.get("mode"):
         raise CampaignFatal("confirm 节点需要 --trusted-local 或 --sandbox")
+    project = _registered_planning(state)
+    if project is not None:
+        controller = _planning_controller(project)
+        try:
+            result = controller.confirm(trusted_local=state["mode"] == "trusted_local",
+                                        sandboxed=state["mode"] == "sandboxed")
+            return {"outcome": "success", "phase": result["phase"],
+                    "status": result["study"]["status"], "claims": result["claims"]}
+        finally:
+            controller.close()
     exp = _experiment(state)
     try:
         phase = exp.state()["phase"]

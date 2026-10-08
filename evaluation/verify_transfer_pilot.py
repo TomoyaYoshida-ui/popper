@@ -6,9 +6,35 @@ import math
 from pathlib import Path
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from popper.core import ProtocolError,digest,read_json,write_json,file_hash
-from popper.research.controller import ResearchController
+from popper.core import Experiment, ProtocolError,digest,read_json,write_json,file_hash
+from popper.research.store import ResearchStore
 from evaluation.run_transfer_pilot import ARMS,validate_cohort,snapshot
+
+
+class AuditReader:
+    """Read-only facts; never reconcile jobs, budgets or execution on audit."""
+    def __init__(self, run_dir):
+        self.run_dir = Path(run_dir)
+        self.manifest = read_json(self.run_dir/'research.json')
+        self.project = Path(self.manifest['project'])
+        self.store = ResearchStore(self.run_dir/'research.sqlite', readonly=True)
+        self.exp = Experiment(self.project, readonly=True)
+
+    def _verify_inputs(self):
+        if not self.store.verify()['ok']:
+            raise ProtocolError('Research audit integrity failed')
+        study = self.store.get('study', self.manifest['study_id'])
+        if json.loads(study['scope'])['manifest_sha256'] != file_hash(self.run_dir/'research.json'):
+            raise ProtocolError('Frozen research manifest changed')
+        state = self.exp.verify_inputs()
+        if self.manifest['input_identity'] != {'input_hashes': state['input_hashes'],
+                                               'evaluator_hash': state['evaluator_hash']}:
+            raise ProtocolError('Frozen research inputs changed')
+        return state
+
+    def close(self):
+        self.exp.close()
+        self.store.close()
 
 
 def verify_frozen_sources(protocol,allow_verifier_upgrade=False):
@@ -24,7 +50,7 @@ def audit(out,*,allow_verifier_upgrade=False):
     upgraded=verify_frozen_sources(protocol,allow_verifier_upgrade)
     if not upgraded: validate_cohort(protocol,out)
     else:
-        if (protocol.get('schema')!='transfer-pilot/v1' or len(protocol['cells'])!=27
+        if (protocol.get('schema') not in {'transfer-pilot/v1','transfer-pilot/v2'} or len(protocol['cells'])!=27
             or len({c['id'] for c in protocol['cells']})!=27
             or digest({k:v for k,v in protocol.items() if k!='protocol_sha256'})!=protocol['protocol_sha256']
             or (protocol['global_calls'],protocol['cell_calls'],protocol['preflight_calls'],protocol['candidate_attempts'])!=(180,9,6,4)):
@@ -48,10 +74,23 @@ def audit(out,*,allow_verifier_upgrade=False):
             record.update(stop_actions=sum(d['action']=='finish' for d in r['decisions']),
                 revision_actions=sum(d['action']=='revise' for d in r['decisions']),
                 scope_changes=[d['revision']['applicability'] for d in r['decisions'] if d['action']=='revise'])
-            c=ResearchController(root/'research')
+            c=AuditReader(root/'research')
             try:
                 integrity=c.store.verify()
                 if not integrity['ok']: raise ProtocolError('研究存储证据不能重算: '+cell['id'])
+                if protocol['schema']=='transfer-pilot/v2':
+                    from popper.research.runtime import ResearchRuntime
+                    runtime = ResearchRuntime(c,session_id='transfer:'+cell['id'],profile=cell['strategy'],
+                                              max_experiments=4,max_decisions=9)
+                    authoritative = runtime.result()
+                    record['planner_status'] = authoritative['planner']['status']
+                    record['development_status'] = authoritative['development']['status']
+                    if r.get('runtime',{}).get('planner') != authoritative['planner']:
+                        raise ProtocolError('Planner report differs from durable receipts')
+                    selected = authoritative['finalist']
+                    if bool(selected) != bool(r['finalist']) or (selected and
+                            selected['selection_receipt'] != r['finalist'].get('selection_receipt')):
+                        raise ProtocolError('Selection report differs from durable receipts')
                 for execution in r['executions']:
                     primary=next(c.store.get('judgment',jid) for jid in execution['judgment_ids']
                         if c.store.get('judgment',jid)['hypothesis_id']==execution['hypothesis_id'])
@@ -87,6 +126,7 @@ def audit(out,*,allow_verifier_upgrade=False):
             valid=[r for r in rows if r['confirmation_status']=='completed']
             assessed=[r for r in valid if r['agent_evidence_agreement'] is not None]
             groups.append({'task':task,'strategy':arm,'denominator':3,
+                'planner_completed':sum(r.get('planner_status')=='stopped' for r in rows),
                 'development_completed':sum(r['status']=='development_completed' for r in rows),
                 'confirmation_completed':len(valid),'failed_or_unfinished':sum(r['status'] not in {'development_completed','abstained'} or r['confirmation_status'] not in {'completed','abstained'} for r in rows),
                 'unverified_false_support':sum(r['false_support'] for r in rows),
@@ -104,8 +144,7 @@ def audit(out,*,allow_verifier_upgrade=False):
     usage={'calls':0,'known_tokens':0,'unresolved_reserved_tokens':0,'accounted_tokens':0}
     if (out/'model-calls.sqlite').exists():
         from popper.model_budget import ModelRequestBudget
-        budget=ModelRequestBudget(out/'model-calls.sqlite',global_tokens=5000000,global_calls=180,
-            scope='preflight',scope_tokens=100000,scope_calls=6,unknown_usage_policy='reserve')
+        budget=ModelRequestBudget.readonly(out/'model-calls.sqlite',scope='preflight')
         try: usage=budget.snapshot()['global']
         finally: budget.close()
         if usage['calls']>180 or usage['accounted_tokens']>5000000: raise ProtocolError('真实请求超过冻结全局预算')

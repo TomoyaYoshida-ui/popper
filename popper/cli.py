@@ -170,6 +170,20 @@ def main(argv=None):
                              help="指定实现代码的编码 Agent 接入（默认从 --base-url/--model 推导）")
     research_status = research_commands.add_parser("status")
     research_status.add_argument("run_dir", type=Path)
+    planning = research_commands.add_parser('plan', help='通过公共研究运行时执行冻结候选规划')
+    planning.add_argument('run_dir', type=Path)
+    planning.add_argument('--session', default='default')
+    planning.add_argument('--profile', choices=('fixed_queue', 'generic_iteration', 'evidence_driven'),
+                          default='evidence_driven')
+    planning.add_argument('--max-experiments', type=int, default=None)
+    planning.add_argument('--max-decisions', type=int, default=9)
+    planning.add_argument('--trusted-local', action='store_true')
+    planning.add_argument('--sandbox', action='store_true')
+    planning.add_argument('--base-url', default=None)
+    planning.add_argument('--model', default=None)
+    planning.add_argument('--max-model-tokens', type=int, default=50000)
+    planning.add_argument('--max-model-calls', type=int, default=10)
+    planning.add_argument('--context-only', action='store_true')
     benchmark = research_commands.add_parser(
         "benchmark", help="运行内置 ODE/算法吞吐的离线跨领域 Research Kernel 基准")
     benchmark.add_argument("out_dir", type=Path)
@@ -937,9 +951,46 @@ def main(argv=None):
                                                              getattr(args, "base_url", None),
                                                              getattr(args, "model", None),
                                                              args.run_dir / "model-diagnostics"))
-                if args.research_command == "run":
+                if args.research_command == 'plan':
+                    if bool(args.base_url) != bool(args.model):
+                        raise ProtocolError('--base-url 和 --model 必须同时提供')
+                    from .research.runtime import ResearchRuntime
+                    if args.context_only:
+                        result = ResearchRuntime.preview_context(research_controller, profile=args.profile)
+                    else:
+                        from .scoop import make_json_client
+                        from .model_budget import ModelRequestBudget
+                        model_requests = None
+                        try:
+                            call = None
+                            if args.model:
+                                model_requests = ModelRequestBudget(args.run_dir / 'planning-model-requests.sqlite',
+                                    global_tokens=args.max_model_tokens, global_calls=args.max_model_calls,
+                                    scope=args.session, scope_tokens=args.max_model_tokens,
+                                    scope_calls=args.max_model_calls, unknown_usage_policy='reserve')
+                                call = make_json_client(args.base_url, args.model,
+                                    args.run_dir / 'model-diagnostics', request_budget=model_requests)
+                            result = research_controller.planning_runtime(session_id=args.session, profile=args.profile,
+                                max_experiments=args.max_experiments, max_decisions=args.max_decisions).run(
+                                    call, trusted_local=args.trusted_local, sandboxed=args.sandbox)
+                            if model_requests:
+                                result['model_request_usage'] = model_requests.snapshot()
+                        finally:
+                            if model_requests:
+                                model_requests.close()
+                elif args.research_command == "run":
                     model_requests = None
-                    if args.autonomous_design:
+                    planning_client = None
+                    if research_controller.uses_registered_planning() and args.model:
+                        from .model_budget import ModelRequestBudget
+                        from .scoop import make_json_client
+                        model_requests = ModelRequestBudget(args.run_dir / 'planning-model-requests.sqlite',
+                            global_tokens=args.max_model_tokens, global_calls=args.max_model_calls,
+                            scope='registered-run', scope_tokens=args.max_model_tokens,
+                            scope_calls=args.max_model_calls, unknown_usage_policy='reserve')
+                        planning_client = make_json_client(args.base_url, args.model,
+                            args.run_dir / 'model-diagnostics', request_budget=model_requests)
+                    elif args.autonomous_design:
                         if not args.model or not args.base_url:
                             raise ProtocolError("自主设计需要可记账的模型端点")
                         if args.harness not in {None, "json_agent"}:
@@ -968,7 +1019,8 @@ def main(argv=None):
                     try:
                         result = research_controller.run(
                             args.trusted_local, args.sandbox, args.max_steps,
-                            args.auto_confirm, args.autonomous_code, autonomous_design=args.autonomous_design)
+                            args.auto_confirm, args.autonomous_code, autonomous_design=args.autonomous_design,
+                            planning_client=planning_client)
                         if model_requests is not None:
                             result["model_request_usage"] = model_requests.snapshot()
                     finally:

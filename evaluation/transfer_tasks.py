@@ -12,6 +12,9 @@ from popper.core import digest, read_json, write_json
 ROOT=Path(__file__).resolve().parents[1]
 DATA_SEED=20261009
 WINE_SHA='4a402cf041b025d4566d954c3b9ba8635a3a8a01e039005d97d6a710278cf05e'
+WINE_FEATURES=('fixed acidity','volatile acidity','citric acid','residual sugar',
+               'chlorides','free sulfur dioxide','total sulfur dioxide','density',
+               'pH','sulphates','alcohol')
 
 
 def wine_csv(cache):
@@ -96,8 +99,30 @@ def prepare(task, project, cache):
         'configurations':registered,'hypothesis_predictions':predictions,'hypothesis_contrasts':contrasts,
         'analysis_scopes':{'dev:slice:s1':'source-','dev:slice:s2':'independent-'} if task=='T02' else {},
         'primary_dev_prefix':'independent-' if task=='T02' else ''}
+    protocol['feature_schema']=[{'index':i,'name':name} for i,name in enumerate(
+        WINE_FEATURES if task=='T01' else [f'f{i}' for i in range(x.shape[1])])]
+    protocol['analysis_unit']={'kind':'input_group' if task=='T01' else 'independent_row',
+        'definition':('All rows with identical complete predictor vectors form one analysis unit'
+            if task=='T01' else 'One separately sampled row forms one paired analysis unit'),
+        'training_seeds_are_analysis_units':False}
+    protocol['scope_schema']=[
+        {'scope_id':'dev','label':'combined development environments' if task=='T02' else 'development units',
+         'role':'diagnostic' if task=='T02' else 'primary','split':'dev',
+         'applicability':'Registered development split used for candidate exploration'},
+        {'scope_id':'confirmation','label':'independent confirmation environment' if task=='T02' else 'confirmation units',
+         'role':'primary','split':'confirmation',
+         'applicability':'Registered held-out units; one protected confirmation after all selections freeze'}]
+    if task=='T02':
+        protocol['scope_schema'] += [
+            {'scope_id':'dev:slice:s1','label':'source development environment','role':'diagnostic','split':'dev',
+             'applicability':'Source environment; performance here does not establish independent-environment applicability'},
+            {'scope_id':'dev:slice:s2','label':'independent development environment','role':'primary','split':'dev',
+             'applicability':'Independent environment targeted by final candidate selection and confirmation'}]
+    protocol['confirmation_policy']={'schema':'selected_by_registered_dev_metric/v1',
+        'selection_metric':'candidate_mae','direction':'min','tie_break':'hypothesis_id'}
     write_json(project/'judgment-protocol.json',protocol)
     spec={'name':task,'objective':'Compare registered predictive interventions; verify the declared practical threshold and applicability on independent confirmation units.',
+        'metadata':{'planning_protocol':'research-runtime/v1'},
         'entrypoint':'model.py','code_files':['model.py','feature_map.py'],'train':'train.json','dev':'dev.json','test':'test.json',
         'baseline':baseline,'candidates':candidates,'metric':{'name':'mae','direction':'min'},'seeds':[17],'budget':4,
         'timeout_seconds':120,'min_improvement':.05,'provenance_files':['judgment-protocol.json']}
