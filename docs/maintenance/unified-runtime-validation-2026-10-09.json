@@ -1,0 +1,154 @@
+{
+  "schema": "unified-runtime-validation/v1",
+  "date": "2026-10-09",
+  "status": "offline_engineering_acceptance_passed",
+  "repository": "original_desktop_research_agent_v2",
+  "code_commits": ["1353ead", "8533779", "514558e", "ae82502", "add3810"],
+  "latest_code_commit": "add3810",
+  "source_freeze": {
+    "code_commit": "add3810f8a7e005ff69a6c943f1836be6c2dbef1",
+    "implementation_sha256": "8f315041ac3b597728d62f91899c2f12bcd77a9977910467e9ea0fc47eb0f110",
+    "implementation_files": 174,
+    "archive_sha256": "c553d6aaa8eec247feb988248fa7eec85fb92f291dac69d9be5a92ae198bd32e",
+    "archive_files": 668,
+    "archive_current_differences_at_freeze": [],
+    "legacy_ledger_hashes_rechecked": true
+  },
+  "remote_pushed": false,
+  "real_api_requests_this_stage": 0,
+  "history_rewritten": false,
+  "legacy_ledgers": {
+    "figs_30_call_budget": {
+      "unchanged": true,
+      "observed_sha256": "59c7629121bd81a7819a08f719f7ad71561873e8dfdf6d5de587ad8601feb131"
+    },
+    "transfer_95_real_sends": {
+      "unchanged": true,
+      "observed_sha256": "33fca29907e3afa861c554cc4d6b861ca3f7462e3dfc04b009569b9961a884b2"
+    }
+  },
+  "behavior_boundaries": {
+    "new_opt_in": "experiment.metadata.planning_protocol=research-runtime/v1",
+    "legacy_without_metadata": "preserve_original_behavior",
+    "comparison_schema": "paired-unit-ci/v2",
+    "metrics": ["mae", "mse"],
+    "direction": "min",
+    "artifact_verifiers": ["polynomial/v1"],
+    "analysis_units_not_training_seeds": true,
+    "revision_capability": "append_explanatory_text_only",
+    "numeric_or_scope_revision": "new_frozen_project_required",
+    "general_scientific_agent_capability_claim": false
+  },
+  "targeted_evidence": {
+    "adapter_and_unit_comparison": {"status": "passed", "passed": 20, "subtests_passed": 16},
+    "interrupted_comparison_and_authoritative_audit": {"status": "passed", "passed": 15, "audit_tamper_tests": 10},
+    "harness_order_regression_related": {"status": "passed", "passed": 33, "skipped": 1, "subtests_passed": 11},
+    "unseen_project": {
+      "status": "passed", "model_family": "polynomial", "metric": "mse", "model_seed": 23,
+      "primary_scope": "dev:slice:s9", "diagnostic_scope": "dev:slice:s7",
+      "public_runtime_and_confirmation": true, "repeated_confirmation_duplicate_runs": 0,
+      "frozen_generic_source_hashes_unchanged": true
+    },
+    "insufficient_units": {"status": "passed", "metric": "mae", "rows": 40, "independent_units": 20, "judgment": "inconclusive"}
+  },
+  "initial_full_regressions": {
+    "windows": {"status": "failed", "passed": 1629, "skipped": 44, "failed": 1, "subtests_passed": 759,
+      "raw_elapsed_seconds": 32758.15, "elapsed_includes_interruption_and_resume": true, "performance_analysis_eligible": false},
+    "linux": {"status": "failed", "passed": 1592, "skipped": 81, "failed": 1, "subtests_passed": 724, "raw_elapsed_seconds": 956.41},
+    "failure": {"category": "missing_harness_validation_order_regression", "repair": "completed", "original_failure_records_retained": true}
+  },
+  "retained_regression_rounds": [
+    {"code_commit": "514558e", "windows": {"status": "failed", "passed": 1641, "failed": 1, "skipped": 44, "subtests_passed": 758, "elapsed_seconds": 1169.38},
+     "linux": {"status": "failed", "passed": 1602, "failed": 3, "skipped": 81, "subtests_passed": 723, "elapsed_seconds": 715.44},
+     "failure_categories": ["premature_sse_terminal_check", "missing_sandbox_validation_priority", "windows_absolute_path_test_fixture_on_linux"]},
+    {"code_commit": "ae82502", "windows": {"status": "passed", "passed": 1641, "failed": 0, "skipped": 44, "subtests_passed": 759, "elapsed_seconds": 1161.89},
+     "linux": {"status": "failed", "passed": 1603, "failed": 1, "skipped": 81, "subtests_passed": 724, "elapsed_seconds": 748.80},
+     "failure_categories": ["wall_clock_causal_order_regression"]}
+  ],
+  "causal_order_repair": {
+    "code_commit": "add3810", "root_cause": "created_sort_after_98ms_wall_clock_rollback_inverted_parent_child_turn_order",
+    "authoritative_order": "durable_event_seq", "legacy_without_events": "read_only_rowid_order",
+    "original_timestamps_or_events_modified": false, "deterministic_old_implementation": "failed", "deterministic_new_implementation": "passed",
+    "windows_prefix": {"passed": 93}, "linux_prefix": {"passed": 93}
+  },
+  "previous_individual_gate_evidence": {
+    "linux_sandbox": {"status": "passed", "backend": "linux_bubblewrap", "native_filesystem": true, "non_root": true},
+    "docker": {"status": "passed", "non_root_entrypoint": true, "network_smoke": "none", "credential_or_confirmation_database_mounts": false},
+    "wheel_protocol_transport": {"status": "passed"},
+    "wheel_http_workbench": {"status": "passed", "assets": 19, "session_checked": true},
+    "wheel_sha256": "de0f2b0301045735c51530ddfc845a7a16423fe4fde765fa0cb9441414cb252c",
+    "latest_code_acceptance_eligible": false
+  },
+  "final_gates": {
+    "code_commit": "add3810",
+    "windows": {"status": "passed", "passed": 1646, "failed": 0, "errors": 0, "skipped": 44, "subtests_passed": 759,
+      "elapsed_seconds": 1275.82, "junit_records": 2449, "source_unchanged": true, "same_174_file_snapshot": true,
+      "receipt_sha256": "5a9e71304823fa00177bc4e187a15b37af4add36c1ac188817f9abefba2623da"},
+    "linux": {"status": "passed", "passed": 1610, "failed": 0, "errors": 0, "skipped": 80, "subtests_passed": 724,
+      "elapsed_seconds": 774.00, "uid": 1000, "native_filesystem": "ext4", "source_unchanged": true,
+      "same_174_file_snapshot": true, "receipt_sha256": "162b914cb376d2e1485e5471b3e4ec5fe7f88bc8464120b208a1ee3293df2290",
+      "skip_count_change": {"previous": 81, "current": 80, "reason": "historical_aggregate_available_for_test_doc_consistency_blind_report_fixture", "new_feature_metric": false}},
+    "linux_sandbox": {"status": "passed", "backend": "linux_bubblewrap", "native_filesystem": true, "non_root": true,
+      "evidence_directory": "/home/research-runner/unified-runtime-causal-sandbox-gates"},
+    "docker": {"status": "passed", "source_matches": true, "same_174_file_snapshot_as_sandbox": true,
+      "receipt_sha256": "a6126f648efedf4904298c8c7bf5e1b20e6f5c80ea8d89b21f1fd7e7d9ac84d9"},
+    "wheel_protocol_transport": {"status": "passed", "typed_stop_rejects_invalid_fields": true, "logical_operation_max_attempts": 2},
+    "wheel_http_workbench": {"status": "passed", "assets": 19, "asset_content_checked": true, "session_checked": true},
+    "wheel_cli": {"status": "passed"},
+    "wheel_install": {"status": "passed", "isolated_imports_verified": true,
+      "pydantic_version": "2.14.0", "pydantic_core_version": "2.50.0",
+      "installed_source_files_matched": 168, "packaged_assets": 19, "packaged_demo_files": 10,
+      "core_snapshot_matches": true, "snapshot_before_equals_after": true,
+      "receipt": ".acceptance/causal-wheel-smoke/validation.json"},
+    "wheel_sha256": "c0a18b28a7d03dc3493cd697c8872f31628977e3664ed3f797f86ebcda460085",
+    "windows_evidence_directory": ".acceptance/unified-runtime-causal-gates",
+    "linux_evidence_directory": "/home/research-runner/unified-runtime-causal-gates"
+  },
+  "final_integrity": {
+    "status": "passed", "receipt": ".acceptance/unified-runtime-causal-gates/final-integrity.json",
+    "four_platform_gates_match_same_174_file_snapshot": true, "wheel_before_after_match_frozen_core": true,
+    "archive_668_file_differences": [], "legacy_ledger_hashes_unchanged": true,
+    "overlay_same_code_commit": true, "overlay_168_package_hashes_equal_across_platforms": true,
+    "real_api_requests": 0
+  },
+  "retained_skip_groups": {
+    "windows": {"total": 44, "langgraph_optional_dependency": 36, "conpty_pywinpty": 3,
+      "ttc_font_fixture_not_available": 1, "symlink_privileges": 1, "inapplicable_oserror_branch_with_available_backend": 2,
+      "linux_bubblewrap_only": 1},
+    "linux": {"total": 80, "langgraph_optional_dependency": 36, "windows_only_platform_cases": 27,
+      "external_vendor_source_and_worker_unavailable": 15, "inapplicable_oserror_branch_with_available_backend": 2},
+    "langgraph_36_nodes_supplemented_per_platform": true, "main_skips_rewritten_as_passed": false
+  },
+  "orchestration_overlay": {
+    "status": "passed", "langgraph_paths_targeted_per_platform": 36,
+    "main_environment_skips_preserved": true, "base_environment_mutated": false,
+    "shared_production_files": 168, "shared_source_hashes_equal": true, "real_api_calls": 0,
+    "receipt": ".acceptance/unified-runtime-causal-orchestration/final-summary.json",
+    "windows": {"passed": 90, "subtests_passed": 4, "failed": 0, "skipped": 0, "elapsed_seconds": 85.52, "previously_skipped_nodes_passed": 36},
+    "linux": {"passed": 90, "subtests_passed": 4, "failed": 0, "skipped": 0, "elapsed_seconds": 50.85, "previously_skipped_nodes_passed": 36},
+    "installed_versions": {"langgraph": "1.2.14", "langgraph-checkpoint": "4.2.0", "langgraph-checkpoint-sqlite": "3.1.1", "langchain-core": "1.6.9", "pydantic": "2.14.0"},
+    "graph_per_platform": {"runs": 5, "observations": 11, "replay_added_runs": 0, "replay_added_observations": 0,
+      "test_consumptions": 1, "checkpoint_and_store_integrity": true, "windows_mode": "trusted_local", "linux_mode": "sandboxed", "real_api_calls": 0},
+    "supplement_counts_added_to_main_suite": false, "production_failures_in_supplement": 0,
+    "helper_target_and_assertion_repairs": "retained_tooling_events_only"
+  },
+  "issue_status": {
+    "fixed_with_targeted_validation": [
+      "single_typed_action_definition_and_original_store_authority",
+      "two_attempts_shared_deadline_and_cancellable_lifecycle",
+      "partial_evidence_recovery_and_idempotent_confirmation",
+      "durable_event_sequence_instead_of_wall_clock_causal_order",
+      "declared_scope_and_independent_unit_preflight",
+      "authoritative_identity_metric_assessment_and_failure_denominator_audit"
+    ],
+    "external_limitations": ["unrecoverable_historical_usage_remains_unknown_with_conservative_reservation"],
+    "unfinished": ["real_qwen_post_refactor_evaluation"],
+    "unsupported_scope": ["arbitrary_metrics", "arbitrary_model_serialization", "arbitrary_scientific_domains"],
+    "eventual_acceptance_label": "completed_offline_engineering_acceptance_only"
+  },
+  "not_yet_verified": [
+    "real_model_performance_after_refactor",
+    "generalization_beyond_declared_metrics_and_artifact_verifier",
+    "remaining_platform_data_and_optional_dependency_skips_outside_orchestration_supplement"
+  ]
+}
