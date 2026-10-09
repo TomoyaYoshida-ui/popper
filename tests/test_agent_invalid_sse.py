@@ -121,7 +121,11 @@ def test_tool_detail_scope_and_explicit_paging(tmp_path):
             ws._tool_result_for_call(tmp_path, call)
 
 
-def test_sse_correction_separate_revision_approvals_and_real_job(tmp_path, monkeypatch):
+@pytest.mark.parametrize('clock_rollback',[False,True])
+def test_sse_correction_separate_revision_approvals_and_real_job(tmp_path, monkeypatch,clock_rollback):
+    clock={'value':'2026-10-09T02:36:01.100000+00:00'}
+    if clock_rollback:
+        monkeypatch.setattr('popper.sessions._now',lambda:clock['value'])
     project, run = tmp_path / "project", tmp_path / "research"
     project.mkdir()
     example = Path(__file__).resolve().parents[1] / "examples" / "quadratic"
@@ -155,6 +159,10 @@ def test_sse_correction_separate_revision_approvals_and_real_job(tmp_path, monke
             finally:
                 store.close()
             count = len(requests)
+            if clock_rollback and count==3:
+                clock['value']='2026-10-09T02:36:01.507008+00:00'
+            elif clock_rollback and count==4:
+                clock['value']='2026-10-09T02:36:01.409008+00:00'
             if count == 1:
                 name, args = "research_revision_create", {**spec, "approval_sha256": "bad-digest"}
             elif count == 2:
@@ -218,6 +226,11 @@ def test_sse_correction_separate_revision_approvals_and_real_job(tmp_path, monke
         try:
             final_turn = store.turns(identity["session_id"])[-1]
             assert final_turn["status"] == "completed", final_turn.get("error")
+            if clock_rollback:
+                turns=store.turns(identity['session_id'])
+                assert turns[4]['parent_turn_id']==turns[3]['turn_id']
+                assert turns[4]['created']<turns[3]['created']
+                assert len(turns)==6
         finally:
             store.close()
         assert len(requests) == 6

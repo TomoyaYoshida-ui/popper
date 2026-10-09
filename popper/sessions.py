@@ -1537,12 +1537,20 @@ class AgentSessionStore:
 
     def queued_agent_jobs(self):
         return [self._decode_job(row) for row in self._conn.execute(
-            "SELECT * FROM agent_jobs WHERE status='queued' ORDER BY created,job_id")]
+            "SELECT j.* FROM agent_jobs j LEFT JOIN "
+            "(SELECT turn_id,MIN(seq) AS started FROM turn_events "
+            "WHERE kind='turn.started' GROUP BY turn_id) e ON e.turn_id=j.turn_id "
+            "WHERE j.status='queued' ORDER BY e.started IS NOT NULL,"
+            "COALESCE(e.started,j.rowid),j.rowid")]
 
     def agent_jobs(self, session_id):
         self.get_session(session_id)
         return [self._decode_job(row) for row in self._conn.execute(
-            "SELECT * FROM agent_jobs WHERE session_id=? ORDER BY created,job_id",
+            "SELECT j.* FROM agent_jobs j LEFT JOIN "
+            "(SELECT turn_id,MIN(seq) AS started FROM turn_events "
+            "WHERE kind='turn.started' GROUP BY turn_id) e ON e.turn_id=j.turn_id "
+            "WHERE j.session_id=? ORDER BY e.started IS NOT NULL,"
+            "COALESCE(e.started,j.rowid),j.rowid",
             (session_id,))]
 
     def usage_summary(self, session_id):
@@ -1722,9 +1730,20 @@ class AgentSessionStore:
         return self.get_agent_job(job_id)
 
     def turns(self, session_id):
+        """Return causal creation order; wall-clock labels are display metadata.
+
+        Existing started-event sequence numbers are immutable across completion,
+        retries, restart and clock rollback. Pre-event legacy rows retain their
+        insertion order and precede event-backed turns without rewriting history.
+        Turns and jobs use INSERT then UPDATE, never replacement of these rows.
+        """
         self.get_session(session_id)
         return [self._decode_turn(row) for row in self._conn.execute(
-            "SELECT * FROM turns WHERE session_id=? ORDER BY created,turn_id", (session_id,))]
+            "SELECT t.* FROM turns t LEFT JOIN "
+            "(SELECT turn_id,MIN(seq) AS started FROM turn_events "
+            "WHERE kind='turn.started' GROUP BY turn_id) e ON e.turn_id=t.turn_id "
+            "WHERE t.session_id=? ORDER BY e.started IS NOT NULL,"
+            "COALESCE(e.started,t.rowid),t.rowid", (session_id,))]
 
     def turn_events(self, session_id, *, after=0, limit=200):
         self.get_session(session_id)
@@ -1934,7 +1953,10 @@ class AgentSessionStore:
         if not integrity["ok"]:
             raise ProtocolError(integrity["reason"])
         return [self._decode_tool_call(row) for row in self._conn.execute(
-            "SELECT * FROM tool_calls WHERE session_id=? ORDER BY created,call_id",
+            "SELECT t.* FROM tool_calls t LEFT JOIN "
+            "(SELECT call_id,MIN(seq) AS proposed FROM tool_events GROUP BY call_id) e "
+            "ON e.call_id=t.call_id WHERE t.session_id=? ORDER BY e.proposed IS NOT NULL,"
+            "COALESCE(e.proposed,t.rowid),t.rowid",
             (session_id,))]
 
     def running_tool_calls(self):
@@ -1942,7 +1964,10 @@ class AgentSessionStore:
         if not integrity["ok"]:
             raise ProtocolError(integrity["reason"])
         return [self._decode_tool_call(row) for row in self._conn.execute(
-            "SELECT * FROM tool_calls WHERE status='running' ORDER BY created,call_id")]
+            "SELECT t.* FROM tool_calls t LEFT JOIN "
+            "(SELECT call_id,MIN(seq) AS proposed FROM tool_events GROUP BY call_id) e "
+            "ON e.call_id=t.call_id WHERE t.status='running' ORDER BY e.proposed IS NOT NULL,"
+            "COALESCE(e.proposed,t.rowid),t.rowid")]
 
     def propose_tool_call(self, session_id, turn_id, tool_name, arguments, risk,
                           idempotency_key, *, actor, trace_id):
