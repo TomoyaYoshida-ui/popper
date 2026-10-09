@@ -1,0 +1,963 @@
+{
+  "schema": "transfer-v2-staged-reproduction/v1",
+  "date": "2026-10-09",
+  "purpose": "Same-task validation of the frozen shared-runtime implementation; not a new migration dataset",
+  "protocol_schema": "transfer-pilot/v2",
+  "planning_protocol": "research-runtime/v1",
+  "protocol_sha256": "776a416b505426f524084d01a8c7b6a5ea9652f52f634c0f7eaa7516a0ac28f1",
+  "source": {
+    "commit": "e7231fe5eca9654564c53dc634329807a5fab70a",
+    "implementation_sha256": "8f315041ac3b597728d62f91899c2f12bcd77a9977910467e9ea0fc47eb0f110",
+    "implementation_files": 174,
+    "fingerprint_rule": "sha256 of UTF-8 canonical JSON mapping relative source paths to file SHA-256; sorted keys and compact separators"
+  },
+  "credentials": {
+    "environment_variable": "POPPER_API_KEY",
+    "value_included": false
+  },
+  "provider": {
+    "base_url": "https://maas.qianwenaiapi.com/compatible-mode/v1",
+    "model": "qwen3.8-flash"
+  },
+  "tasks": [
+    {
+      "task": "T01",
+      "rows": 1599,
+      "features": 11,
+      "excluded_feature": 10,
+      "split_rows": {
+        "dev": 317,
+        "test": 318,
+        "train": 964
+      },
+      "split_groups": {
+        "dev": 272,
+        "test": 272,
+        "train": 815
+      },
+      "protocol_sha256": "c973d5e877a08a5d53d6bf45d9b638729d5093d44043a07d8efa05c08494745a",
+      "raw_source_sha256": "4a402cf041b025d4566d954c3b9ba8635a3a8a01e039005d97d6a710278cf05e",
+      "artifact_sha256": {
+        "dev.json": "fe3d7f7acc3a0408ce3cca96cb31e4e75b4e4524c72221e4dbdf6343f4898ada",
+        "experiment.json": "51eae9d5752712627f5d933840eb50e8d01e94b30e8010285494839b82009fd6",
+        "feature_map.py": "6e42f4f18b4e940b94880cfa44f72d96e8deb007aab027035cf2c29feda0cc8b",
+        "judgment-protocol.json": "80b4121d2046707622c221c4dea9983e0908f74cdf2bae299c7d62ae7c664b66",
+        "model.py": "3bb825827f3c92a14fc97ee963ee0c8d70a1b51dcdb3b52a020b360a33fa09f3",
+        "test.json": "077a3243fb88337192874c8c64e468bd7db5e9153b7baaa667905aaa0867617a",
+        "train.json": "936fd4fafab4cc8ba29463f656273e4c4e6aace61559288e0fa91c2cd7589212"
+      },
+      "baseline": {
+        "features": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "kind": "cart",
+        "max_rules": 12,
+        "min_samples_leaf": 1
+      },
+      "candidates": [
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "kind": "figs_single",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "kind": "figs_multi",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 5
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 10
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "kind": "figs_single",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "kind": "figs_multi",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 5
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 10
+        }
+      ],
+      "feature_schema": [
+        {
+          "index": 0,
+          "name": "fixed acidity"
+        },
+        {
+          "index": 1,
+          "name": "volatile acidity"
+        },
+        {
+          "index": 2,
+          "name": "citric acid"
+        },
+        {
+          "index": 3,
+          "name": "residual sugar"
+        },
+        {
+          "index": 4,
+          "name": "chlorides"
+        },
+        {
+          "index": 5,
+          "name": "free sulfur dioxide"
+        },
+        {
+          "index": 6,
+          "name": "total sulfur dioxide"
+        },
+        {
+          "index": 7,
+          "name": "density"
+        },
+        {
+          "index": 8,
+          "name": "pH"
+        },
+        {
+          "index": 9,
+          "name": "sulphates"
+        },
+        {
+          "index": 10,
+          "name": "alcohol"
+        }
+      ],
+      "analysis_unit": {
+        "definition": "All rows with identical complete predictor vectors form one analysis unit",
+        "kind": "input_group",
+        "training_seeds_are_analysis_units": false
+      },
+      "scope_schema": [
+        {
+          "applicability": "Registered development split used for candidate exploration",
+          "label": "development units",
+          "role": "primary",
+          "scope_id": "dev",
+          "split": "dev"
+        },
+        {
+          "applicability": "Registered held-out units; one protected confirmation after all selections freeze",
+          "label": "confirmation units",
+          "role": "primary",
+          "scope_id": "confirmation",
+          "split": "confirmation"
+        }
+      ],
+      "primary_dev_prefix": "",
+      "confirmation_policy": {
+        "direction": "min",
+        "schema": "selected_by_registered_dev_metric/v1",
+        "selection_metric": "candidate_mae",
+        "tie_break": "hypothesis_id"
+      }
+    },
+    {
+      "task": "T02",
+      "rows": 1400,
+      "features": 3,
+      "excluded_feature": 2,
+      "split_rows": {
+        "dev": 400,
+        "test": 400,
+        "train": 600
+      },
+      "split_groups": {
+        "dev": 400,
+        "test": 400,
+        "train": 600
+      },
+      "protocol_sha256": "071134218adc25f4b1175b93b359ef6884ce9a38d6ee624ff7be1d95f49d775a",
+      "raw_source_sha256": null,
+      "artifact_sha256": {
+        "dev.json": "15ccf366f984f0127984baf796901e4977be0df7abd042667c3b2fc1734a5ec7",
+        "experiment.json": "301a64a37410100ffef8f83aad93bcba62618030f4619561a9fa7d6ab758a379",
+        "feature_map.py": "9a1b7d2447c6f33cab056b4fd65bc04f4beb2c757f67e10ca3804fe767a2e401",
+        "judgment-protocol.json": "a4fa4a4bfd3969d98a0379c3a443571411af4cb910d8feecaf5417495a4db1ac",
+        "model.py": "3bb825827f3c92a14fc97ee963ee0c8d70a1b51dcdb3b52a020b360a33fa09f3",
+        "test.json": "66add25a64229bb5b69342645ffe4d8d5eb56ef38b861ecddcb1ce6b87bb1eb4",
+        "train.json": "b6ef768a8c5a6d327874241994838ab3cc3252edbfc45cf9bc8cfdeeceb26c62"
+      },
+      "baseline": {
+        "features": [
+          0,
+          1,
+          2
+        ],
+        "kind": "cart",
+        "max_rules": 12,
+        "min_samples_leaf": 1
+      },
+      "candidates": [
+        {
+          "features": [
+            0,
+            1,
+            2
+          ],
+          "kind": "figs_single",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2
+          ],
+          "kind": "figs_multi",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 5
+        },
+        {
+          "features": [
+            0,
+            1,
+            2
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 10
+        },
+        {
+          "features": [
+            0,
+            1
+          ],
+          "kind": "figs_single",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1
+          ],
+          "kind": "figs_multi",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 5
+        },
+        {
+          "features": [
+            0,
+            1
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 10
+        }
+      ],
+      "feature_schema": [
+        {
+          "index": 0,
+          "name": "f0"
+        },
+        {
+          "index": 1,
+          "name": "f1"
+        },
+        {
+          "index": 2,
+          "name": "f2"
+        }
+      ],
+      "analysis_unit": {
+        "definition": "One separately sampled row forms one paired analysis unit",
+        "kind": "independent_row",
+        "training_seeds_are_analysis_units": false
+      },
+      "scope_schema": [
+        {
+          "applicability": "Registered development split used for candidate exploration",
+          "label": "combined development environments",
+          "role": "diagnostic",
+          "scope_id": "dev",
+          "split": "dev"
+        },
+        {
+          "applicability": "Registered held-out units; one protected confirmation after all selections freeze",
+          "label": "independent confirmation environment",
+          "role": "primary",
+          "scope_id": "confirmation",
+          "split": "confirmation"
+        },
+        {
+          "applicability": "Source environment; performance here does not establish independent-environment applicability",
+          "label": "source development environment",
+          "role": "diagnostic",
+          "scope_id": "dev:slice:s1",
+          "split": "dev"
+        },
+        {
+          "applicability": "Independent environment targeted by final candidate selection and confirmation",
+          "label": "independent development environment",
+          "role": "primary",
+          "scope_id": "dev:slice:s2",
+          "split": "dev"
+        }
+      ],
+      "primary_dev_prefix": "independent-",
+      "confirmation_policy": {
+        "direction": "min",
+        "schema": "selected_by_registered_dev_metric/v1",
+        "selection_metric": "candidate_mae",
+        "tie_break": "hypothesis_id"
+      }
+    },
+    {
+      "task": "T03",
+      "rows": 1400,
+      "features": 11,
+      "excluded_feature": 10,
+      "split_rows": {
+        "dev": 400,
+        "test": 400,
+        "train": 600
+      },
+      "split_groups": {
+        "dev": 400,
+        "test": 400,
+        "train": 600
+      },
+      "protocol_sha256": "4ad528b2e6e5d664a096d0995c3001d5ccc65bc776de064f89700e6df7b46b16",
+      "raw_source_sha256": null,
+      "artifact_sha256": {
+        "dev.json": "507af1f24c71ecec0ad7a493c0604e7df9b77b715f7fcedc5ab264e389502d31",
+        "experiment.json": "305de0e2fc1936665fdee079cdfc5789be2508829627fa9b28180c2ac61c2e95",
+        "feature_map.py": "38ca60c290c81688bb8bb4eb3867482e42d3a8fa14961619a52beef0eb984379",
+        "judgment-protocol.json": "2f333e6e0b2b625a10687525adcae849f165c9b1fb3dbeb0eed29f4c8ac1f91b",
+        "model.py": "3bb825827f3c92a14fc97ee963ee0c8d70a1b51dcdb3b52a020b360a33fa09f3",
+        "test.json": "d73ec00899f28fa07668467bf322c616b000a4b869ff633661db7ffac2053968",
+        "train.json": "ae7f0fb9ac828be39058b3de34a9ce63b462bf0343452f1f7bb5f055f50c8608"
+      },
+      "baseline": {
+        "features": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        "kind": "zero",
+        "max_rules": 12,
+        "min_samples_leaf": 1
+      },
+      "candidates": [
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "kind": "figs_single",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "kind": "figs_multi",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 5
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 10
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "kind": "figs_single",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "kind": "figs_multi",
+          "max_rules": 12,
+          "min_samples_leaf": 1
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 5
+        },
+        {
+          "features": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "kind": "cart",
+          "max_rules": 12,
+          "min_samples_leaf": 10
+        }
+      ],
+      "feature_schema": [
+        {
+          "index": 0,
+          "name": "f0"
+        },
+        {
+          "index": 1,
+          "name": "f1"
+        },
+        {
+          "index": 2,
+          "name": "f2"
+        },
+        {
+          "index": 3,
+          "name": "f3"
+        },
+        {
+          "index": 4,
+          "name": "f4"
+        },
+        {
+          "index": 5,
+          "name": "f5"
+        },
+        {
+          "index": 6,
+          "name": "f6"
+        },
+        {
+          "index": 7,
+          "name": "f7"
+        },
+        {
+          "index": 8,
+          "name": "f8"
+        },
+        {
+          "index": 9,
+          "name": "f9"
+        },
+        {
+          "index": 10,
+          "name": "f10"
+        }
+      ],
+      "analysis_unit": {
+        "definition": "One separately sampled row forms one paired analysis unit",
+        "kind": "independent_row",
+        "training_seeds_are_analysis_units": false
+      },
+      "scope_schema": [
+        {
+          "applicability": "Registered development split used for candidate exploration",
+          "label": "development units",
+          "role": "primary",
+          "scope_id": "dev",
+          "split": "dev"
+        },
+        {
+          "applicability": "Registered held-out units; one protected confirmation after all selections freeze",
+          "label": "confirmation units",
+          "role": "primary",
+          "scope_id": "confirmation",
+          "split": "confirmation"
+        }
+      ],
+      "primary_dev_prefix": "",
+      "confirmation_policy": {
+        "direction": "min",
+        "schema": "selected_by_registered_dev_metric/v1",
+        "selection_metric": "candidate_mae",
+        "tie_break": "hypothesis_id"
+      }
+    }
+  ],
+  "task_ids": [
+    "T01",
+    "T02",
+    "T03"
+  ],
+  "strategies": [
+    "fixed_queue",
+    "generic_iteration",
+    "evidence_driven"
+  ],
+  "repeats": 3,
+  "repeats_are_independent_datasets": false,
+  "general_superiority_claimed": false,
+  "seeds": {
+    "data": 20261009,
+    "bootstrap": 20261009,
+    "model": 17
+  },
+  "comparison": {
+    "schema": "paired-unit-ci/v1",
+    "metric": "mae",
+    "effect": "relative_mae_improvement",
+    "aggregation": "equal_analysis_unit_mean_mae",
+    "bootstrap_samples": 10000,
+    "confidence": 0.95,
+    "minimum_units": 30,
+    "training_seeds_are_analysis_units": false,
+    "prediction": {
+      "operator": "gt",
+      "threshold": 0.05
+    },
+    "competing_prediction": {
+      "operator": "between",
+      "threshold": [
+        -0.05,
+        0.05
+      ]
+    }
+  },
+  "candidates": {
+    "count_per_task": 8,
+    "max_rules": 12,
+    "models": [
+      "figs_single",
+      "figs_multi",
+      "cart_min_samples_leaf_5",
+      "cart_min_samples_leaf_10"
+    ],
+    "feature_options": [
+      "all_features",
+      "preregistered_exclusion"
+    ],
+    "max_development_executions_per_cell": 4
+  },
+  "budget": {
+    "ledger_policy": "one new ledger shared by both stages; do not reuse or modify legacy ledgers",
+    "global_calls": 180,
+    "global_tokens": 5000000,
+    "model_cell_calls": 9,
+    "model_cell_tokens": 250000,
+    "preflight_calls": 6,
+    "preflight_tokens": 100000,
+    "calls_include_retries_and_format_repair": true,
+    "unknown_usage_policy": "reserve",
+    "smoke_call_upper_bound": 24,
+    "smoke_token_upper_bound": 600000,
+    "scope_budgets_are_hard_limits_not_targets": true
+  },
+  "stages": [
+    {
+      "stage": "smoke",
+      "command_argv": [
+        "python",
+        "evaluation/run_transfer_pilot.py",
+        "run",
+        "--out",
+        "<fresh_local_run>",
+        "--limit",
+        "3"
+      ],
+      "development_cells": [
+        {
+          "candidate_order": [
+            4,
+            5,
+            0,
+            2,
+            1,
+            7,
+            6,
+            3
+          ],
+          "id": "T01-generic_iteration-r0",
+          "repeat": 0,
+          "strategy": "generic_iteration",
+          "task": "T01"
+        },
+        {
+          "candidate_order": [
+            4,
+            5,
+            0,
+            2,
+            1,
+            7,
+            6,
+            3
+          ],
+          "id": "T01-fixed_queue-r0",
+          "repeat": 0,
+          "strategy": "fixed_queue",
+          "task": "T01"
+        },
+        {
+          "candidate_order": [
+            4,
+            5,
+            0,
+            2,
+            1,
+            7,
+            6,
+            3
+          ],
+          "id": "T03-evidence_driven-r0",
+          "repeat": 0,
+          "strategy": "evidence_driven",
+          "task": "T03"
+        }
+      ],
+      "planned_denominator": 27,
+      "confirmation_allowed": false,
+      "expected_driver_status": "incomplete",
+      "execution_status": "finished_with_failed_gate"
+    },
+    {
+      "stage": "independent_smoke_gate",
+      "command_argv": [
+        "python",
+        "evaluation/verify_transfer_pilot.py",
+        "--out",
+        "<same_local_run>"
+      ],
+      "require_separate_gate_record": true,
+      "gate_status_until_verified": "superseded_by_failed_gate",
+      "permit_paid_continuation_automatically": false,
+      "gate_status": "failed"
+    },
+    {
+      "stage": "full_cohort",
+      "command_argv": [
+        "python",
+        "evaluation/run_transfer_pilot.py",
+        "run",
+        "--out",
+        "<same_local_run>"
+      ],
+      "requires": [
+        "independent_smoke_gate_passed",
+        "same_protocol_and_source",
+        "same_ledger",
+        "no_stop_condition"
+      ],
+      "planned_denominator": 27,
+      "confirmation_barrier": "all 27 candidate selections and agent assessments frozen before any confirmation",
+      "execution_status": "not_started_gate_failed",
+      "current_run_continuation_allowed": false
+    }
+  ],
+  "resume": {
+    "authority": "ResearchStore durable runtime and experiment receipts",
+    "json_reports_are_projections": true,
+    "source_or_protocol_change": "freeze a separate new run; never mix historical cells",
+    "ambiguous_request": "block repeated sending",
+    "terminal_failed_planner": "retain failure rather than retry to success",
+    "elapsed_policy": "preserve each completed stage snapshot and sum actual phase increments; exclude cached replay elapsed overwrites",
+    "infrastructure_streak_policy": "stage boundary independent gate must preserve cumulative stop assessment because driver counter is invocation-local",
+    "current_run_policy": "Closed after failed independent smoke gate; do not retry the failed cell, expand the cohort, or open confirmation"
+  },
+  "environment_receipts": {
+    "windows": {
+      "original_receipt_sha256": "5a9e71304823fa00177bc4e187a15b37af4add36c1ac188817f9abefba2623da",
+      "relocated_receipt_sha256": "bc41e7f9e555191293f65863e79ce0207c3d18eda10c42ac9a0a63958a627fca",
+      "original_source": "local_execution_manifest.environment_receipts.windows",
+      "source_artifact": "local_original_environment_receipt.windows",
+      "receipt_relocation": "artifact paths relocated only; original receipt hash retained"
+    },
+    "linux": {
+      "original_receipt_sha256": "162b914cb376d2e1485e5471b3e4ec5fe7f88bc8464120b208a1ee3293df2290",
+      "relocated_receipt_sha256": "69e5344f3fa36726d3376a81fcf9bc44c53ee31ff99124f333f44b25cd476caa",
+      "original_source": "local_execution_manifest.environment_receipts.linux",
+      "source_artifact": "local_original_environment_receipt.linux",
+      "receipt_relocation": "artifact paths relocated only; original receipt hash retained"
+    },
+    "linux-sandbox": {
+      "original_receipt_sha256": "00027cb06735e2dd91e786b84597342a44fdf68704c952c62f4796a42573738b",
+      "relocated_receipt_sha256": "693ad83b1043f435ae9362ceef0d38ea161f4ba0d97896a498e0d5d337edb58d",
+      "original_source": "local_execution_manifest.environment_receipts.linux-sandbox",
+      "source_artifact": "local_original_environment_receipt.linux-sandbox",
+      "receipt_relocation": "artifact paths relocated only; original receipt hash retained"
+    },
+    "docker": {
+      "original_receipt_sha256": "a6126f648efedf4904298c8c7bf5e1b20e6f5c80ea8d89b21f1fd7e7d9ac84d9",
+      "relocated_receipt_sha256": "a11653027debb56152ff84108e3af1a6ee1a279b56bdd0c6b59e216880688f90",
+      "original_source": "local_execution_manifest.environment_receipts.docker",
+      "source_artifact": "local_original_environment_receipt.docker",
+      "receipt_relocation": "artifact paths relocated only; original receipt hash retained"
+    }
+  },
+  "privacy": {
+    "raw_trace_included": false,
+    "datasets_included": false,
+    "database_included": false,
+    "oracle_included": false,
+    "absolute_run_paths_included": false
+  },
+  "execution_result": {
+    "status": "stopped_after_smoke_gate_failure",
+    "smoke_gate": "failed",
+    "full_stage_started": false,
+    "confirmation_opened": false,
+    "failed_cell_retried": false,
+    "production_source_modified": false,
+    "remote_pushed": false,
+    "independent_gate_sha256": "65800d5fe7e8ee62f13ca47bbdc754feb70f2460c282150fa209529049d34d11",
+    "stage_stop_sha256": "3486d4dbf6afa5945080db6f5ad279c77ed10cac57544bab91c8984a8a6ff99f",
+    "distinct_failed_cells": 1,
+    "failed_gate_checks": 3,
+    "checks_describe_same_failure": true
+  },
+  "observed_stage_elapsed_seconds": 272.281,
+  "observed_usage": {
+    "ledger_attempts": 10,
+    "real_requests": 9,
+    "not_sent_attempts": 1,
+    "known_tokens": 51932,
+    "unresolved_reserved_tokens": 0,
+    "accounted_tokens": 51932,
+    "unknown_usage_attempts": 0,
+    "reserved_attempts": 0,
+    "real_sends_settlement": "all nine real sends are settled with provider-reported known usage",
+    "not_sent_reason": "connect_timeout",
+    "not_sent_retry_outcome": "succeeded",
+    "maximum_attempts_per_logical_request": 2,
+    "zero_cost_inferred_from_missing_usage": false
+  }
+}

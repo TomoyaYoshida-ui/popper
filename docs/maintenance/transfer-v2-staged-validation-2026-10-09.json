@@ -1,0 +1,338 @@
+{
+  "schema": "transfer-v2-staged-validation/v1",
+  "date": "2026-10-09",
+  "status": "stopped_after_smoke_gate_failure",
+  "protocol_sha256": "776a416b505426f524084d01a8c7b6a5ea9652f52f634c0f7eaa7516a0ac28f1",
+  "source_commit": "e7231fe5eca9654564c53dc634329807a5fab70a",
+  "implementation_sha256": "8f315041ac3b597728d62f91899c2f12bcd77a9977910467e9ea0fc47eb0f110",
+  "implementation_files": 174,
+  "purpose": "same_task_shared_runtime_validation",
+  "new_migration_result_claimed": false,
+  "general_superiority_claimed": false,
+  "repeats_are_independent_datasets": false,
+  "planned_denominator": 27,
+  "group_denominator": 3,
+  "report_is_not_recovery_authority": true,
+  "smoke": {
+    "status": "failed_gate",
+    "cell_ids": [
+      "T01-generic_iteration-r0",
+      "T01-fixed_queue-r0",
+      "T03-evidence_driven-r0"
+    ],
+    "coverage": {
+      "strategies": [
+        "generic_iteration",
+        "fixed_queue",
+        "evidence_driven"
+      ],
+      "tasks": [
+        "T01",
+        "T03"
+      ],
+      "T02_covered": false
+    },
+    "driver_complete_cohort_expected": false,
+    "confirmation_started": false,
+    "real_request_cap": 24,
+    "token_cap": 600000,
+    "observed_usage": {
+      "ledger_attempts": 10,
+      "real_requests": 9,
+      "not_sent_attempts": 1,
+      "known_tokens": 51932,
+      "unresolved_reserved_tokens": 0,
+      "accounted_tokens": 51932,
+      "unknown_usage_attempts": 0,
+      "reserved_attempts": 0,
+      "real_sends_settlement": "all nine real sends are settled with provider-reported known usage",
+      "not_sent_reason": "connect_timeout",
+      "not_sent_retry_outcome": "succeeded",
+      "maximum_attempts_per_logical_request": 2,
+      "zero_cost_inferred_from_missing_usage": false
+    },
+    "independent_audit": {
+      "schema": "independent-first-batch-audit/v1",
+      "status": "failed",
+      "expansion_allowed": false,
+      "science_records_unchanged_by_audit": true,
+      "unknown_send_states": 0,
+      "failed_check_count": 3,
+      "distinct_failed_cell_count": 1,
+      "strategy_comparison_permitted": false,
+      "confirmation_channel_opened": false
+    },
+    "gate": {
+      "status": "failed",
+      "continue_allowed": false,
+      "failure": "One T03 evidence-driven planner failure after two completed experiments",
+      "independent_audit_completed": true,
+      "audit_artifact": "independent-first-batch-audit.json",
+      "audit_sha256": "65800d5fe7e8ee62f13ca47bbdc754feb70f2460c282150fa209529049d34d11",
+      "diagnosis_sha256": "5fabab4c59b44ccb8b2f1dfddf8a789e8a86b39916a742e83603078eeb829d6b",
+      "stop_artifact": "stage-stop.json",
+      "stop_sha256": "3486d4dbf6afa5945080db6f5ad279c77ed10cac57544bab91c8984a8a6ff99f",
+      "failed_cell_count": 1,
+      "failed_check_count": 3,
+      "failed_checks_are_same_incident": true
+    },
+    "stage_elapsed_snapshot": {
+      "elapsed_seconds": 272.281,
+      "cached_replay": false
+    },
+    "driver_exit_code": 0,
+    "driver_report_status": "incomplete",
+    "finished_development_cells": 3,
+    "completed_development_cells": 2,
+    "failed_development_cells": 1,
+    "cells": [
+      {
+        "cell_id": "T01-generic_iteration-r0",
+        "planner_status": "stopped",
+        "development_status": "completed",
+        "development_experiments": 4,
+        "confirmation_status": "not_started"
+      },
+      {
+        "cell_id": "T01-fixed_queue-r0",
+        "planner_status": "stopped",
+        "development_status": "completed",
+        "development_experiments": 4,
+        "confirmation_status": "not_started"
+      },
+      {
+        "cell_id": "T03-evidence_driven-r0",
+        "planner_status": "failed",
+        "development_status": "partial",
+        "development_experiments": 2,
+        "confirmation_status": "not_started",
+        "failure_category": "planner_or_execution_failure",
+        "verified_experiments_preserved": true,
+        "verified_judgments_preserved": true,
+        "finalist_preserved": true,
+        "final_agent_assessment": "not_evaluated",
+        "existing_agent_assessment": {
+          "judgment": "refuted",
+          "trust": "unverified",
+          "subject": "first executed candidate rather than final selected candidate"
+        }
+      }
+    ],
+    "integrity_recomputation": {
+      "status": "passed",
+      "planned": 27,
+      "not_started_cells": 24,
+      "interpretation": "Existing verifier recomputation passed; the independent execution and expansion gate failed",
+      "confirmation_completed": 0
+    }
+  },
+  "full_cohort": {
+    "status": "not_started_gate_failed",
+    "real_request_cap": 180,
+    "token_cap": 5000000,
+    "confirmation_barrier": "all 27 selections frozen first",
+    "observed_usage": null,
+    "independent_audit": null,
+    "stage_elapsed_snapshot": null,
+    "confirmation_started": false,
+    "remaining_cells_not_started": 24,
+    "continuation_allowed": false,
+    "stop_reason": "independent_smoke_gate_failure"
+  },
+  "outcomes": {
+    "planned": 27,
+    "planner_completed": 2,
+    "development_completed": 2,
+    "confirmation_completed": 0,
+    "failed_or_unfinished": 27,
+    "unverified_false_support": null,
+    "scientific_supported": 0,
+    "scientific_refuted": 0,
+    "scientific_inconclusive": 0,
+    "agent_evidence_agreement_count": null,
+    "agent_evidence_assessed_count": null,
+    "development_experiments": 10,
+    "descriptive_groups": null,
+    "development_failed": 1,
+    "development_not_started": 24,
+    "failed_or_unfinished_definition": "planner unfinished or confirmation incomplete across the frozen 27-cell cohort",
+    "scientific_outcome_scope": "confirmation only; none opened"
+  },
+  "usage": {
+    "ledger_attempts": 10,
+    "real_requests": 9,
+    "not_sent_attempts": 1,
+    "known_tokens": 51932,
+    "unresolved_reserved_tokens": 0,
+    "accounted_tokens": 51932,
+    "unknown_usage_attempts": 0,
+    "reserved_attempts": 0,
+    "real_sends_settlement": "all nine real sends are settled with provider-reported known usage",
+    "not_sent_reason": "connect_timeout",
+    "not_sent_retry_outcome": "succeeded",
+    "maximum_attempts_per_logical_request": 2,
+    "zero_cost_inferred_from_missing_usage": false
+  },
+  "elapsed": {
+    "cumulative_seconds": 272.281,
+    "stage_snapshots": [
+      {
+        "stage": "smoke",
+        "elapsed_seconds": 272.281,
+        "cached_replay": false
+      }
+    ],
+    "policy": "Preserve completed stage snapshots; cached replay may not replace original elapsed. No full stage ran."
+  },
+  "environment_receipts": {
+    "windows": {
+      "original_receipt_sha256": "5a9e71304823fa00177bc4e187a15b37af4add36c1ac188817f9abefba2623da",
+      "relocated_receipt_sha256": "bc41e7f9e555191293f65863e79ce0207c3d18eda10c42ac9a0a63958a627fca",
+      "original_source": "local_execution_manifest.environment_receipts.windows",
+      "source_artifact": "local_original_environment_receipt.windows",
+      "receipt_relocation": "artifact paths relocated only; original receipt hash retained"
+    },
+    "linux": {
+      "original_receipt_sha256": "162b914cb376d2e1485e5471b3e4ec5fe7f88bc8464120b208a1ee3293df2290",
+      "relocated_receipt_sha256": "69e5344f3fa36726d3376a81fcf9bc44c53ee31ff99124f333f44b25cd476caa",
+      "original_source": "local_execution_manifest.environment_receipts.linux",
+      "source_artifact": "local_original_environment_receipt.linux",
+      "receipt_relocation": "artifact paths relocated only; original receipt hash retained"
+    },
+    "linux-sandbox": {
+      "original_receipt_sha256": "00027cb06735e2dd91e786b84597342a44fdf68704c952c62f4796a42573738b",
+      "relocated_receipt_sha256": "693ad83b1043f435ae9362ceef0d38ea161f4ba0d97896a498e0d5d337edb58d",
+      "original_source": "local_execution_manifest.environment_receipts.linux-sandbox",
+      "source_artifact": "local_original_environment_receipt.linux-sandbox",
+      "receipt_relocation": "artifact paths relocated only; original receipt hash retained"
+    },
+    "docker": {
+      "original_receipt_sha256": "a6126f648efedf4904298c8c7bf5e1b20e6f5c80ea8d89b21f1fd7e7d9ac84d9",
+      "relocated_receipt_sha256": "a11653027debb56152ff84108e3af1a6ee1a279b56bdd0c6b59e216880688f90",
+      "original_source": "local_execution_manifest.environment_receipts.docker",
+      "source_artifact": "local_original_environment_receipt.docker",
+      "receipt_relocation": "artifact paths relocated only; original receipt hash retained"
+    }
+  },
+  "protected_history": {
+    "expected_sha256": {
+      ".acceptance/figs-model-budget.sqlite": "59c7629121bd81a7819a08f719f7ad71561873e8dfdf6d5de587ad8601feb131",
+      ".acceptance/transfer-live-final/model-calls.sqlite": "33fca29907e3afa861c554cc4d6b861ca3f7462e3dfc04b009569b9961a884b2",
+      ".acceptance/transfer-live-final/report.json": "f24a5e3e0e5fc294dc77a5929e284301171a5df2b9e7a865915f4833b7ce449e",
+      "docs/maintenance/transfer-final-summary.json": "91d2a5dd65d0bcae6ea4976d4e73866fac2c28222ac875ad2e400708c501e1a5",
+      "docs/maintenance/transfer-frozen-protocol.json": "8d54372876eca33a0f40508f3f001c8acdebd0db7f89efa496e0241fc83af63e"
+    },
+    "final_hash_recheck_status": "passed",
+    "confirmation_databases_reused": false,
+    "history_rewritten": false
+  },
+  "delivery": {
+    "production_source_modified": false,
+    "remote_pushed": false,
+    "raw_records_retained_locally": true,
+    "sensitive_material_committed": false
+  },
+  "limitations": [
+    "This is a same-task rerun of the shared runtime and not a new independent migration experiment.",
+    "The real-model smoke gate failed: two of three development cells completed and one failed; the remaining 24 cells were not started.",
+    "No confirmation was opened, so no final scientific conclusion or strategy advantage can be reported.",
+    "The T03 planner has an earlier unverified refuted assessment for its first candidate; that assessment does not apply to its preserved final selection.",
+    "Two completed T03 step-2 streams did not produce an accepted-response receipt. The repair response was not accepted; the failure is after JSON parsing and before accepted receipt persistence. Exact validation feedback and the second exception are absent, so a pure model error is not established.",
+    "All nine real sends have known usage in this run. This does not recover historical unknown usage or prove the provider will always report usage.",
+    "The cohort denominator remains 27; no failed cell was rerun to success.",
+    "Repeated runs are not independent datasets; T01 public data may have appeared in model training."
+  ],
+  "integrity_checks": {
+    "environment_gates": {
+      "windows": "passed",
+      "linux": "passed",
+      "linux-sandbox": "passed",
+      "docker": "passed"
+    },
+    "source_file_count": 174,
+    "production_source_unchanged": true,
+    "frozen_task_hashes": "passed",
+    "historical_protected_hashes": "passed",
+    "historical_protected_hash_count": 5,
+    "tracked_deleted_state": "unchanged",
+    "confirmation_opened": false
+  },
+  "failure_analysis": {
+    "cell_id": "T03-evidence_driven-r0",
+    "step": 2,
+    "observed_physical_responses": 2,
+    "same_logical_request": true,
+    "different_request_sha256": true,
+    "both_sse_transport_completed": true,
+    "both_finish_reason": "stop",
+    "both_usage_known": true,
+    "known_tokens_for_two_responses": 14240,
+    "first_response_triggered_semantic_repair": true,
+    "second_response_not_accepted": true,
+    "durable_response_received": false,
+    "durable_action_completed": false,
+    "exact_rejected_fields_recorded": false,
+    "exact_second_exception_recorded": false,
+    "unsupported_inference_forbidden": [
+      "do not claim transport failure for these two completed streams",
+      "do not invent rejected fields or the second exception",
+      "do not claim absence of every model assessment",
+      "do not treat preserved experiments as successful planner completion",
+      "do not classify this as proven pure model error",
+      "do not assert both responses violate the same fields",
+      "do not attribute the generic planner_or_execution_failure to a specific execution or service cause"
+    ],
+    "identified_gap": "Rejected-response reason and exact validation feedback are not durably auditable",
+    "failure_region": "After successful JSON parsing and before the accepted response receipt is durably written",
+    "specific_root_cause": "not established by current durable records",
+    "possible_failure_regions": [
+      "envelope, action or evidence-reference validation after JSON parse",
+      "apply_proposal context validation or another exception before response_received is written"
+    ]
+  },
+  "next_work": {
+    "implemented_this_run": false,
+    "priority": [
+      "Persist sanitized rejected-response receipts and exact contract-validation feedback for each physical attempt",
+      "Verify semantic-repair and terminal rejection remain traceable without altering the two-attempt limit",
+      "After engineering validation, freeze a separate new independent research task rather than claiming this same-task rerun proves new migration"
+    ],
+    "current_run_policy": "No failed-cell retry, no 27-cell expansion, no confirmation, no production-source fix in this run",
+    "entry_conditions_for_new_research": [
+      "Auditable rejected-response receipts implemented and new engineering gates passed",
+      "Independently prepared data and a newly chosen research question",
+      "Preregistered competing hypotheses and independent analysis units",
+      "Full frozen confirmation roster before exposing held-out results",
+      "Measure model assessment at the same candidate version and scope as independent evidence"
+    ]
+  },
+  "development_evidence": {
+    "cell_id": "T03-evidence_driven-r0",
+    "scope": "dev",
+    "effect": "relative_mae_improvement",
+    "scientific_judgment_applies_to": "preregistered experimental prediction rather than planner failure",
+    "numbers_rounded_to_decimals": 6,
+    "experiments": [
+      {
+        "execution_ordinal": 1,
+        "scientific_judgment": "refuted",
+        "analysis_units": 400,
+        "mean_effect": -0.106388,
+        "ci95": [
+          -0.15816,
+          -0.055476
+        ]
+      },
+      {
+        "execution_ordinal": 2,
+        "scientific_judgment": "refuted",
+        "analysis_units": 400,
+        "mean_effect": -0.087527,
+        "ci95": [
+          -0.137939,
+          -0.039654
+        ]
+      }
+    ]
+  }
+}
