@@ -111,7 +111,7 @@ def test_missing_runtime_facts_cannot_be_reported_as_completed_abstention():
     cells=[{'id':f'{task}-{arm}-{repeat}','task':task,'strategy':arm,'repeat':repeat}
            for task in ('T01','T02','T03') for arm in ('fixed_queue','generic_iteration','evidence_driven')
            for repeat in range(3)]
-    root=Path('C:/in-memory-audit-fixture')
+    root=Path('in-memory-audit-fixture').resolve()
     protocol={'schema':'transfer-pilot/v2','protocol_sha256':'fixture','cells':cells}
     selected=cells[0]['id']
     cell_report={'protocol_sha256':'fixture','status':'abstained','executions':[],

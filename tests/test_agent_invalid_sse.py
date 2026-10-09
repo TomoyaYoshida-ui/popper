@@ -141,6 +141,7 @@ def test_sse_correction_separate_revision_approvals_and_real_job(tmp_path, monke
             "replacement": source["content"].replace("def main", "# isolated transport test\ndef main")}
     requests = []
     identity = {}
+    final_response_sent = threading.Event()
 
     class Provider(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -179,6 +180,9 @@ def test_sse_correction_separate_revision_approvals_and_real_job(tmp_path, monke
             self.send_header("Content-Length", str(len(body.encode())))
             self.end_headers()
             self.wfile.write(body.encode())
+            self.wfile.flush()
+            if name is None:
+                final_response_sent.set()
 
     provider = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=provider.serve_forever, daemon=True)
@@ -208,6 +212,14 @@ def test_sse_correction_separate_revision_approvals_and_real_job(tmp_path, monke
             done = ws.execute_agent_tool(call["call_id"])
             assert done["status"] == "completed", done.get("error")
         assert approvals == ["research.revision_preview", "research.revision_commit", "research.revision_run", "research.revision_job"]
+        assert final_response_sent.wait(30), "The real final continuation did not send its response within 30 seconds"
+        assert ws.wait_for_jobs(timeout=30) == 0, "The final response was sent but its local continuation did not finish"
+        store = AgentSessionStore.readonly(project)
+        try:
+            final_turn = store.turns(identity["session_id"])[-1]
+            assert final_turn["status"] == "completed", final_turn.get("error")
+        finally:
+            store.close()
         assert len(requests) == 6
         assert read_research_state(run)["observations"]
         assert any("observation" in json.dumps(message).lower() for message in requests[-1]["messages"] if message["role"] == "tool")

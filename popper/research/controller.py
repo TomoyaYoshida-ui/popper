@@ -1481,6 +1481,8 @@ class ResearchController:
             raise ProtocolError("research run 必须且只能选择 --trusted-local 或 --sandbox")
         if autonomous_code and not sandboxed:
             raise ProtocolError("自主生成代码只能使用 --sandbox，不能 trusted-local 执行")
+        if sandboxed:
+            self._require_sandbox_backend()
         if autonomous_code and self.harness is None:
             raise ProtocolError("--autonomous-code 需要支持提案的模型策略或 --harness 接入")
         if self.uses_registered_planning():
@@ -1505,8 +1507,6 @@ class ResearchController:
                 if auto_confirm:
                     self.confirm(trusted_local, sandboxed, should_cancel)
             return {**self.status(), 'planning_runtime': planned}
-        if sandboxed:
-            self._require_sandbox_backend()
         if autonomous_code and auto_confirm:
             raise ProtocolError("自主代码开发与最终确认必须分离；当前版本不允许自动消费确认集")
         if auto_confirm and self.manifest.get("external_confirmation"):
