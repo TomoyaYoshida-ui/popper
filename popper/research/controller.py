@@ -380,9 +380,17 @@ class ResearchController:
             protocol=read_json(self.project/'judgment-protocol.json')
             from .comparison_registry import compare
             ids, descriptor = compare(self, baseline, observation, protocol)
-        return [self.store.record_judgment(hid, self.store.get('hypothesis',hid)['version'],
-                    (baseline['observation_id'],observation['observation_id']), comparison_artifact=descriptor)
-                for hid in ids]
+        references = (baseline['observation_id'], observation['observation_id'])
+        result = []
+        for hid in ids:
+            version = self.store.get('hypothesis', hid)['version']
+            existing = [j for j in self.store.list('judgment')
+                        if j['hypothesis_id'] == hid and j['hypothesis_version'] == version
+                        and tuple(j['observation_refs']) == references
+                        and j['comparison_artifact'] == descriptor]
+            result.append(existing[-1] if existing else self.store.record_judgment(
+                hid, version, references, comparison_artifact=descriptor))
+        return result
 
     def _observation_for_design(self, design_id, scope="dev"):
         rows = [o for o in self.store.list("observation")
@@ -1464,9 +1472,18 @@ class ResearchController:
                 raise ProtocolError("研究执行已取消")
 
         check_cancelled()
+        # Reject unsupported invocation parameters before reading project state
+        # or entering either planning route. No execution context is needed to
+        # explain a missing proposal capability.
+        if autonomous_design:
+            autonomous_code = True
+        if trusted_local == sandboxed:
+            raise ProtocolError("research run 必须且只能选择 --trusted-local 或 --sandbox")
+        if autonomous_code and not sandboxed:
+            raise ProtocolError("自主生成代码只能使用 --sandbox，不能 trusted-local 执行")
+        if autonomous_code and self.harness is None:
+            raise ProtocolError("--autonomous-code 需要支持提案的模型策略或 --harness 接入")
         if self.uses_registered_planning():
-            if trusted_local == sandboxed:
-                raise ProtocolError('research run 必须且只能选择 --trusted-local 或 --sandbox')
             if autonomous_code or autonomous_design:
                 raise ProtocolError('当前冻结项目适配器未声明生成代码的执行与制品验证权限')
             if self.store.get('study', self.manifest['study_id'])['status'] != StudyStatus.ACTIVE.value:
@@ -1488,16 +1505,8 @@ class ResearchController:
                 if auto_confirm:
                     self.confirm(trusted_local, sandboxed, should_cancel)
             return {**self.status(), 'planning_runtime': planned}
-        if autonomous_design:
-            autonomous_code = True
-        if trusted_local == sandboxed:
-            raise ProtocolError("research run 必须且只能选择 --trusted-local 或 --sandbox")
-        if autonomous_code and not sandboxed:
-            raise ProtocolError("自主生成代码只能使用 --sandbox，不能 trusted-local 执行")
         if sandboxed:
             self._require_sandbox_backend()
-        if autonomous_code and self.harness is None:
-            raise ProtocolError("--autonomous-code 需要支持提案的模型策略或 --harness 接入")
         if autonomous_code and auto_confirm:
             raise ProtocolError("自主代码开发与最终确认必须分离；当前版本不允许自动消费确认集")
         if auto_confirm and self.manifest.get("external_confirmation"):

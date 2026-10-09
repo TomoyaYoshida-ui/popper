@@ -246,7 +246,13 @@ class ResearchRuntime:
             raise ProtocolError('Planning action cancelled before execution')
         executed = None
         if recovered and isinstance(action, ExecuteCandidate):
-            executed = {'observation': self.store.get('observation', recovered['observation_id'])}
+            # A saved observation proves execution, not completion of every
+            # independent comparison. The public cached path fills missing
+            # judgments without rerunning or charging the experiment again.
+            executed = self.controller.execute_registered_candidate(
+                action.candidate_id,
+                expected_version=self.store.get('study', self.study_id)['state_version'],
+                trusted_local=trusted_local, sandboxed=sandboxed, should_cancel=should_cancel)
         elif isinstance(action, ExecuteCandidate):
             executed = self.controller.execute_registered_candidate(
                 action.candidate_id,
@@ -276,10 +282,10 @@ class ResearchRuntime:
             if should_cancel and should_cancel():
                 return self.close_planner('cancelled', 'cancelled')
             context = self.context()
-            if context['remaining_experiments'] == 0:
-                return self.close_planner('stopped', 'experiment_limit')
             started = self._record('request_started', step)
             received = self._record('response_received', step)
+            if context['remaining_experiments'] == 0 and received is None:
+                return self.close_planner('stopped', 'experiment_limit')
             if started and not received:
                 return self.close_planner('recovery_blocked', 'request_started_without_durable_response')
             try:

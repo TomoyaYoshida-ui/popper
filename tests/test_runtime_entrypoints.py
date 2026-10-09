@@ -124,3 +124,38 @@ def test_campaign_preserves_planner_failure_with_partial_evidence(project, tmp_p
         result = dev_node(tmp_path/'campaign', {'project':str(project),'mode':'trusted_local'})
     assert result['outcome'] == 'retryable'
     assert result['planning_runtime'] == outcome['planning_runtime']
+
+
+def test_hard_interrupt_after_diagnostic_judgment_recovers_primary_without_reexecution(project, tmp_path):
+    run = tmp_path/'research'
+    ResearchController.initialize(project, run)
+    c = ResearchController(run)
+    try:
+        runtime = c.planning_runtime(max_experiments=1)
+        hid = c.manifest['candidate_hypothesis_ids'][0]
+        payload = {'action': {'kind': 'execute_candidate', 'candidate_id': hid,
+                             'rationale': 'Registered candidate', 'evidence_refs': []}, 'assessment': None}
+        original = c._update_judgments
+        def interrupt_before_primary(baseline, observation):
+            if observation['scope'] == 'dev:slice:s9':
+                raise SystemExit('hard interrupt before primary comparison')
+            return original(baseline, observation)
+        with patch.object(c, '_update_judgments', side_effect=interrupt_before_primary):
+            with pytest.raises(SystemExit):
+                runtime.apply_proposal(payload, step=0, trusted_local=True)
+        assert len(c.store.list('judgment')) == 2  # primary + contrast in diagnostic scope
+        before = {k: len(c.store.list(k)) for k in ('run', 'observation')}
+        source_ids = [j['judgment_id'] for j in c.store.list('judgment')]
+        def forbidden(*args, **kwargs):
+            pytest.fail('the accepted model reply must not be sent again')
+        resumed = c.planning_runtime(max_experiments=1).run(forbidden, trusted_local=True)
+        assert resumed['planner']['status'] == 'stopped'
+        assert resumed['finalist']['hypothesis_id'] == hid
+        assert resumed['finalist']['scope'] == 'dev:slice:s9'
+        assert len(c.store.list('judgment')) == 4
+        assert all(c.store.get('judgment', jid) for jid in source_ids)
+        assert before == {k: len(c.store.list(k)) for k in before}
+        assert resumed['integrity']['ok']
+        assert len(runtime.records('action_completed')) == 1
+    finally:
+        c.close()
