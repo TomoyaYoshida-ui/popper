@@ -35,6 +35,47 @@ def stop(refs=()):
                        'evidence_refs': list(refs)}, 'assessment': None}
 
 
+def test_action_rejections_name_safe_rules_without_values():
+    from popper.research.runtime_protocol import parse_action
+    runtime = controller_free_runtime()
+    facts = {'candidates': [{'hypothesis_id': 'H-known', 'executed': False}],
+             'raw_evidence': [{'evidence_refs': ['OBS-known']}], 'remaining_experiments': 1}
+
+    def reject(payload, path, rule):
+        with pytest.raises(ProtocolError) as failure:
+            runtime._validate_action(parse_action(payload), facts)
+        assert failure.value.details == [{'path': path, 'rule': rule}]
+        assert 'confidential_fixture_value' not in str(failure.value)
+
+    reject({'kind': 'revise_hypothesis', 'hypothesis_id': 'H-known', 'mechanism': 'm',
+            'applicability': 'scope', 'predictions': ['p'], 'rationale': 'r', 'evidence_refs': []},
+           'action.evidence_refs', 'evidence_required')
+    reject({'kind': 'revise_hypothesis', 'hypothesis_id': 'H-known', 'mechanism': 'm',
+            'applicability': 'scope', 'predictions': ['p'], 'rationale': 'r',
+            'evidence_refs': ['confidential_fixture_value']},
+           'action.evidence_refs', 'unknown_evidence')
+    reject({'kind': 'execute_candidate', 'candidate_id': 'confidential_fixture_value',
+            'rationale': 'r', 'evidence_refs': []},
+           'action.candidate_id', 'unexecuted_registered_candidate')
+    reject({'kind': 'revise_hypothesis', 'hypothesis_id': 'confidential_fixture_value',
+            'mechanism': 'm', 'applicability': 'scope', 'predictions': ['p'], 'rationale': 'r',
+            'evidence_refs': ['OBS-known']},
+           'action.hypothesis_id', 'unexecuted_registered_candidate')
+    facts['remaining_experiments'] = 0
+    reject({'kind': 'execute_candidate', 'candidate_id': 'H-known', 'rationale': 'r', 'evidence_refs': []},
+           'action', 'experiment_limit')
+
+
+def controller_free_runtime():
+    class _Host:
+        pass
+    host = _Host()
+    host._reject = ResearchRuntime._reject.__get__(host)
+    host._validate_refs = ResearchRuntime._validate_refs.__get__(host)
+    host._validate_action = ResearchRuntime._validate_action.__get__(host)
+    return host
+
+
 def test_limit_stops_without_requiring_an_extra_model_message(controller):
     runtime = controller.planning_runtime(max_experiments=1, max_decisions=1)
     calls = []

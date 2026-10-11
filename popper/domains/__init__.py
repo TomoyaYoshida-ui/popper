@@ -26,6 +26,7 @@ from .protocol import (ALIGNED_PREDICTION, DEFAULT_SPLITS, IMPLEMENTED_SHAPES, I
 from . import tabular_regression  # noqa: F401  注册 mse-v1
 from . import binary_classification  # noqa: F401  注册 binary-accuracy-v1
 from . import mae_regression  # noqa: F401  注册 mae-v1
+from . import vector_regression  # noqa: F401  distinct vector-mae-v1 identity
 from . import binary_f1  # noqa: F401  注册 binary-f1-v1
 from . import multiclass  # noqa: F401  注册 multiclass-macro-f1-v1
 from . import algorithm_throughput  # noqa: F401  注册 algorithm-throughput-v1

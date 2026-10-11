@@ -420,7 +420,7 @@ class ResearchStore:
         try:
             self._check_chain_head()
             result = fn()
-        except Exception:
+        except BaseException:
             if owner:
                 self._end(failed=True)
             raise
@@ -443,7 +443,7 @@ class ResearchStore:
         try:
             self._check_chain_head()
             yield self
-        except Exception:
+        except BaseException:
             if owner:
                 self._end(failed=True)
             raise
@@ -575,7 +575,9 @@ class ResearchStore:
                                    for k in ('session_id', 'record_id', 'record_kind'))
                         or payload['record_kind'] not in {
                             'session', 'request_started', 'response_received', 'action_completed',
-                            'planner_closed', 'agent_assessment', 'assessment_rejected'}
+                            'planner_closed', 'agent_assessment', 'assessment_rejected',
+                            'model_response_received', 'model_response_rejected',
+                            'model_output_accepted'}
                         or not isinstance(payload['body'], dict)):
                     raise ProtocolError('Runtime receipt fields are invalid')
                 self._require_study_active(study_id)

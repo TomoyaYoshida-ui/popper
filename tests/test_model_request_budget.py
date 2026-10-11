@@ -72,6 +72,24 @@ class RequestBudgetTests(unittest.TestCase):
                 budget.reserve(body)
             budget.close()
 
+    def test_scope_call_cap_excludes_correction_attempts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "calls.sqlite"
+            budget = ModelRequestBudget(path, global_tokens=200000, global_calls=10,
+                                        scope='cell', scope_tokens=200000, scope_calls=1)
+            body = {"messages": [], "max_tokens": 100}
+            first = budget.reserve(body, logical_request_id='decision', attempt_index=1)
+            budget.settle(first, {"total_tokens": 10})
+            second = budget.reserve(body, logical_request_id='decision', attempt_index=2)
+            budget.settle(second, {"total_tokens": 10})
+            scope = budget.snapshot()['scope']
+            global_balance = budget.snapshot()['global']
+            self.assertEqual(1, scope['calls'])
+            self.assertEqual(2, global_balance['calls'])
+            with self.assertRaises(ProtocolError):
+                budget.reserve(body, logical_request_id='next', attempt_index=1)
+            budget.close()
+
     def test_availability_policy_retains_unknown_bounds_and_prevents_duplicate_dispatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             budget=ModelRequestBudget(Path(tmp)/'calls.sqlite',global_tokens=100000,global_calls=3,

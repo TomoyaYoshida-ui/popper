@@ -142,6 +142,10 @@ export type ResearchDecision = {
   state_version: number; budget_request: number
 }
 export type ResearchClaim = {
+  scientific_status?: 'supported' | 'refuted' | 'inconclusive' | 'not_evaluated'
+  judgment_ref?: string | null; effect_type?: string; effect_unit?: string
+  effect_value?: number; threshold?: number | number[] | null; ci95?: number[] | null
+  descriptive_status?: string; conclusion_basis?: string
   entity_id: string; entity_ref: EntityRef; status: string; study_id: string
   decision_id: string; hypothesis_id: string; hypothesis_version: number
   design_id: string; observation_refs: string[]; metric: string

@@ -77,9 +77,9 @@ def _render(spec, bindings):
             item = bindings[block["claim_id"]]
             lines.extend([
                 "**系统证据绑定结果。** "
-                f"{item['verdict']}。指标 `{item['metric']}` 的方向统一效应为 "
-                f"`{item['oriented_delta']!r}`，预注册阈值为 "
-                f"`{item['min_meaningful_effect']!r}`；范围 `{item['scope']}`。"
+                f"{item['verdict']}。效应 `{item['effect_type']}` 为 "
+                f"`{item['effect_value']!r}` `{item['effect_unit']}`，登记阈值 "
+                f"`{item['threshold']!r}`，95% 区间 `{item['ci95']!r}`；范围 `{item['scope']}`。"
                 f"[Claim `{item['claim_id']}`；绑定 `{item['binding_id']}`；"
                 f"Observation：{', '.join(item['observation_refs'])}；"
                 f"Decision `{item['decision_id']}`]", "",

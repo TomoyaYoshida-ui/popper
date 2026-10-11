@@ -73,8 +73,17 @@ class ModelRequestBudget:
 
     def _balance(self, scope):
         where, values = ("", ()) if scope == "__global__" else ("WHERE scope=?", (scope,))
+        # Global call caps count every sent HTTP attempt. Per-cell scientific caps count only
+        # the first attempt of each logical request so contract-correction sends do not consume
+        # the decision budget; corrections still reserve tokens and still count globally.
+        if scope == "__global__":
+            call_expr = "SUM(CASE WHEN status='not_sent' THEN 0 ELSE 1 END)"
+        else:
+            call_expr = ("SUM(CASE WHEN status='not_sent' THEN 0 "
+                         "WHEN attempt_index IS NOT NULL AND attempt_index > 1 THEN 0 "
+                         "ELSE 1 END)")
         attempts, count, accounted, known, unresolved = self.db.execute(
-            "SELECT COUNT(*),SUM(CASE WHEN status='not_sent' THEN 0 ELSE 1 END),"
+            "SELECT COUNT(*),"+call_expr+","
             "COALESCE(SUM(COALESCE(used,reserved)),0),COALESCE(SUM(used),0),"
             "COALESCE(SUM(CASE WHEN used IS NULL THEN reserved ELSE 0 END),0) FROM requests " + where, values).fetchone()
         token_cap, call_cap = self.db.execute("SELECT tokens,calls FROM limits WHERE scope=?", (scope,)).fetchone()
@@ -107,7 +116,12 @@ class ModelRequestBudget:
                     raise ModelBudgetFailure('request_recovery_blocked', '该逻辑请求尝试已记录或用量未知，不能重复发送')
             for scope in ("__global__", self.scope):
                 balance = self._balance(scope)
-                if balance["calls"] >= balance["call_cap"] or balance["accounted_tokens"] + amount > balance["token_cap"]:
+                # Correction attempts (attempt_index > 1) do not consume the per-cell scientific
+                # call cap; they still must fit the token cap and the global call cap.
+                counts_toward_calls = scope == "__global__" or attempt_index <= 1
+                if counts_toward_calls and balance["calls"] >= balance["call_cap"]:
+                    raise ModelBudgetFailure('request_budget_exhausted', "模型调用预算不足，发送前已停止")
+                if balance["accounted_tokens"] + amount > balance["token_cap"]:
                     raise ModelBudgetFailure('request_budget_exhausted', "模型调用预算不足，发送前已停止")
             request_id = uuid.uuid4().hex
             self.db.execute("INSERT INTO requests(id,scope,reserved,status,request_hash,logical_request_id,attempt_index) VALUES(?,?,?,'reserved',?,?,?)",

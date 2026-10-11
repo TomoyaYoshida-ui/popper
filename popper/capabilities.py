@@ -18,6 +18,8 @@ import importlib.util
 #: pyproject.toml `[project.optional-dependencies]` 的 extra 名 -> 该 extra 的关键导入名。
 #: 新增 extra 时必须同步这里，否则探测会假报"可用"。
 EXTRA_IMPORTS = {
+    'agent': ('pydantic_ai', 'openai', 'httpx2'),
+    'adaptive': ('numpy', 'sklearn', 'pandas', 'openpyxl', 'pydantic_ai'),
     "analysis": ("numpy",),
     "ml": ("sklearn",),
     "intake": ("pyarrow",),

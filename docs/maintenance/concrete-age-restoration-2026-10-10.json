@@ -1,0 +1,68 @@
+{
+  "schema": "concrete-age-restoration-record/v1",
+  "date": "2026-10-10",
+  "conclusion": "age_restoration_supported_on_confirmation",
+  "question": "Which single restoration of age, cement, or water reduces MAE by more than 5 percent relative to a CART baseline that omits all three",
+  "split_seed": 20261010,
+  "roster_test_sha256": "855187768911db0245165b8f8f6728c883f28309d8a684553d0923ea65388f28",
+  "prior_question_roster_sha256": "c7abe05d5f9781871041b9852c536ee6cb4931f70629266c671c0c20f8fd7830",
+  "prior_confirmation_group_overlap": 38,
+  "split_groups": {"train": 597, "dev": 199, "test": 200},
+  "baseline_features": [1, 2, 4, 5, 6],
+  "baseline_dev_mae": 11.36220301935306,
+  "path": "evaluation/runs/concrete-age-restoration-20261010",
+  "status": "confirmation_completed",
+  "elapsed_seconds": 86.735,
+  "confirmation_opened": true,
+  "confirmation_phase": "concluded",
+  "integrity_ok": true,
+  "finalist_hypothesis_id": "H-f7a8f98689919ca0",
+  "ledger": {"calls": 3, "known_tokens": 15304, "unresolved_reserved_tokens": 0},
+  "development": [
+    {
+      "restoration": "age_days",
+      "hypothesis_id": "H-f7a8f98689919ca0",
+      "judgment": "supported",
+      "alternate_hypothesis_id": "H-alt-fc2ae6739a52393a",
+      "alternate_judgment": "refuted",
+      "mean_effect": 0.18533400546296191,
+      "ci95": [0.0750493972434894, 0.2825037154503057],
+      "candidate_mae": 9.256400422892998,
+      "n_units": 199
+    },
+    {
+      "restoration": "cement",
+      "hypothesis_id": "H-c5e91808709f0214",
+      "judgment": "inconclusive",
+      "alternate_hypothesis_id": "H-alt-6a540ba39fd64b85",
+      "alternate_judgment": "inconclusive",
+      "mean_effect": 0.1037868907712997,
+      "ci95": [0.02156280190495196, 0.1789025713552743],
+      "candidate_mae": 10.182955295662133,
+      "n_units": 199
+    },
+    {
+      "restoration": "water",
+      "hypothesis_id": "H-e0e8c168213c3ac9",
+      "judgment": "inconclusive",
+      "alternate_hypothesis_id": "H-alt-7b54c93e9bfdc80b",
+      "alternate_judgment": "inconclusive",
+      "mean_effect": 0.05243933557803485,
+      "ci95": [-0.025150795314906327, 0.12279672765335853],
+      "candidate_mae": 10.766376642315445,
+      "n_units": 199
+    }
+  ],
+  "confirmation": {
+    "restoration": "age_days",
+    "hypothesis_id": "H-f7a8f98689919ca0",
+    "judgment": "supported",
+    "alternate_judgment": "refuted",
+    "claim_status": "supported_in_scope",
+    "mean_effect": 0.21321496686950758,
+    "ci95": [0.11879042252058068, 0.2990234826778205],
+    "baseline_mae": 11.84039027484047,
+    "candidate_mae": 9.315841854668319,
+    "n_units": 200
+  }
+}

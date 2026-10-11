@@ -1,0 +1,122 @@
+{
+  "schema": "concrete-strength-study-record/v1",
+  "date": "2026-10-09",
+  "conclusion": "confirmation_completed_improvement_refuted_equivalence_supported",
+  "question": "Which preregistered FIGS intervention reduces compressive-strength MAE by more than 5 percent relative to the all-feature CART baseline",
+  "roster_test_sha256": "c7abe05d5f9781871041b9852c536ee6cb4931f70629266c671c0c20f8fd7830",
+  "split_groups": {"train": 597, "dev": 199, "test": 200},
+  "baseline_dev_mae": 7.232540421978843,
+  "committed": false,
+  "historical_documents_modified": false,
+  "ledgers_modified": false,
+  "paid_research_after_this_record": false,
+  "same_roster_rerun": false,
+  "sessions": {
+    "attempt_1": {
+      "path": "evaluation/runs/concrete-strength-20261009",
+      "status": "failed",
+      "failure_category": "action_contract_rejected",
+      "elapsed_seconds": 71.063,
+      "confirmation_opened": false,
+      "resume": "blocked",
+      "known_tokens": 15345,
+      "unresolved_reserved_tokens": 0,
+      "result_sha256": "97cad6e831337518c7c47d87ff2803d11c78361ca5d9367c78523ee89c57b7bf"
+    },
+    "attempt_2": {
+      "path": "evaluation/runs/concrete-strength-20261009/attempt-2",
+      "status": "failed",
+      "failure_category": "connection_failure",
+      "transport_phase": "connected",
+      "sent": false,
+      "elapsed_seconds": 50.406,
+      "confirmation_opened": false,
+      "resume": "blocked",
+      "known_tokens": 8747,
+      "unresolved_reserved_tokens": 0,
+      "result_sha256": "6336e78e9397106f17d4d9f7bc47a823cf3d9e1ee0ee1f2a142116fa40efbfc3"
+    },
+    "attempt_3": {
+      "path": "evaluation/runs/concrete-strength-20261009/attempt-3",
+      "status": "confirmation_completed",
+      "planner_status": "stopped",
+      "planner_reason": "experiment_limit",
+      "elapsed_seconds": 110.985,
+      "confirmation_opened": true,
+      "confirmation_phase": "concluded",
+      "integrity_ok": true,
+      "finalist_hypothesis_id": "H-145a9d7be12fb588",
+      "executions": [
+        "H-145a9d7be12fb588",
+        "H-742999cf524da635",
+        "H-174f9c13d76ecff5"
+      ],
+      "development": [
+        {
+          "hypothesis_id": "H-145a9d7be12fb588",
+          "judgment": "refuted",
+          "alternate_hypothesis_id": "H-alt-5855ac2f94629c92",
+          "alternate_judgment": "supported",
+          "mean_effect": 0.0,
+          "candidate_mae": 7.232540421978843,
+          "baseline_mae": 7.232540421978843,
+          "n_units": 199
+        },
+        {
+          "hypothesis_id": "H-742999cf524da635",
+          "judgment": "refuted",
+          "alternate_hypothesis_id": "H-alt-df6f2c01a5ad226d",
+          "alternate_judgment": "refuted",
+          "mean_effect": -0.49885456500579894,
+          "ci95": [-0.7003645128905499, -0.3220605794810807],
+          "candidate_mae": 10.840526228071957,
+          "baseline_mae": 7.232540421978843,
+          "n_units": 199
+        },
+        {
+          "hypothesis_id": "H-174f9c13d76ecff5",
+          "judgment": "refuted",
+          "alternate_hypothesis_id": "H-alt-e65f788891a14d1b",
+          "alternate_judgment": "refuted",
+          "mean_effect": -0.2591817308218286,
+          "ci95": [-0.42336856403448814, -0.11286787260753274],
+          "candidate_mae": 9.107082766786158,
+          "baseline_mae": 7.232540421978843,
+          "n_units": 199
+        }
+      ],
+      "confirmation": {
+        "hypothesis_id": "H-145a9d7be12fb588",
+        "judgment": "refuted",
+        "alternate_hypothesis_id": "H-alt-5855ac2f94629c92",
+        "alternate_judgment": "supported",
+        "claim_status": "not_supported_in_scope",
+        "mean_effect": -1.135676047340757e-16,
+        "ci95": [-4.950574740392785e-16, 0.0],
+        "baseline_mae": 7.820702230885647,
+        "candidate_mae": 7.820702230885648,
+        "n_units": 200
+      },
+      "receipts": {
+        "request_started": 3,
+        "response_received": 3,
+        "model_response_received": 5,
+        "model_response_rejected": 2,
+        "model_output_accepted": 3,
+        "action_completed": 3
+      },
+      "rejection_rules": ["unexecuted_registered_candidate", "unexecuted_registered_candidate"],
+      "unsent_connection_retry_exercised": false,
+      "ledger": {
+        "calls": 5,
+        "attempts": 5,
+        "known_tokens": 26122,
+        "unresolved_reserved_tokens": 0,
+        "call_cap": 8,
+        "token_cap": 250000,
+        "unknown_usage_policy": "stop"
+      },
+      "result_sha256": "8108e161c6c0441a9843ed423f43761c5f27b06b940001e8c897bdfc77e2bd89"
+    }
+  }
+}

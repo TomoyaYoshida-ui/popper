@@ -1,0 +1,80 @@
+{
+  "schema": "concrete-cement-water-given-age-record/v1",
+  "date": "2026-10-11",
+  "conclusion": "cement_water_given_age_inconclusive",
+  "question": "Whether restoring cement, water, or both reduces MAE by more than 5 percent relative to a CART baseline that already includes age",
+  "split_seed": 20261011,
+  "roster_test_sha256": "8f7dc91f6f3e994a42d9206afe0cc5e0bfecf7a03bba299e95b55e07ef6a96a2",
+  "prior_question_roster_sha256": [
+    "c7abe05d5f9781871041b9852c536ee6cb4931f70629266c671c0c20f8fd7830",
+    "855187768911db0245165b8f8f6728c883f28309d8a684553d0923ea65388f28"
+  ],
+  "prior_confirmation_group_overlap": [32, 40],
+  "split_groups": {"train": 597, "dev": 199, "test": 200},
+  "baseline_features": [1, 2, 4, 5, 6, 7],
+  "baseline_dev_mae": 8.270618555289607,
+  "path": "evaluation/runs/concrete-cement-water-given-age-20261011",
+  "status": "confirmation_completed",
+  "planner_reason": "experiment_limit",
+  "elapsed_seconds": 114.734,
+  "confirmation_opened": true,
+  "confirmation_phase": "concluded",
+  "integrity_ok": true,
+  "finalist_hypothesis_id": "H-9331ec9a8e97a660",
+  "ledger": {"calls": 4, "known_tokens": 21551, "unresolved_reserved_tokens": 0},
+  "receipts": {
+    "request_started": 3,
+    "response_received": 3,
+    "model_response_rejected": 0,
+    "action_completed": 3
+  },
+  "development": [
+    {
+      "restoration": "cement",
+      "hypothesis_id": "H-9331ec9a8e97a660",
+      "judgment": "inconclusive",
+      "alternate_hypothesis_id": "H-alt-50f69af9de4b64a1",
+      "alternate_judgment": "inconclusive",
+      "mean_effect": 0.11257755465304738,
+      "ci95": [-0.02411949768622738, 0.23483693969930103],
+      "candidate_mae": 7.3395325428669835,
+      "n_units": 199
+    },
+    {
+      "restoration": "water",
+      "hypothesis_id": "H-029788d737812d63",
+      "judgment": "inconclusive",
+      "alternate_hypothesis_id": "H-alt-e71028a33d0bcb46",
+      "alternate_judgment": "inconclusive",
+      "mean_effect": 0.08189794093474412,
+      "ci95": [-0.013254787100610314, 0.17145280885068268],
+      "candidate_mae": 7.5932719253547,
+      "n_units": 199
+    },
+    {
+      "restoration": "cement_and_water",
+      "hypothesis_id": "H-39b0110e3f4a0585",
+      "judgment": "inconclusive",
+      "alternate_hypothesis_id": "H-alt-78f27d2b35569098",
+      "alternate_judgment": "inconclusive",
+      "mean_effect": 0.10910566529242285,
+      "ci95": [-0.027978233242789124, 0.23195906309037218],
+      "candidate_mae": 7.368247215434877,
+      "n_units": 199
+    }
+  ],
+  "confirmation": {
+    "restoration": "cement",
+    "hypothesis_id": "H-9331ec9a8e97a660",
+    "judgment": "inconclusive",
+    "alternate_hypothesis_id": "H-alt-50f69af9de4b64a1",
+    "alternate_judgment": "inconclusive",
+    "descriptive_claim_status": "supported_in_scope",
+    "descriptive_claim_basis": "absolute_mae_difference_at_least_0.05",
+    "mean_effect": 0.0493603345637183,
+    "ci95": [-0.10669940385618877, 0.18761016866862326],
+    "baseline_mae": 8.16274331264831,
+    "candidate_mae": 7.759827571778235,
+    "n_units": 200
+  }
+}

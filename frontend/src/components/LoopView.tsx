@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { scientificClaimLabel, scientificClaimEffect } from '../scientificClaim'
 import { cancelDesignJob, cancelRevisionJob, createBenchmark, createBoundDraft, createFollowup, createRevisionWorktree, executeInitialRevision, executeWorktreeRevision, executeDesign, fetchArbor, fetchBenchmarkJob, fetchBenchmarkJobs, fetchBoundDrafts, fetchDesignDetail, fetchDesignJob, fetchDesignJobs, fetchFollowupPreview, fetchRevision, fetchRevisionJob, fetchRevisionWorktrees, migrateRevisionDiff, proposeWorktreeRevision, removeRevisionWorktree, retryDesignJob, submitWorktreeRevision, type ArborTree, type BenchmarkDetail, type BenchmarkJob, type BoundDraftRow, type CreatedBoundDraft, type CreatedFollowup, type DesignDetail, type DesignExecutionJob, type FollowupPreview, type ResearchRunState, type ResearchState, type RevisionDetail, type RevisionExecutionJob, type RevisionWorktree } from '../api'
 import { MetricBars, BudgetBar, LegendDot, type BarPoint } from './charts'
 import { StudyLifecyclePanel } from './StudyLifecyclePanel'
@@ -679,14 +680,12 @@ function ResearchRunBody({ run, labels, trustedLocal, onResearchChanged, onOpenR
         <div className="row" key={claim.entity_id}>
           <div>
             <div>{onOpenResource ? <button type="button" className="resource-inline" onClick={() => onOpenResource({ kind: 'claim', ref: claim.entity_id, studyId: run.manifest?.study_id, title: `${claim.metric} 结论` })} title={claim.entity_id}>{claim.metric} 结论 ↗</button> : <span>{claim.metric} 结论</span>} ·
-              {claim.status === 'boundary_supported_in_scope' ? '预注册切片支持存在边界'
-                : claim.status === 'boundary_not_supported_in_scope' ? '未确认预注册边界'
-                : claim.status === 'supported_in_scope' ? '当前预注册范围内支持'
-                : '未达到预注册阈值'}</div>
+              {scientificClaimLabel(claim)}</div>
             <div style={{ fontSize: 12 }}>
-              {claim.metric} 整体方向统一效应 {claim.oriented_delta.toPrecision(5)} ·
-              最小有意义阈值 {claim.min_meaningful_effect}
+              {scientificClaimEffect(claim)} · 登记阈值 {JSON.stringify(claim.threshold ?? null)}
+              {claim.ci95 && <> · 95% 区间 {JSON.stringify(claim.ci95)}</>}
             </div>
+            <div className="muted" style={{ fontSize: 12 }}>历史描述性阈值记录：{claim.descriptive_status ?? claim.status}，不作为科学支持判据。</div>
             {claim.slice_effects && claim.slice_effects.length > 0 && (
               <div style={{ fontSize: 12 }}>
                 预注册切片：{claim.slice_effects.map((item) =>

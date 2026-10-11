@@ -51,7 +51,7 @@ class TaskContractTests(unittest.TestCase):
         self.assertEqual(str(shape.exception), "任务形状不在已实现集合内")
 
     def test_registry_fixtures_and_hash_change(self):
-        self.assertEqual(len(registry()), 12)
+        self.assertEqual(len(registry()), 13)
         self.assertTrue(fixtures_pass())
         recorded = registry()["mse-v1"]["evaluator_hash"]
         self.assertEqual(recorded, detect_unversioned_change("mse-v1", recorded))

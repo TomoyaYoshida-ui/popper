@@ -1,0 +1,88 @@
+{
+  "schema": "pydantic-planner-smoke-record/v1",
+  "date": "2026-10-09",
+  "conclusion": "development_smoke_software_gate_passed",
+  "base_commit": "72db7e4",
+  "committed": false,
+  "historical_documents_modified": false,
+  "historical_27_cell_rerun": false,
+  "confirmation_opened": false,
+  "new_research_question": null,
+  "paid_research_after_this_record": false,
+  "sessions": {
+    "first_attempt": {
+      "path": "evaluation/runs/pydantic-smoke-20261009",
+      "status": "failed",
+      "failure_category": "incompatible_request",
+      "elapsed_seconds": 21.125,
+      "executions": 0,
+      "request_started": 1,
+      "response_received": 0,
+      "resume": "blocked",
+      "result_sha256": "cec88f8a67cebdea3c0fd106c7273abb82dc4cd15c0236ef3f8f9e1dba7d77ae",
+      "ledger": {
+        "attempts": 1,
+        "known_tokens": 0,
+        "unresolved_reserved_tokens": 22409,
+        "usage_status": "unknown"
+      }
+    },
+    "provider_diagnostic": {
+      "path": "evaluation/runs/pydantic-smoke-20261009/probe",
+      "http_status": 400,
+      "provider_message": "The tool_choice parameter does not support being set to required or object in thinking mode",
+      "receipt_failure_category": "stream_interrupted",
+      "unresolved_reserved_tokens": 12514
+    },
+    "schema_probe": {
+      "path": "evaluation/runs/pydantic-smoke-20261009/probe2",
+      "attempts": 2,
+      "known_tokens": 2753,
+      "outcome": "action_contract_rejected"
+    },
+    "accepted_probe": {
+      "path": "evaluation/runs/pydantic-smoke-20261009/probe3",
+      "attempts": 1,
+      "known_tokens": 2505,
+      "outcome": "accepted"
+    },
+    "live": {
+      "path": "evaluation/runs/pydantic-smoke-20261009/live",
+      "task": "T01",
+      "profile": "evidence_driven",
+      "status": "development_completed",
+      "planner_status": "stopped",
+      "planner_reason": "experiment_limit",
+      "elapsed_seconds": 110.547,
+      "confirmation_opened": false,
+      "integrity_ok": true,
+      "finalist_present": true,
+      "executions": 4,
+      "runs": 5,
+      "assessment_rejections": 1,
+      "agent_assessments": 0,
+      "judgments": {"refuted": 2, "supported": 2, "inconclusive": 4},
+      "receipts": {
+        "request_started": 4,
+        "model_response_received": 4,
+        "model_response_rejected": 0,
+        "model_output_accepted": 4,
+        "action_completed": 4
+      },
+      "ledger": {
+        "calls": 4,
+        "attempts": 4,
+        "known_tokens": 28105,
+        "unresolved_reserved_tokens": 0,
+        "call_cap": 9,
+        "token_cap": 250000,
+        "unknown_usage_policy": "stop"
+      },
+      "result_sha256": "9a98ee7ad316aa93de9e4859fc12f6a991ecb88b5f9943458ea13ce419240717"
+    }
+  },
+  "offline_tests": {
+    "files": ["tests/test_pydantic_planner.py", "tests/test_research_runtime.py"],
+    "passed": 28
+  }
+}

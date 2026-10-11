@@ -14,6 +14,7 @@ from ..core import (EVALUATORS, ProtocolError, digest, file_hash, inside,
 from .evaluation_service import scoring_code_hash
 from .readout import read_research_state
 from .store import ResearchStore
+from .claim_projection import project_claim, claim_verdict
 
 
 _VERDICTS = {
@@ -74,6 +75,7 @@ def _derive(project_dir, run_dir):
             raise ProtocolError("研究尚无独立确认 Claim，不能生成证据附录")
         bindings = []
         for claim in sorted(claims, key=lambda row: row["entity_id"]):
+            claim = project_claim(claim, store.list('judgment'))
             if claim["status"] not in _VERDICTS:
                 raise ProtocolError("研究 Claim 裁定状态不受支持")
             sources = []
@@ -93,7 +95,10 @@ def _derive(project_dir, run_dir):
                 })
             core = {
                 "claim_id": claim["entity_id"], "status": claim["status"],
-                "verdict": _VERDICTS[claim["status"]],
+                "verdict": claim_verdict(claim),
+                **{key: claim[key] for key in ('scientific_status', 'judgment_ref',
+                    'effect_type', 'effect_unit', 'effect_value', 'threshold', 'ci95',
+                    'descriptive_status', 'conclusion_basis')},
                 "scope": claim["scope"],
                 "metric": claim["metric"],
                 "metric_direction": claim["metric_direction"],
@@ -137,9 +142,10 @@ def _markdown(bundle):
     for item in bundle["bindings"]:
         lines.extend([
             f"## Claim `{item['claim_id']}`", "",
-            f"{item['verdict']}。指标 `{item['metric']}` 的方向统一效应为 "
-            f"`{item['oriented_delta']!r}`，预注册阈值为 "
-            f"`{item['min_meaningful_effect']!r}`。", "",
+            f"{item['verdict']}。效应 `{item['effect_type']}` 为 "
+            f"`{item['effect_value']!r}` `{item['effect_unit']}`，登记阈值 "
+            f"`{item['threshold']!r}`，95% 区间 `{item['ci95']!r}`。", "",
+            f"历史描述性阈值记录：`{item['descriptive_status']}`；不作为科学支持判据。", "",
             f"适用范围：`{item['scope']}`；设计：`{item['design_id']}`；"
             f"决策：`{item['decision_id']}`。", "",
             "证据绑定：", "",

@@ -144,7 +144,7 @@ class LocalWorker:
     def _finalize_manual(self, job_dir, manifest, status, error_type):
         """写一个无产物的终态回执（取消 / supervisor 丢失等非执行路径）。"""
         if self.executor:
-            backend = "injected_test_executor"
+            backend = getattr(self.executor, 'execution_backend', 'injected_test_executor')
         elif manifest["spec"].get("sandboxed", True):
             # 回执里的后端名必须描述真实跑过的内核机制，不能把 Linux bubblewrap
             # 签成 Windows 低完整性；无可用后端时如实写 no_sandbox_backend。
@@ -263,7 +263,7 @@ class LocalWorker:
         write_json(job_dir / "job.json", manifest)
         started = time.monotonic()
         if self.executor:
-            backend = "injected_test_executor"
+            backend = getattr(self.executor, 'execution_backend', 'injected_test_executor')
         elif spec.sandboxed:
             backend = sandbox.execution_backend_name() or "no_sandbox_backend"
         else:

@@ -1,4 +1,5 @@
 import { PredictionSummary } from './PredictionSummary'
+import { scientificClaimLabel, scientificClaimEffect } from '../scientificClaim'
 import { useEffect, useRef, useState } from 'react'
 import { cancelStudyJob, fetchBoundDraft, fetchBoundDrafts, fetchDesignJob, fetchResearchEvidence, fetchRevisionJob, fetchStudyJobs, reviewBoundDraft, type BoundDraftRow, type CreatedBoundDraft, type ResearchEvidencePreview, type ResearchRunState, type ResearchState, type StudyLifecycleJob } from '../api'
 import type { ChatState, PopperState, Workspace } from '../types'
@@ -45,7 +46,9 @@ export function EntityPanel({ tab, research, onOpenResource }: { tab: WorkbenchT
   const observation = tab.kind === 'observation' ? run.observations?.find((item) => item.entity_id === tab.ref) : null
   const value = claim ?? observation
   const scientificJudgments = claim ? (run.judgments ?? []).filter((j) =>
-    j.scope === 'confirmation' && j.observation_refs.every((id) => claim.observation_refs.includes(id))) : []
+    j.scope === 'confirmation' && j.hypothesis_id === claim.hypothesis_id &&
+    j.hypothesis_version === claim.hypothesis_version && j.observation_refs.length === claim.observation_refs.length &&
+    j.observation_refs.every((id, index) => id === claim.observation_refs[index])) : []
   if (!value) return null
   return <div className="resource-detail"><span className="eyebrow">{claim ? '研究结论 / CLAIM' : '实验观察 / OBSERVATION'}</span><h2>{claim ? `${claim.metric} 的研究结论` : '实验观察结果'}</h2><span className="resource-status">{scientificJudgments.length ? '科研判断见独立证据；下列效应为描述性结果' : label(value.status)}</span><p className="muted">所属研究：{studyName(run)}</p>
     <p className="resource-scope">适用范围：{scopes[value.scope] ?? value.scope}</p><dl className="resource-facts">
@@ -86,7 +89,7 @@ export function EvidencePanel({ run, workspaceId = '', studyName: displayName, o
   return <div className="evidence-panel"><header className="panel-heading"><div><span className="eyebrow">研究证据 / EVIDENCE</span><h2>{displayName || studyName(run)}</h2></div><button type="button" className="btn" disabled={busy || !run.claims?.length} title={!run.claims?.length ? '形成真实研究结论后才能核验绑定' : undefined} onClick={() => { void verify() }}>{busy ? '正在核验…' : '核验证据绑定'}</button></header>
     <p className="muted">{(run.claims ?? []).length} 项研究结论 · {(run.observations ?? []).length} 项实验观察</p><p className="muted">本机核验只证明研究记录与源制品一致，不代表外部复现或稿件通过评审。</p>
     {error?.context === context && <div className="notice err" role="alert">{error.message}</div>}{stale && !busy && <div className="notice warn">需重新核验：当前研究尚无有效核验结果，旧结果不再作为当前依据。</div>}
-    <div className="entity-list">{run.claims?.map((claim) => <button type="button" key={claim.entity_id} title={claim.entity_id} onClick={() => onOpenResource({ kind: 'claim', ref: claim.entity_id, studyId: run.manifest?.study_id, title: `${claim.metric} 结论` })}><span className="entity-kind">结论</span><strong>{claim.metric} · 效应 {claim.oriented_delta.toPrecision(4)}</strong><span>{label(claim.status)}</span><span>↗</span></button>)}</div>
+    <div className="entity-list">{run.claims?.map((claim) => <button type="button" key={claim.entity_id} title={claim.entity_id} onClick={() => onOpenResource({ kind: 'claim', ref: claim.entity_id, studyId: run.manifest?.study_id, title: `${claim.metric} 结论` })}><span className="entity-kind">结论</span><strong>{claim.metric} · {scientificClaimEffect(claim)}</strong><span>{scientificClaimLabel(claim)}</span><span>↗</span></button>)}</div>
     <div className="entity-list">{run.observations?.map((observation, index) => <button type="button" key={observation.entity_id} title={observation.entity_id} onClick={() => onOpenResource({ kind: 'observation', ref: observation.entity_id, studyId: run.manifest?.study_id, title: `实验观察 ${index + 1}` })}><span className="entity-kind">观察</span><strong>实验观察 {index + 1}</strong><span>{observation.value} {observation.unit}</span><span>↗</span></button>)}</div>
     {evidence && <div className="verified-evidence"><div className="notice">已核验 {evidence.bundle.bindings.length} 条结论与本机源制品的绑定 · 状态版本 {evidence.bundle.study_state_version}</div><Markdown text={evidence.markdown} /><TechnicalDetails value={evidence.json_text} title="完整证据 JSON" /></div>}
     <TechnicalDetails value={{ study_id: run.manifest.study_id, state_version: run.state_version }} />

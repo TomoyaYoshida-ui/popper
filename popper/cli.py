@@ -55,6 +55,14 @@ def _build_code_harness(name, base_url, model, diagnostics_dir):
 
 
 def main(argv=None):
+    effective = list(sys.argv[1:] if argv is None else argv)
+    if effective and effective[0] == 'adaptive':
+        from .research.adaptive_benchmark import main as adaptive_main
+        try:
+            return adaptive_main(effective[1:])
+        except (ProtocolError, OSError, ValueError, KeyError, TypeError) as error:
+            print(f'Popper adaptive: {error}', file=sys.stderr)
+            return 2
     parser = argparse.ArgumentParser(prog="popper", description="Popper 实验推进 Agent · M0")
     commands = parser.add_subparsers(dest="command", required=True)
     demo = commands.add_parser("demo", help="从随包非 ML 模板建立离线科研项目")
@@ -958,7 +966,7 @@ def main(argv=None):
                     if args.context_only:
                         result = ResearchRuntime.preview_context(research_controller, profile=args.profile)
                     else:
-                        from .scoop import make_json_client
+                        from .transport.pydantic_planner import PydanticPlannerClient
                         from .model_budget import ModelRequestBudget
                         model_requests = None
                         try:
@@ -968,8 +976,8 @@ def main(argv=None):
                                     global_tokens=args.max_model_tokens, global_calls=args.max_model_calls,
                                     scope=args.session, scope_tokens=args.max_model_tokens,
                                     scope_calls=args.max_model_calls, unknown_usage_policy='reserve')
-                                call = make_json_client(args.base_url, args.model,
-                                    args.run_dir / 'model-diagnostics', request_budget=model_requests)
+                                call = PydanticPlannerClient(args.base_url, args.model,
+                                    diagnostics_dir=args.run_dir / 'model-diagnostics', request_budget=model_requests)
                             result = research_controller.planning_runtime(session_id=args.session, profile=args.profile,
                                 max_experiments=args.max_experiments, max_decisions=args.max_decisions).run(
                                     call, trusted_local=args.trusted_local, sandboxed=args.sandbox)
@@ -983,13 +991,13 @@ def main(argv=None):
                     planning_client = None
                     if research_controller.uses_registered_planning() and args.model:
                         from .model_budget import ModelRequestBudget
-                        from .scoop import make_json_client
+                        from .transport.pydantic_planner import PydanticPlannerClient
                         model_requests = ModelRequestBudget(args.run_dir / 'planning-model-requests.sqlite',
                             global_tokens=args.max_model_tokens, global_calls=args.max_model_calls,
                             scope='registered-run', scope_tokens=args.max_model_tokens,
                             scope_calls=args.max_model_calls, unknown_usage_policy='reserve')
-                        planning_client = make_json_client(args.base_url, args.model,
-                            args.run_dir / 'model-diagnostics', request_budget=model_requests)
+                        planning_client = PydanticPlannerClient(args.base_url, args.model,
+                            diagnostics_dir=args.run_dir / 'model-diagnostics', request_budget=model_requests)
                     elif args.autonomous_design:
                         if not args.model or not args.base_url:
                             raise ProtocolError("自主设计需要可记账的模型端点")

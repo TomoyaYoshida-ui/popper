@@ -48,6 +48,8 @@ class LogicalOperation:
         self.started = time.monotonic()
         self.cancel = OperationCancellation(cancel_event)
         self.attempts = 0
+        self.unsent_retries = 0
+        self.dispatch_count = 0
         self.last_failure = None
         self._terminal_failure = None
         self._closed = False
@@ -83,7 +85,18 @@ class LogicalOperation:
             if self.remaining_attempts == 0:
                 raise self.failure("attempt_budget_exhausted")
             self.attempts += 1
-            return self.attempts
+            self.dispatch_count += 1
+            return self.dispatch_count
+
+    def claim_unsent_retry(self):
+        """One extra dispatch when no request headers were sent. It is not a model correction."""
+        with self._lock:
+            self.check()
+            if self.unsent_retries >= 1:
+                raise self.failure("attempt_budget_exhausted")
+            self.unsent_retries += 1
+            self.dispatch_count += 1
+            return self.dispatch_count
 
     def record_failure(self, error, *, retryable):
         self.last_failure = error

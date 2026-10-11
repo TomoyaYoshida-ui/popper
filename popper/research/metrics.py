@@ -9,6 +9,7 @@ from ..core import ProtocolError, digest, file_hash, score
 from ..domains.protocol import IMPLEMENTED_SHAPES
 
 TABLE_SHAPES = {
+    'vector-mae-v1': 'aligned_prediction',
     "mse-v1": "aligned_prediction",
     "mae-v1": "aligned_prediction",
     "binary-accuracy-v1": "aligned_prediction",
@@ -23,6 +24,7 @@ TABLE_SHAPES = {
     "oscillator-trajectory-v1": "staged_artifacts",
 }
 LABEL_TYPES = {
+    'vector-mae-v1': frozenset({'integer', 'number'}),
     "mse-v1": frozenset({"integer", "number"}),
     "mae-v1": frozenset({"integer", "number"}),
     "binary-accuracy-v1": frozenset({"integer", "categorical"}),
@@ -37,6 +39,8 @@ _MULTI = [{"id": "a", "features": [0.0], "label": 0},
           {"id": "b", "features": [1.0], "label": 1},
           {"id": "c", "features": [2.0], "label": 2}]
 FIXTURES = {
+    'vector-mae-v1': ([{'id': 'a', 'features': [1., 2.], 'y': 3.}],
+                      [{'id': 'a', 'prediction': 3.}], 0),
     "mse-v1": (_REGRESSION, [{"id": "a", "prediction": 3}, {"id": "b", "prediction": 5}], 0),
     "mae-v1": (_REGRESSION, [{"id": "a", "prediction": 3}, {"id": "b", "prediction": 5}], 0),
     "binary-accuracy-v1": (_BINARY, [{"id": "a", "prediction": 1}, {"id": "b", "prediction": 0}], 1),

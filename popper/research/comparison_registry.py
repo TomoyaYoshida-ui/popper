@@ -5,7 +5,7 @@ from ..core import ProtocolError
 
 
 def supported_schemas():
-    return frozenset({'figs-grouped-ci/v1', 'paired-unit-ci/v1', 'paired-unit-ci/v2'})
+    return frozenset({'figs-grouped-ci/v1', 'paired-unit-ci/v1', 'paired-unit-ci/v2', 'prediction-packet-ci/v1'})
 
 
 def supported_metrics(schema):
@@ -16,6 +16,9 @@ def supported_metrics(schema):
 
 
 def engine(schema):
+    if schema == 'prediction-packet-ci/v1':
+        from . import prediction_comparison
+        return prediction_comparison
     if schema == 'paired-unit-ci/v2':
         from . import unit_comparison
         return unit_comparison

@@ -62,6 +62,11 @@ def research_lifecycle_phase(study_status, core_phase, decisions, *,
 
 
 class ResearchController:
+    @staticmethod
+    def adaptive_runtime(directory, contract, data_paths, baseline_source, **kwargs):
+        """Explicit v2 factory; legacy constructors and candidate declarations stay frozen."""
+        from .adaptive_runtime import AdaptiveResearchRuntime
+        return AdaptiveResearchRuntime(directory, contract, data_paths, baseline_source, **kwargs)
     """在已初始化 Popper 实验上执行自主、可审计的研究决策循环。"""
 
     MANIFEST = "research.json"

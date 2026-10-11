@@ -253,6 +253,8 @@ def _project(conn, study_id, manifest, run_dir) -> dict:
 
     events_total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     graph = _experiment_graph(run_dir, entities, study_id)
+    from .claim_projection import project_claim
+    entities['claim'] = [project_claim(row, entities['judgment']) for row in entities['claim']]
     lifecycle = _lifecycle_projection(manifest, study, entities["decision"], run_dir)
     return {"ok": True,
             **lifecycle,
@@ -281,6 +283,9 @@ def _project(conn, study_id, manifest, run_dir) -> dict:
 
 def _lifecycle_projection(manifest, study, decisions, run_dir):
     """Read the core snapshot without opening Experiment/Controller writers."""
+    if manifest.get('planning_protocol') == 'research-runtime/v2':
+        return {'phase': 'concluded' if study['status'] == 'concluded' else 'researching',
+                'core_phase': None, 'lifecycle_reason': None}
     core_phase = None
     reason = None
     try:

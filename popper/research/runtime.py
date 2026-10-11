@@ -135,10 +135,16 @@ class ResearchRuntime:
             result['structured_judgments'] = structured
         return result
 
+    def _reject(self, message, path, rule):
+        error = ProtocolError(message)
+        error.details = [{'path': path, 'rule': rule}]
+        raise error
+
     def _validate_refs(self, refs, context):
         known = {ref for item in context['raw_evidence'] for ref in item['evidence_refs']}
         if not set(refs) <= known:
-            raise ProtocolError('Proposal references unknown or withheld evidence')
+            self._reject('Proposal references unknown or withheld evidence',
+                         'action.evidence_refs', 'unknown_evidence')
 
     def _validate_action(self, action, context):
         self._validate_refs(action.evidence_refs, context)
@@ -147,11 +153,14 @@ class ResearchRuntime:
             return
         hid = action.candidate_id if isinstance(action, ExecuteCandidate) else action.hypothesis_id
         if hid not in candidates or candidates[hid]['executed']:
-            raise ProtocolError('Action requires an unexecuted registered candidate')
+            path = 'action.candidate_id' if isinstance(action, ExecuteCandidate) else 'action.hypothesis_id'
+            self._reject('Action requires an unexecuted registered candidate',
+                         path, 'unexecuted_registered_candidate')
         if isinstance(action, ExecuteCandidate) and context['remaining_experiments'] == 0:
-            raise ProtocolError('Frozen experiment limit reached')
+            self._reject('Frozen experiment limit reached', 'action', 'experiment_limit')
         if isinstance(action, ReviseHypothesis) and not action.evidence_refs:
-            raise ProtocolError('Revision must cite independently verified evidence')
+            self._reject('Revision must cite independently verified evidence',
+                         'action.evidence_refs', 'evidence_required')
 
     def _assessment(self, payload, context, step):
         try:
@@ -304,24 +313,35 @@ class ResearchRuntime:
                     self._write('request_started', step, {'step': step, 'context_sha256': digest(context),
                                                          'logical_request_id': key})
                     cancel = _CallbackCancellation(should_cancel)
-                    operation = (client.logical_operation(key, max_attempts=2, cancel_event=cancel)
-                                 if inspect.getattr_static(client, 'logical_operation', None) is not None else nullcontext())
-                    with operation:
-                        for repair in range(2):
-                            request = context if repair == 0 else {'context': context, 'validation_errors': feedback}
-                            payload = client(decision_instructions(), request,
-                                             logical_request_id=key, on_progress=on_progress,
-                                             cancel_event=cancel)
-                            try:
-                                if not isinstance(payload, dict) or set(payload) - {'action', 'assessment'}:
-                                    raise ProtocolError('Decision envelope fields are invalid')
-                                action = parse_action(payload.get('action'))
-                                self._validate_action(action, context)
-                                break
-                            except ProtocolError as error:
-                                if repair:
-                                    raise
-                                feedback = getattr(error, 'details', [{'path': 'action', 'rule': 'registered_action_or_evidence'}])
+                    if getattr(client, 'decide', None) is not None:
+                        def persist(event):
+                            kind = event.get('kind')
+                            if kind not in {'model_response_received', 'model_response_rejected', 'model_output_accepted'}:
+                                return
+                            self._write(kind, event['event_id'], event)
+                        payload = client.decide(
+                            context, validate_action=lambda action: self._validate_action(action, context),
+                            on_event=persist, logical_request_id=key, on_progress=on_progress,
+                            cancel_event=cancel)
+                    else:
+                        operation = (client.logical_operation(key, max_attempts=2, cancel_event=cancel)
+                                     if inspect.getattr_static(client, 'logical_operation', None) is not None else nullcontext())
+                        with operation:
+                            for repair in range(2):
+                                request = context if repair == 0 else {'context': context, 'validation_errors': feedback}
+                                payload = client(decision_instructions(), request,
+                                                 logical_request_id=key, on_progress=on_progress,
+                                                 cancel_event=cancel)
+                                try:
+                                    if not isinstance(payload, dict) or set(payload) - {'action', 'assessment'}:
+                                        raise ProtocolError('Decision envelope fields are invalid')
+                                    action = parse_action(payload.get('action'))
+                                    self._validate_action(action, context)
+                                    break
+                                except ProtocolError as error:
+                                    if repair:
+                                        raise
+                                    feedback = getattr(error, 'details', [{'path': 'action', 'rule': 'registered_action_or_evidence'}])
                 self.apply_proposal(payload, step=step, trusted_local=trusted_local,
                     sandboxed=sandboxed, should_cancel=should_cancel)
                 if self.records('planner_closed'):
