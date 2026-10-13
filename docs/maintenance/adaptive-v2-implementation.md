@@ -55,7 +55,10 @@ cohort；不允许用不同名单或新研究重开。
 的实际回执判断完成情况。代码存在、离线测试通过、真实试点完成、
 正式对照完成分别记账，不能相互替代。
 
-截至 2026-10-11：描述性综合见
-`adaptive-formal-descriptive-synthesis-2026-10-11.md`。全局账本已提高到
-3200 / 3600 万；`formal-independent-72` 已启动 live。不宣称策略优势。详见
-`adaptive-root-cause-governance-2026-10-11.md`。
+截至 2026-10-13：比较质量不再接受 `independence_verified` 布尔值。
+见 `adaptive-sampling-audit-2026-10-13.md`。
+`formal-iid-72` 描述性综合见
+`adaptive-formal-iid-72-synthesis-2026-10-13.md`（确认 67/72；
+supported 18、refuted 26、inconclusive 23、not_evaluated 5）。
+修订须留复验容量（软拒绝）；修订容量指纹已冻，live 未开。
+见根因治理文档。不宣称策略优势。`formal-generated-root` 保持未启动。

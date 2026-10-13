@@ -10,6 +10,8 @@ def test_generated_task_seals_holdout_and_freezes_preprocessing(tmp_path):
     assert contract['planning_protocol']=='research-runtime/v2'
     assert contract['model_seed']==17
     assert prepared['independence_verified'] is True
+    assert prepared['sampling'] == {'design': 'iid_row', 'generator_version': 'adaptive-tasks/v1'}
+    assert contract['sampling'] == prepared['sampling']
     assert 'seed' not in prepared['card'] and 'kind' not in prepared['card']['source'] or prepared['card']['source']['kind']=='generated'
     assert prepare_task(tmp_path/'task','new',kind=1,n=200)==prepared
     assert len(FIXED_CONFIGS)==8

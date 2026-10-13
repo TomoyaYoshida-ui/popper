@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-adaptive = ["numpy==2.2.6", "scikit-learn==1.7.2", "pandas==2.3.3", "openpyxl>=3.1,<4", "pydantic-ai-slim[openai]>=2.54.0,<2.55"]
+adaptive = ["numpy==2.2.6", "scikit-learn==1.7.2", "pandas==2.3.3", "openpyxl>=3.1,<4", "xlrd==2.0.1", "pydantic-ai-slim[openai]>=2.54.0,<2.55"]
 analysis = ["numpy==2.2.6"]
 ml = ["scikit-learn>=1.7,<1.8"]
 intake = ["pyarrow>=18,<25"]

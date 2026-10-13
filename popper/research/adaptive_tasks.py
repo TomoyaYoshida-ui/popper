@@ -139,7 +139,10 @@ def prepare_task(directory, task_id, *, public=None, kind=0, n=5000):
             'hardware':['MYCT','MMIN','MMAX','CACH','CHMIN','CHMAX']}[public[0]])
     data={'task_id':task_id,'target_column':target,'feature_names':names,'source':source,
           'groups':groups,'data_hashes':{s:file_hash(root/(s+'.json')) for s in indices},
-          'independence_verified':public is None,'card':card,
+          'independence_verified':public is None,
+          'sampling':({'design':'iid_row','generator_version':'adaptive-tasks/v1'} if public is None
+                      else {'design':'feature_row_hash'}),
+          'card':card,
           'materials':[{'id':'dataset-card','text':str(card)}], 'bootstrap_seed':int(rng.integers(0,2**32))}
     write_json(root/'oracle-private.json',{'seed':seed,'kind':kind if public is None else None})
     write_json(root/'prepared.json',data)
@@ -150,5 +153,6 @@ def contract_for(prepared, seed):
     return AdaptiveTaskContract(task_id=prepared['task_id'],objective='Propose and test a scientifically motivated predictive intervention using the frozen target.',
         target_column=prepared['target_column'],feature_names=prepared['feature_names'],
         data_hashes=prepared['data_hashes'],baseline=BASELINE,analysis_unit='registered observation groups',
-        independence_verified=prepared['independence_verified'],groups=prepared['groups'],
+        independence_verified=prepared['independence_verified'],sampling=prepared.get('sampling'),
+        groups=prepared['groups'],
         bootstrap_seed=prepared['bootstrap_seed'],model_seed=seed,materials=prepared['materials']).model_dump()

@@ -16,6 +16,7 @@ class AdaptiveTaskContract(BaseModel):
     baseline: dict
     analysis_unit: str = Field(min_length=1)
     independence_verified: bool = False
+    sampling: dict | None = None
     groups: dict[str, str]
     metric: Literal['mae'] = 'mae'
     effect: Literal['relative_mae_improvement'] = 'relative_mae_improvement'

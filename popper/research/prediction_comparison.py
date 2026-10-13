@@ -71,10 +71,56 @@ def _worker_binding(rows, descriptor, bindings):
     return inputs['training_data']['sha256']
 
 
+def _feature_unit(row):
+    features = row.get('features')
+    if not isinstance(features, list) or not features:
+        return None
+    normalized = []
+    for value in features:
+        if isinstance(value, bool) or type(value) not in (int, float) or not np.isfinite(value):
+            normalized.append(None)
+        else:
+            normalized.append(float(value))
+    return digest(normalized)
+
+
+def _citable_record(record):
+    if not isinstance(record, dict):
+        return False
+    citation, statement = record.get('citation'), record.get('statement')
+    return (isinstance(citation, str) and bool(citation.strip())
+            and isinstance(statement, str) and bool(statement.strip()))
+
+
+def _sampling_audited(packet, rows, groups, n_units):
+    """Validity requires an auditable design, not a caller-supplied boolean."""
+    if n_units < 30:
+        return False
+    sampling = packet.get('sampling')
+    if not isinstance(sampling, dict):
+        return False
+    design = sampling.get('design')
+    if design == 'iid_row':
+        if sampling.get('generator_version') != 'adaptive-tasks/v1':
+            return False
+        return all(groups[row['id']] == _feature_unit(row) for row in rows)
+    if design == 'documented_cluster':
+        clusters = sampling.get('clusters')
+        if not _citable_record(sampling.get('sampling_record')) or not isinstance(clusters, list):
+            return False
+        if not clusters or any(not isinstance(name, str) or not name for name in clusters):
+            return False
+        if len(set(clusters)) != len(clusters):
+            return False
+        return set(groups.values()) <= set(clusters)
+    return False
+
+
 def evaluate(packet):
     required = {'schema', 'dataset', 'dataset_sha256', 'baseline', 'candidate', 'groups',
                 'independence_verified', 'bootstrap_seed', 'hypothesis_predictions', 'bindings'}
-    if set(packet) != required or packet['schema'] != SCHEMA:
+    keys = set(packet)
+    if packet.get('schema') != SCHEMA or keys not in (required, required | {'sampling'}):
         raise ProtocolError('Prediction comparison packet is invalid')
     checked(packet['dataset'], packet['dataset_sha256'])
     rows = dataset(packet['dataset'], 'vector-mae-v1')
@@ -94,7 +140,8 @@ def evaluate(packet):
             (abs(baseline[row['id']] - row['y']), abs(candidate[row['id']] - row['y'])))
     means = np.array([np.mean(losses[g], axis=0) for g in sorted(losses)])
     b, c = np.mean(means, axis=0)
-    quality = ('valid' if len(means) >= 30 and packet['independence_verified'] is True
+    # independence_verified is retained for older packets and does not grant validity.
+    quality = ('valid' if _sampling_audited(packet, rows, groups, len(means))
                else 'insufficient_independent_units')
     if b <= 0:
         quality, effect, interval = 'zero_baseline_denominator', None, None

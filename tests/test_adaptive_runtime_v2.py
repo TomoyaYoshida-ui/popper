@@ -25,12 +25,14 @@ def make_runtime(tmp_path):
     paths, groups = {}, {}
     for split, offset in [('train', 0), ('dev', 100), ('confirmation', 200)]:
         rows = [{'id': str(i), 'features': [float(i + 1)], 'y': float(i + 1)} for i in range(offset, offset + 40)]
-        for row in rows:groups[row['id']] = row['id']
+        for row in rows:
+            groups[row['id']] = digest([float(row['features'][0])])
         paths[split] = tmp_path / f'{split}.json'
         write_json(paths[split], rows)
     contract = AdaptiveTaskContract(task_id='test', objective='Predict a continuous target',
         target_column='y', feature_names=['x'], data_hashes={k: file_hash(p) for k,p in paths.items()},
         baseline={'model':'constant'}, analysis_unit='independent rows', independence_verified=True,
+        sampling={'design': 'iid_row', 'generator_version': 'adaptive-tasks/v1'},
         groups=groups, bootstrap_seed=123, model_seed=17,
         materials=[{'id':'dataset-card','text':'Independent continuous predictor and target'}]).model_dump()
     return AdaptiveResearchRuntime(tmp_path / 'run', contract, paths, BASELINE, executor=executor)
@@ -92,6 +94,14 @@ def test_v2_unknown_evidence_and_frozen_problem_are_rejected(tmp_path):
     finally:r.close()
 
 
+def _revise(evidence, hid, *, predictions=None):
+    return parse_action({'kind':'revise_hypothesis','hypothesis_id':hid,
+        'mechanism':'A revised explanation requires a new intervention',
+        'predictions':predictions or ['A new version must be tested'],
+        'rationale':'Use the observed evidence',
+        'evidence_refs':evidence['observation_refs']})
+
+
 def test_revised_version_does_not_inherit_prior_support(tmp_path):
     r = make_runtime(tmp_path)
     try:
@@ -102,15 +112,59 @@ def test_revised_version_does_not_inherit_prior_support(tmp_path):
             'mechanism':'Unsupported revision','predictions':['Untested'],
             'rationale':'Only a public card','evidence_refs':['dataset-card']})
         with pytest.raises(ProtocolError,match='development evidence'):r.validate(without_observation)
-        r.apply(parse_action({'kind':'revise_hypothesis','hypothesis_id':hid,
-            'mechanism':'A revised explanation requires a new intervention',
-            'predictions':['A new version must be tested'], 'rationale':'Use the observed evidence',
-            'evidence_refs':evidence['observation_refs']}), '2')
+        r.apply(_revise(evidence, hid), '2')
         assert r.store.get('hypothesis',hid)['version']==2
         assert not any(j['hypothesis_version']==2 for j in r.store.list('judgment'))
         assert r.freeze_selection('revision')['finalist'] is None
         assert r.store.verify()['ok']
     finally:r.close()
+
+
+def test_revision_rejected_when_experiment_cap_is_full(tmp_path):
+    r = make_runtime(tmp_path)
+    try:
+        r.apply(problem(), '0')
+        r.apply(experiment(), '1')
+        evidence = r.records('attempt_completed')[0]['data']
+        hid = evidence['candidate']['hypothesis_id']
+        for index in range(2, 9):
+            r.apply(experiment().model_copy(update={'parent_candidate_id': '1'}), str(index))
+        assert len(r.records('attempt_started')) == 8
+        with pytest.raises(ProtocolError, match='remaining experiment slot'):
+            r.validate(_revise(evidence, hid))
+    finally:
+        r.close()
+
+
+def test_revision_rejected_on_last_planning_step(tmp_path):
+    r = make_runtime(tmp_path)
+    try:
+        r.apply(problem(), '0')
+        r.apply(experiment(), '1')
+        evidence = r.records('attempt_completed')[0]['data']
+        hid = evidence['candidate']['hypothesis_id']
+        for index in range(11):
+            r.record('decision_completed', str(index), {'status': 'synthetic'})
+        assert len(r.records('decision_completed')) == 11
+        with pytest.raises(ProtocolError, match='remaining planning step'):
+            r.validate(_revise(evidence, hid))
+    finally:
+        r.close()
+
+
+def test_revision_rejected_without_success_on_current_version(tmp_path):
+    r = make_runtime(tmp_path)
+    try:
+        r.apply(problem(), '0')
+        r.apply(experiment(), '1')
+        evidence = r.records('attempt_completed')[0]['data']
+        hid = evidence['candidate']['hypothesis_id']
+        r.apply(_revise(evidence, hid), '2')
+        assert r.store.get('hypothesis', hid)['version'] == 2
+        with pytest.raises(ProtocolError, match='successful test of the current explanation version'):
+            r.validate(_revise(evidence, hid, predictions=['Another untested revision']))
+    finally:
+        r.close()
 
 
 def test_workbench_projection_binds_v2_scientific_judgment(tmp_path):

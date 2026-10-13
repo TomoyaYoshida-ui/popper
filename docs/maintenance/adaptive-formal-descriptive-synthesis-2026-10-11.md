@@ -82,3 +82,6 @@
 `ledger-amendment-independent-72.json`）。`formal-independent-72` 的
 `global_call_cap` / `global_token_cap` 同步写入，源码改为从 cohort 读取上限，
 并重新绑定指纹后启动 `--live`。仍不宣称策略优势。
+
+本轮跑完后的描述性综合见 `adaptive-independent-72-synthesis-2026-10-12.md`。
+两轮分开记账，不合并成策略排名。

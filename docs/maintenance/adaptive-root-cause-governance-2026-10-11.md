@@ -45,7 +45,31 @@
 - 锁定的 `formal`（公开+生成 72 单元）保持不可变；公开任务样本身份已占用，不能再登记同一 PUBLIC 行。
 - 已绑定同指纹的生成后续：`formal-generated-root`（G01–G06，36 单元，未启动 `--live`）。
 - 已绑定同指纹的独立预注册 72 单元：`formal-independent-72`（N01–N12 全新生成任务，12×3×2，未启动 `--live`）。
-- 2026-10-11：共享账本全局上限显式提高到 3200 次 / 3600 万 token
-  （`ledger-amendment-independent-72.json`）；`formal-independent-72` 已重绑指纹并启动 live。
-- `formal-generated-root`（36 单元）仍为未启动的备选缩小队列。
-- 若要做含独立公开数据的 12 任务 twin，经 `formal-root-independent-public.json` 再跑 `prepare_formal_root.py`。
+- 2026-10-12：`formal-independent-72` 已跑完，退出码 0。确认完成
+  61/72（fixed 24/24，generic 19/24，evidence 18/24）。科学判断
+  refuted 30、inconclusive 31、not_evaluated 11、supported 0。
+  开发失败 8，确认失败 1，均留在分母。共享账本约 1929 / 3200 次发送、
+  已知约 1887 万 / 3600 万 token。不宣称策略优势。
+- 描述性综合见 `adaptive-independent-72-synthesis-2026-10-12.md`。
+- `formal-generated-root`（36 单元）保持未启动，不再作为下一轮实验。
+- 2026-10-12：`formal-root` 已跑完，退出码 0。公开 U01–U06 与生成 R01–R06
+  分开记账。确认完成 61/72。科学判断 supported 4（全在生成分区）、
+  refuted 14、inconclusive 43、not_evaluated 11。公开分区没有 supported
+  或 refuted。失败留在分母。不宣称策略优势。
+  描述性综合见 `adaptive-formal-root-synthesis-2026-10-12.md`。
+- 2026-10-13：比较质量改为可审计抽样（`iid_row` / `documented_cluster`）。
+  指纹已冻；`formal-iid-72` 已跑完，确认 67/72，supported 18、refuted 26、
+  inconclusive 23、not_evaluated 5。描述见
+  `adaptive-formal-iid-72-synthesis-2026-10-13.md`。不宣称策略优势。
+  `formal-generated-root` 仍未启动。
+- 2026-10-13：`formal-iid-72` 的 5 个未评全是 generic 修订后未复验。
+  科学语义仍是「新版本不继承旧支持」；根因是修订未留复验容量。
+  `validate` 对修订软拒绝：实验槽已满、已是最后规划步、或当前版本尚无成功实验。
+  修订容量指纹已手写冻入门禁（检查项 `revision_capacity`）。
+  不提高单元发送上限，不开 live。`formal-generated-root` 仍未启动。
+- 2026-10-13：`pilot-revision-capacity`（PR01–PR02，6 单元）已跑完，退出码 0。
+  确认 6/6，supported 0、refuted 1、inconclusive 5、not_evaluated 0；
+  均有 finalist。两格应用修订且修订后均有复验；容量软拒绝短语未在收据中出现
+  （修订发生在仍有容量时，或先被合同层拒绝）。未复现 iid-72「修订后无复验 → 未评」。
+  描述见 `adaptive-pilot-revision-capacity-synthesis-2026-10-13.md`。
+  不宣称策略优势。`formal-generated-root` 仍未启动。

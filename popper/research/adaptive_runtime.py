@@ -169,6 +169,20 @@ class AdaptiveResearchRuntime:
             if not any(action.hypothesis_id in (r['data']['hypothesis_id'],r['data']['alternative_id'])
                        for r in self.records('candidate')):
                 raise ProtocolError('Only registered candidate explanation pairs can be revised')
+            # Soft rejects: leave room to retest the new version. Do not hard-stop the cell.
+            if len(self.records('attempt_started')) >= 8:
+                raise ProtocolError('Revision requires a remaining experiment slot')
+            if len(self.records('decision_completed')) >= 11:
+                raise ProtocolError('Revision requires a remaining planning step for retest')
+            hypothesis = self.store.get('hypothesis', action.hypothesis_id)
+            tested_current = any(
+                row['data']['status'] == 'succeeded'
+                and action.hypothesis_id in (row['data']['candidate']['hypothesis_id'],
+                                             row['data']['candidate']['alternative_id'])
+                and row['data']['candidate']['hypothesis_version'] == hypothesis['version']
+                for row in self.records('attempt_completed'))
+            if not tested_current:
+                raise ProtocolError('Revision requires a successful test of the current explanation version')
 
     def _revision(self, source, hid, did, parent=None):
         compile(source, 'model.py', 'exec')
@@ -307,6 +321,8 @@ class AdaptiveResearchRuntime:
                 candidate['alternative_id']: {'operator': 'between', 'threshold': [-.05, .05]}},
             'bindings': [ref for desc in (baseline_descriptor,candidate_descriptor)
                          for ref in desc['worker'].values()]}
+        if self.contract.sampling is not None:
+            packet['sampling'] = self.contract.sampling
         out = self.root / 'evaluations' / cr
         out.mkdir(parents=True, exist_ok=True)
         write_json(out / 'packet.json', packet)
