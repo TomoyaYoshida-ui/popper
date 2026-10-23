@@ -388,14 +388,16 @@ class ResearchController:
             ids, descriptor = compare(self, baseline, observation, protocol)
         references = (baseline['observation_id'], observation['observation_id'])
         result = []
-        for hid in ids:
-            version = self.store.get('hypothesis', hid)['version']
-            existing = [j for j in self.store.list('judgment')
-                        if j['hypothesis_id'] == hid and j['hypothesis_version'] == version
-                        and tuple(j['observation_refs']) == references
-                        and j['comparison_artifact'] == descriptor]
-            result.append(existing[-1] if existing else self.store.record_judgment(
-                hid, version, references, comparison_artifact=descriptor))
+        from .scientific_authority import authorize_evidence_write
+        with authorize_evidence_write(actor='research_controller'):
+            for hid in ids:
+                version = self.store.get('hypothesis', hid)['version']
+                existing = [j for j in self.store.list('judgment')
+                            if j['hypothesis_id'] == hid and j['hypothesis_version'] == version
+                            and tuple(j['observation_refs']) == references
+                            and j['comparison_artifact'] == descriptor]
+                result.append(existing[-1] if existing else self.store.record_judgment(
+                    hid, version, references, comparison_artifact=descriptor))
         return result
 
     def _mark_development_scored(self, hypothesis_id):
@@ -411,14 +413,16 @@ class ResearchController:
                    "inconclusive": HypothesisStatus.INCONCLUSIVE,
                    "not_evaluated": HypothesisStatus.INCONCLUSIVE}
         allowed = set(self.manifest["candidate_hypothesis_ids"])
-        for judgment in judgments:
-            if judgment.get("scope") != "confirmation" or judgment["hypothesis_id"] not in allowed:
-                continue
-            target = mapping[judgment["new_judgment"]]
-            hypothesis = self.store.get("hypothesis", judgment["hypothesis_id"])
-            if hypothesis["status"] != target.value:
-                self.store.set_hypothesis_status(
-                    judgment["hypothesis_id"], hypothesis["version"], target)
+        from .scientific_authority import authorize_evidence_write
+        with authorize_evidence_write(actor='research_controller'):
+            for judgment in judgments:
+                if judgment.get("scope") != "confirmation" or judgment["hypothesis_id"] not in allowed:
+                    continue
+                target = mapping[judgment["new_judgment"]]
+                hypothesis = self.store.get("hypothesis", judgment["hypothesis_id"])
+                if hypothesis["status"] != target.value:
+                    self.store.set_hypothesis_status(
+                        judgment["hypothesis_id"], hypothesis["version"], target)
 
     def _observation_for_design(self, design_id, scope="dev"):
         rows = [o for o in self.store.list("observation")

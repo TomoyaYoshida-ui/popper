@@ -132,14 +132,19 @@ class HypothesisContractTests(ResearchStoreTestCase):
             self.store.add_hypothesis(_hypothesis(status=HypothesisStatus.SUPPORTED_IN_SCOPE))
 
     def test_hypothesis_status_transitions(self):
+        from popper.research.scientific_authority import authorize_evidence_write
         self.store.add_hypothesis(_hypothesis())
-        self.store.set_hypothesis_status("H1", 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
+        with self.assertRaisesRegex(ProtocolError, 'authorize_evidence_write'):
+            self.store.set_hypothesis_status("H1", 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
+        with authorize_evidence_write(actor='test'):
+            self.store.set_hypothesis_status("H1", 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
         self.assertEqual("supported_in_scope",
                          self.store.get("hypothesis", "H1")["status"])
         # 重复置同一状态非法
-        with self.assertRaises(TransitionError):
-            self.store.set_hypothesis_status("H1", 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
-        self.store.set_hypothesis_status("H1", 1, HypothesisStatus.RETIRED)
+        with authorize_evidence_write(actor='test'):
+            with self.assertRaises(TransitionError):
+                self.store.set_hypothesis_status("H1", 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
+            self.store.set_hypothesis_status("H1", 1, HypothesisStatus.RETIRED)
         with self.assertRaises(TransitionError):
             self.store.set_hypothesis_status("H1", 1, HypothesisStatus.INCONCLUSIVE)
 

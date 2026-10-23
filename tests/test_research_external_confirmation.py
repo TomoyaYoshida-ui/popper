@@ -104,8 +104,10 @@ class ExternalConfirmationControllerTests(unittest.TestCase):
                                "Registered slices show a boundary candidate.",
                                self.selected["hypothesis_id"]), tuple(refs))
         else:
-            self.controller.store.set_hypothesis_status(
-                self.selected["hypothesis_id"], 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
+            from popper.research.scientific_authority import authorize_evidence_write
+            with authorize_evidence_write(actor='test'):
+                self.controller.store.set_hypothesis_status(
+                    self.selected["hypothesis_id"], 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
             self.controller._record(
                 ActionProposal(REQUEST_CONFIRMATION,
                                "The generated candidate passed development screening.",

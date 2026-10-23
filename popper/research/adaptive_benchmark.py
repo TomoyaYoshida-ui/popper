@@ -11,7 +11,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from ..core import ProtocolError, digest, file_hash, read_json, write_json
 from ..model_budget import ModelRequestBudget
-from .adaptive_runtime import AdaptiveResearchRuntime, AdaptivePlannerClient
+from .adaptive_runtime import AdaptivePlannerClient
+from .runtime_facade import ScientificRuntime
 from .adaptive_protocol import parse_action
 from .adaptive_tasks import PUBLIC, BASELINE, FIXED_CONFIGS, MODEL_SOURCE, prepare_task, contract_for
 from .exposure_ledger import ExposureLedger
@@ -90,8 +91,11 @@ def prepare(root, pilot=False):
 def runtime(root,cohort,cell):
     task=next(t for t in cohort['tasks'] if t['task_id']==cell['task_id'])
     directory=Path(task['directory'])
-    return AdaptiveResearchRuntime(Path(root)/'cells'/cell['id'],cell['contract'],
-        {s:directory/(s+'.json') for s in ('train','dev','confirmation')},MODEL_SOURCE,profile=cell['profile'])
+    session = ScientificRuntime.open_adaptive(
+        Path(root)/'cells'/cell['id'], cell['contract'],
+        {s: directory/(s+'.json') for s in ('train', 'dev', 'confirmation')},
+        MODEL_SOURCE, profile=cell['profile'])
+    return session.adaptive
 
 
 class FrozenClient:

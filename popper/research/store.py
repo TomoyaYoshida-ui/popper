@@ -731,6 +731,10 @@ class ResearchStore:
 
     def set_hypothesis_status(self, hypothesis_id, version, target: HypothesisStatus):
         writer = AUTHORITY["hypothesis"]
+        if target in (HypothesisStatus.SUPPORTED_IN_SCOPE,
+                      HypothesisStatus.CONTRADICTED_IN_SCOPE):
+            from .scientific_authority import require_evidence_write_authorized
+            require_evidence_write_authorized()
 
         def _do():
             current = self.get("hypothesis", hypothesis_id)
@@ -906,6 +910,8 @@ class ResearchStore:
 
     def record_judgment(self, hypothesis_id, version, observation_refs=(), *, comparison_artifact=None):
         """Derive an immutable judgment from verified evaluator observations, never model scores."""
+        from .scientific_authority import require_evidence_write_authorized
+        require_evidence_write_authorized()
         from .judgment import derive
         def _do():
             integrity = self.verify()

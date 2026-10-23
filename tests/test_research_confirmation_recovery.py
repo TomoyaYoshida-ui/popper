@@ -52,8 +52,10 @@ class ConfirmationRecoveryTests(unittest.TestCase):
                 True, False)
         controller.store.set_hypothesis_status(control_id, 1, HypothesisStatus.INCONCLUSIVE)
         # The losing candidate fixture exercises a final confirmation rejection.
-        controller.store.set_hypothesis_status(
-            self.candidate_id, 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
+        from popper.research.scientific_authority import authorize_evidence_write
+        with authorize_evidence_write(actor='test'):
+            controller.store.set_hypothesis_status(
+                self.candidate_id, 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
         controller._record(ActionProposal(REQUEST_CONFIRMATION, "fixture dev decision",
                                            self.candidate_id))
         self.initial_spent = controller.status()["budget"]["spent"]

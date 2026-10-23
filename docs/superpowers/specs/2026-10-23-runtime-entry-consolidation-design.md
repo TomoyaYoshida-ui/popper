@@ -1,26 +1,26 @@
-# 科学执行权硬收敛（确认路径）
+# 科学执行权硬收敛
 
 日期：2026-10-23  
-状态：用户否决表面入口收口（方案 A）；批准并执行方案 B  
+状态：确认闸已落地；本轮补齐 Adaptive 评估写入收敛与统一科学入口  
 仓库：`research-agent-v2` / 分支 `autopilot`
 
-## 问题
+## 已完成
 
-Adaptive 与旧 Campaign/Experiment 路径可以自行消费确认集、写 judgment/claim，形成第二套科学执行权威。只改 CLI/UI 文案不能解决问题。
+1. **确认集**：`claims.confirm` / `confirm_signed` 必须经 `authorize_confirmation`。
+2. **Campaign confirm**：禁止 `Experiment.confirm`；需要 `research-runtime/v1` + Controller。
+3. **证据写入**：`record_judgment` 与终态假设状态（supported / contradicted）必须经 `authorize_evidence_write`。
+4. **Adaptive `_evaluate`**：worker 调度仍在 Adaptive；独立比较子进程与 observation/judgment/终态写入经 `scientific_execution`（强制证据授权）。`_run` 仍是本地 JobSpec/Worker（与 Controller 的 worker 同型能力，不另立计分权威）。
+5. **统一科学入口**：`ScientificRuntime`（`runtime_facade.py`）打开 registered / adaptive 会话。Orchestrator **不是** ScientificRuntime（`campaign_is_not_scientific_runtime()`）。
 
-## 目标（本轮）
+## 刻意不做的「物理三合一」
 
-1. `ResearchStore.claims.confirm` / `confirm_signed` **只能**在 `scientific_authority.authorize_confirmation` 上下文中调用。
-2. `ResearchController` 与 `AdaptiveResearchRuntime.confirm` 均经该授权写入；Adaptive 不得保留未授权直连。
-3. Campaign 的 `confirm_node` **禁止**回退到 `Experiment.confirm`；无 `planning_protocol=research-runtime/v1` 时明确失败。
-4. 测试锁死：未授权直连 confirm 失败；Adaptive/Controller 授权路径仍可用；Campaign 旧确认旁路失败。
+不把 `ResearchController`、`AdaptiveResearchRuntime`、`Orchestrator` 揉成一个 5000 行类。产品层已收敛为：
 
-## 非目标（本轮）
-
-- 不把 Adaptive 的 `_run`/`_evaluate` 整段迁进 Controller（开发执行收敛可后续）
-- 不物理合并 Runtime 类层次
-- 不做审计级查新 / 论文生成
+- 科学：`ScientificRuntime` → Controller 或 Adaptive（评估写入共享模块）
+- 编排：Orchestrator（确认必须进 Controller）
 
 ## 成功标准
 
-仓库中不存在可执行的「未授权 `claims.confirm`」路径；Campaign 不能再靠 Experiment 静默完成确认。
+- 未授权 `record_judgment` / 终态 status / `claims.confirm` 均失败。
+- Adaptive 评估发布路径只存在于 `scientific_execution`。
+- Adaptive 基准经 `ScientificRuntime.open_adaptive` 构造。

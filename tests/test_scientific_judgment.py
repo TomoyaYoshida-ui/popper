@@ -6,6 +6,7 @@ from pathlib import Path
 from popper.core import ProtocolError, initialize
 from popper.research.controller import ResearchController
 from popper.research.judgment import interval_verdict
+from popper.research.scientific_authority import authorize_evidence_write
 from popper.research.store import ResearchStore
 
 
@@ -35,7 +36,8 @@ class JudgmentTests(unittest.TestCase):
                 self.assertEqual('not_recorded',judgment['old_judgment'])
                 self.assertEqual('inconclusive',judgment['new_judgment'])
                 self.assertFalse(judgment['mechanism_proven'])
-                again=controller.store.record_judgment(judgment['hypothesis_id'],judgment['hypothesis_version'],judgment['observation_refs'])
+                with authorize_evidence_write(actor='test'):
+                    again=controller.store.record_judgment(judgment['hypothesis_id'],judgment['hypothesis_version'],judgment['observation_refs'])
                 self.assertEqual(judgment,again)
                 self.assertEqual(1,len(controller.store.list('judgment')))
                 self.assertTrue(any(d.get('judgment_refs') for d in status['decisions']))
@@ -43,7 +45,10 @@ class JudgmentTests(unittest.TestCase):
                 artifact.write_text('{}',encoding='utf-8')
                 self.assertFalse(controller.store.verify()['ok'])
                 with self.assertRaises(ProtocolError):
-                    controller.store.record_judgment(judgment['hypothesis_id'],judgment['hypothesis_version'],())
+                    with authorize_evidence_write(actor='test'):
+                        controller.store.record_judgment(judgment['hypothesis_id'],judgment['hypothesis_version'],())
+                with self.assertRaisesRegex(ProtocolError, 'authorize_evidence_write'):
+                    controller.store.record_judgment(judgment['hypothesis_id'],judgment['hypothesis_version'],judgment['observation_refs'])
             finally: controller.close()
 
     def test_execution_failure_is_not_scientific_refutation(self):
@@ -55,7 +60,8 @@ class JudgmentTests(unittest.TestCase):
             controller=ResearchController(run)
             try:
                 hid=controller.manifest['candidate_hypothesis_ids'][0]
-                judgment=controller.store.record_judgment(hid,1,())
+                with authorize_evidence_write(actor='test'):
+                    judgment=controller.store.record_judgment(hid,1,())
                 self.assertEqual('not_evaluated',judgment['new_judgment'])
                 self.assertTrue(controller.store.verify()['ok'])
             finally: controller.close()

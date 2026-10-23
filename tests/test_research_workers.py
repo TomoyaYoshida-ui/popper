@@ -674,8 +674,10 @@ class RevisionControllerIntegrationTests(unittest.TestCase):
                 self.assertEqual("already_observed", replay["status"])
                 self.assertIsNone(replay["revision"])
                 self.assertEqual(original_call_count, len(policy.calls))
-                controller.store.set_hypothesis_status(
-                    hypothesis_id, 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
+                from popper.research.scientific_authority import authorize_evidence_write
+                with authorize_evidence_write(actor='test'):
+                    controller.store.set_hypothesis_status(
+                        hypothesis_id, 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
                 # C1：生成代码 revision 的候选现在可以经 Worker + holdout 封读
                 # 在 test split 上确认。confirm 推进 phase 至 concluded。
                 confirmed = controller.confirm(sandboxed=True)

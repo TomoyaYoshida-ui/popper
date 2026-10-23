@@ -13,6 +13,7 @@ from .controller import ResearchController
 from .evaluation_service import IndependentEvaluator
 from .models import DeepSeekResearchPolicy, EvidenceDrivenPolicy
 from .revisions import CodeEdit, RevisionDiffArchive, RevisionStore
+from .runtime_facade import ScientificRuntime
 from .worktrees import RevisionWorktreeManager
 from .execution_jobs import RevisionExecutionJobStore
 from .workers import InputArtifact, JobSpec, LocalWorker, RemoteWorker, WorkerReceipt
@@ -21,7 +22,8 @@ __all__ = [
     "BudgetLedger", "Decision", "DesignStatus", "ExperimentDesign",
     "Hypothesis", "HypothesisStatus", "Observation", "ResearchStore",
     "RunStatus", "Study", "StudyStatus", "TransitionError", "ActionProposal",
-    "ResearchController", "IndependentEvaluator", "DeepSeekResearchPolicy",
+    "ResearchController", "ScientificRuntime", "IndependentEvaluator",
+    "DeepSeekResearchPolicy",
     "EvidenceDrivenPolicy", "CodeEdit", "RevisionStore", "RevisionDiffArchive", "RevisionWorktreeManager",
     "RevisionExecutionJobStore", "InputArtifact",
     "JobSpec", "LocalWorker", "RemoteWorker", "WorkerReceipt",

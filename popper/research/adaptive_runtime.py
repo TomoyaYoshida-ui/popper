@@ -8,8 +8,6 @@ import difflib
 import hashlib
 import json
 from pathlib import Path
-import subprocess
-import sys
 import threading
 import time
 from ..core import ProtocolError, canonical, digest, file_hash, read_json, write_json, model_inputs, EVALUATORS
@@ -18,7 +16,7 @@ from ..transport.pydantic_planner import PydanticPlannerClient
 from .adaptive_contract import AdaptiveTaskContract
 from .adaptive_protocol import ProblemProposal, ExperimentProposal, RevisionProposal, StopProposal, parse_action, instructions
 from .adaptive_sandbox import strict_executor
-from .contracts import Study, StudyStatus, Hypothesis, HypothesisStatus, ExperimentDesign, RunStatus, Decision, Observation
+from .contracts import Study, StudyStatus, Hypothesis, ExperimentDesign, RunStatus, Decision
 from .revisions import RevisionStore
 from .store import ResearchStore
 from .workers import LocalWorker, JobSpec, InputArtifact
@@ -339,70 +337,42 @@ class AdaptiveResearchRuntime:
         return rid, path, self.worker.root / spec.job_id / 'receipt.json'
 
     def _evaluate(self, candidate, split):
+        """Schedule worker jobs locally; publish scores only via scientific_execution."""
+        from .scientific_execution import (
+            publish_paired_mae_result, run_prediction_comparison_subprocess)
         controls = self.records('control')
         control = controls[0]['data'] if controls else self._register(
             self.baseline_source, 'Frozen common baseline', self.contract.baseline, 'control')
         br, bp, bs = self._run(control, split)
         cr, cp, cs = self._run(candidate, split)
         rows = read_json(self.paths[split])
-        def descriptor(prediction,receipt,identity):
-            files={'receipt':receipt,'manifest':receipt.parent/'job.json',
-                   'revision':self.revisions.path(identity['revision_id'])/'revision.json'}
-            return {'path':str(prediction),'sha256':file_hash(prediction),'worker':
-                    {role:{'path':str(path),'sha256':file_hash(path)} for role,path in files.items()}}
-        baseline_descriptor=descriptor(bp,bs,control)
-        candidate_descriptor=descriptor(cp,cs,candidate)
+        def descriptor(prediction, receipt, identity):
+            files = {'receipt': receipt, 'manifest': receipt.parent / 'job.json',
+                     'revision': self.revisions.path(identity['revision_id']) / 'revision.json'}
+            return {'path': str(prediction), 'sha256': file_hash(prediction), 'worker':
+                    {role: {'path': str(path), 'sha256': file_hash(path)}
+                     for role, path in files.items()}}
+        baseline_descriptor = descriptor(bp, bs, control)
+        candidate_descriptor = descriptor(cp, cs, candidate)
         packet = {'schema': prediction_comparison.SCHEMA, 'dataset': str(self.paths[split]),
             'dataset_sha256': self.contract.data_hashes[split],
             'baseline': baseline_descriptor,
             'candidate': candidate_descriptor,
             'groups': {r['id']: self.contract.groups[r['id']] for r in rows},
-            'independence_verified': self.contract.independence_verified, 'bootstrap_seed': self.contract.bootstrap_seed,
-            'hypothesis_predictions': {candidate['hypothesis_id']: {'operator': 'gt', 'threshold': .05},
+            'independence_verified': self.contract.independence_verified,
+            'bootstrap_seed': self.contract.bootstrap_seed,
+            'hypothesis_predictions': {
+                candidate['hypothesis_id']: {'operator': 'gt', 'threshold': .05},
                 candidate['alternative_id']: {'operator': 'between', 'threshold': [-.05, .05]}},
-            'bindings': [ref for desc in (baseline_descriptor,candidate_descriptor)
+            'bindings': [ref for desc in (baseline_descriptor, candidate_descriptor)
                          for ref in desc['worker'].values()]}
         if self.contract.sampling is not None:
             packet['sampling'] = self.contract.sampling
         out = self.root / 'evaluations' / cr
-        out.mkdir(parents=True, exist_ok=True)
-        write_json(out / 'packet.json', packet)
-        with (out/'stdout.log').open('wb') as stdout,(out/'stderr.log').open('wb') as stderr:
-            evaluated=subprocess.run([sys.executable, '-m', 'popper.research.prediction_comparison',
-                            '--packet', str(out / 'packet.json'), '--response', str(out / 'response.json')],
-                           stdout=stdout,stderr=stderr,timeout=120)
-        write_json(out/'receipt.json',{'returncode':evaluated.returncode,
-            'evaluator_implementation_sha256':file_hash(Path(prediction_comparison.__file__)),
-            'packet_sha256':file_hash(out/'packet.json'),
-            'logs':{name:file_hash(out/name) for name in ('stdout.log','stderr.log')}})
-        if evaluated.returncode:
-            raise ProtocolError('Independent evaluator rejected the prediction packet')
-        result = read_json(out / 'response.json')
-        refs = []
-        for role, run in [('baseline_mae', br), ('candidate_mae', cr)]:
-            oid = 'OBS-' + digest({'run': run, 'packet': digest(packet), 'role': role})[:24]
-            self.store.observations.add(Observation(oid, run, 'vector-mae-v1', result[role], unit='mae', scope=split,
-                artifact_id=str(out / 'response.json'), artifact_sha256=file_hash(out / 'response.json'),
-                selector=role, evaluator_service_hash=file_hash(Path(prediction_comparison.__file__)),
-                trust='separate_process_same_account'))
-            refs.append(oid)
-        descriptor = {'comparison_schema': prediction_comparison.SCHEMA, 'packet': str(out / 'packet.json'),
-                      'packet_sha256': file_hash(out / 'packet.json'), 'response': str(out / 'response.json'),
-                      'response_sha256': file_hash(out / 'response.json')}
-        judgment = self.store.record_judgment(candidate['hypothesis_id'], candidate['hypothesis_version'],
-                                             refs, comparison_artifact=descriptor)
-        alternative = self.store.record_judgment(candidate['alternative_id'], candidate['hypothesis_version'],
-                                                refs, comparison_artifact=descriptor)
-        for identity, verdict in [(candidate['hypothesis_id'],judgment), (candidate['alternative_id'],alternative)]:
-            state=({'supported':HypothesisStatus.SUPPORTED_IN_SCOPE,
-                    'refuted':HypothesisStatus.CONTRADICTED_IN_SCOPE}.get(verdict['new_judgment'],HypothesisStatus.INCONCLUSIVE)
-                   if split=='confirmation' else HypothesisStatus.INCONCLUSIVE)
-            if self.store.get('hypothesis',identity)['status']!=state.value:
-                self.store.set_hypothesis_status(identity,candidate['hypothesis_version'],state)
-        return {'observation_refs': refs, 'judgment': judgment['new_judgment'],
-                'alternative_judgment': alternative['new_judgment'],
-                'judgment_id': judgment['judgment_id'], 'candidate_mae': result['candidate_mae'],
-                'comparison': descriptor, 'candidate': candidate}
+        response = run_prediction_comparison_subprocess(packet, out)
+        return publish_paired_mae_result(
+            self.store, candidate=candidate, baseline_run_id=br, candidate_run_id=cr,
+            packet=packet, response=response, out=out, split=split)
 
     def apply(self, action, key):
         applied = next((r for r in self.records('action_applied') if r['key'] == str(key)), None)

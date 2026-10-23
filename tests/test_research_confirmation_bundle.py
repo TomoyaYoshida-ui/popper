@@ -87,7 +87,10 @@ def ready_generated_controller(root):
     controller.store.set_hypothesis_status(control_id, 1, HypothesisStatus.INCONCLUSIVE)
     selected = next(row for row in controller.status()["candidates"] if row["config"] == {"degree": 2})
     result = controller.implement(selected["hypothesis_id"])
-    controller.store.set_hypothesis_status(selected["hypothesis_id"], 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
+    from popper.research.scientific_authority import authorize_evidence_write
+    with authorize_evidence_write(actor='test'):
+        controller.store.set_hypothesis_status(
+            selected["hypothesis_id"], 1, HypothesisStatus.SUPPORTED_IN_SCOPE)
     controller._record(
         ActionProposal(REQUEST_CONFIRMATION, "The generated revision improved development MSE.",
                        selected["hypothesis_id"]),
