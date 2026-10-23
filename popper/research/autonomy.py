@@ -128,12 +128,13 @@ def run_autonomous(controller, baseline, max_steps, should_cancel=None):
             proposal = validate_experiment_proposal(controller.policy.propose_experiment(context),
                                                    controller.manifest, context)
             if proposal["action"] in {"stop", "request_confirmation"}:
-                if proposal["action"] == "request_confirmation" and not any(
-                        r["status"] == "supported_in_scope" for r in context["candidates"]):
+                past = [row for row in records if row.get("dev_threshold_met")
+                        and isinstance(row.get("registration"), dict)]
+                if proposal["action"] == "request_confirmation" and not past:
                     raise ProtocolError("未达到开发阈值，不能请求确认")
+                hypothesis_id = past[-1]["registration"]["hypothesis_id"] if past else None
                 controller._record(ActionProposal(STOP if proposal["action"] == "stop" else REQUEST_CONFIRMATION,
-                    proposal["rationale"], next((r["hypothesis_id"] for r in context["candidates"]
-                        if r["status"] == "supported_in_scope"), None), source="autonomous_design"))
+                    proposal["rationale"], hypothesis_id, source="autonomous_design"))
                 if proposal["action"] == "stop":
                     controller.store.set_study_status(controller.manifest["study_id"], StudyStatus.CONCLUDED)
                 break
@@ -151,10 +152,13 @@ def run_autonomous(controller, baseline, max_steps, should_cancel=None):
                 effect = -effect
             judgment = evaluate_prediction(controller.manifest["prediction_contract"], effect,
                                           repeat_unit=controller.manifest["repeat_unit"])
-            controller.store.set_hypothesis_status(registration["hypothesis_id"], 1,
-                HypothesisStatus.SUPPORTED_IN_SCOPE if judgment["status"] == "met" else HypothesisStatus.INCONCLUSIVE)
+            hypothesis = controller.store.get("hypothesis", registration["hypothesis_id"])
+            if hypothesis["status"] == HypothesisStatus.UNTESTED.value:
+                controller.store.set_hypothesis_status(
+                    registration["hypothesis_id"], hypothesis["version"], HypothesisStatus.INCONCLUSIVE)
             record.update(status="succeeded", observation_id=observation["observation_id"],
-                          prediction_result=judgment)
+                          prediction_result=judgment,
+                          dev_threshold_met=judgment["status"] == "met")
         except ProtocolError as error:
             record.update(status="failed", error_type=type(error).__name__, reason=str(error))
             if not records or records[-1] is not record:

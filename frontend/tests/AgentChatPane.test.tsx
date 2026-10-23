@@ -126,6 +126,10 @@ describe('Agent composer', () => {
     await waitFor(() => expect(p.onSend).toHaveBeenCalledWith('研究问题'))
     await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(''))
   })
+  it('labels chat as not a scientific conclusion', () => {
+    render(<AgentChatPane {...props()} />)
+    expect(screen.getByText('对话不是科学结论；数字必须带观测或文献标识。')).toBeTruthy()
+  })
   it('keeps drafts isolated by session and retains failed sends', async () => {
     const p = props(vi.fn(async () => false)); const view = render(<AgentChatPane {...p} />)
     fireEvent.change(screen.getByRole('textbox', { name: '向 Agent 发送研究消息' }), { target: { value: 'S1 draft' } })

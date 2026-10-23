@@ -112,9 +112,18 @@ class CampaignExperimentNodesTests(unittest.TestCase):
         ws = (self.root / ".popper" / "workspace.json")
         self.assertTrue(ws.is_file())
         self.assertEqual(1, len(json.loads(ws.read_text(encoding="utf-8"))["deliverables"]))
-        # materialize 重跑：跳过
+        # materialize 重跑：已有产物 → 仍 success（幂等复用，不是「没做」）
         mat2 = materialize_node(run_dir, self._state(materialize=materialize))
+        self.assertEqual("success", mat2["outcome"])
+        self.assertEqual("existing", mat2["process"])
         self.assertIn("已物化", mat2["reason"])
+
+    def test_materialize_skipped_without_config(self):
+        """缺 project/稿件配置 → skipped，不得记 success。"""
+        res = materialize_node(Path(self.temp.name), {})
+        self.assertEqual("skipped", res["outcome"])
+        self.assertTrue(res["skipped"])
+        self.assertIn("materialize-json", res["reason"])
 
     def test_dev_requires_mode(self):
         with self.assertRaises(CampaignFatal):
@@ -141,10 +150,21 @@ class CampaignExperimentNodesTests(unittest.TestCase):
                              "manuscript": {"title": "t", "abstract": "a",
                                             "sections": [{"heading": "方法", "body": "b"}]},
                              "template": "md", "disclosure": "nature"}))
-        self.assertEqual("completed", result["status"])
+        self.assertEqual("running", result["status"])
         self.assertEqual(["confirm", "materialize"], result["steps"][-2:])
         data = run._load()
-        self.assertEqual("completed", data["status"])
+        self.assertEqual("running", data["status"])
+        latest = {}
+        for item in data["history"]:
+            latest[item["step"]] = item["outcome"]
+        self.assertEqual("skipped", latest["idea"])
+        self.assertEqual("skipped", latest["literature"])
+        self.assertEqual("skipped", latest["scoop"])
+        self.assertEqual("skipped", latest["dispatch"])
+        self.assertEqual("skipped", latest["propose"])
+        self.assertEqual("skipped", latest["variant"])
+        self.assertEqual("success", latest["confirm"])
+        self.assertEqual("success", latest["materialize"])
         self.assertEqual(len(DEFAULT_CAMPAIGN_STEPS), len(data["history"]))
         # 所有历史 outcome 均非挂起
         self.assertTrue(all(h["outcome"] != "pending_approval" for h in data["history"]))
@@ -177,9 +197,9 @@ class CampaignExperimentNodesTests(unittest.TestCase):
                                  "manuscript": {"title": "t", "abstract": "a",
                                                 "sections": [{"heading": "方法", "body": "b"}]},
                                  "template": "md", "disclosure": "nature"}))
-        self.assertEqual("completed", result2["status"])
+        self.assertEqual("running", result2["status"])
         data2 = run._load()
-        self.assertEqual("completed", data2["status"])
+        self.assertEqual("running", data2["status"])
         self.assertNotIn("waiting_approval", data2)
         self.assertIn("code_materialize", reg.calls)
         # 挂起审计记录保留（如实），但 variant 最终成功执行
@@ -207,7 +227,7 @@ class CampaignExperimentNodesTests(unittest.TestCase):
                                 "manuscript": {"title": "t", "abstract": "a",
                                                "sections": [{"heading": "方法", "body": "b"}]},
                                 "template": "md", "disclosure": "nature"}))
-        self.assertEqual("completed", result["status"])
+        self.assertEqual("running", result["status"])
         self.assertIn("code_materialize", reg.calls)
 
     def test_provisional_research_stops_then_resumes_to_real_proposal_review(self):
@@ -287,7 +307,7 @@ class CampaignExperimentNodesTests(unittest.TestCase):
                              materialize={"manuscript": {"title": "variant", "abstract": "a",
                                  "sections": [{"heading": "Results", "body": "b"}]},
                                  "template": "md", "disclosure": "nature"})
-        self.assertEqual("completed", run.run(nodes=BUILTIN_NODES, config=config)["status"])
+        self.assertEqual("running", run.run(nodes=BUILTIN_NODES, config=config)["status"])
         derived = proposal / "variant-project"
         self.assertTrue((derived / "deliverables" / "manuscript.md").is_file())
         self.assertFalse((self.root / "deliverables" / "manuscript.md").exists())
@@ -303,7 +323,7 @@ class CampaignExperimentNodesTests(unittest.TestCase):
             exp.close()
         # Recreate the orchestrator as the CLI does; cache hit must restore routing.
         resumed = Orchestrator(camp)
-        self.assertEqual("completed", resumed.run(nodes=BUILTIN_NODES, config=config)["status"])
+        self.assertEqual("running", resumed.run(nodes=BUILTIN_NODES, config=config)["status"])
         exp = Experiment(derived)
         try:
             self.assertEqual(before, exp.results())
@@ -416,23 +436,28 @@ class CampaignVendorNodesTests(unittest.TestCase):
 
     def test_idea_skipped_without_llm_honest(self):
         res = idea_node(self.run_dir, {"objective": "q"})
+        self.assertEqual("skipped", res["outcome"])
         self.assertTrue(res["skipped"])
         self.assertIn("--base-url", res["reason"])
         # 提供 LLM 后走 fake：落 canonical candidate
         res2 = idea_node(self.run_dir, {"objective": "q", "base_url": "b", "model": "m",
                                         "_registry": self.registry})
+        self.assertEqual("success", res2["outcome"])
         self.assertEqual("automated", res2["process"])
         self.assertTrue((self.run_dir / "idea" / "phase3_revise" / "final_candidate.json").is_file())
         # 已有候选：复用
         res3 = idea_node(self.run_dir, {"objective": "q", "_registry": self.registry})
+        self.assertEqual("success", res3["outcome"])
         self.assertEqual("existing", res3["process"])
 
     def test_literature_skipped_without_queries(self):
         res = literature_node(self.run_dir, {"mode": "trusted_local"})
+        self.assertEqual("skipped", res["outcome"])
         self.assertTrue(res["skipped"])
         res2 = literature_node(self.run_dir, {"mode": "trusted_local", "queries": ["q1"],
                                               "start_year": 2015, "end_year": 2026,
                                               "_registry": self.registry})
+        self.assertEqual("success", res2["outcome"])
         self.assertEqual(1, res2["papers"])
         self.assertEqual(["paper_search"], self.registry.calls)
 
@@ -440,15 +465,18 @@ class CampaignVendorNodesTests(unittest.TestCase):
         for state in ({}, {"mode": "sandboxed" if False else "sandboxed"}):
             res = literature_node(self.run_dir, {**state, "queries": ["q1"],
                                                  "_registry": self.registry})
+            self.assertEqual("skipped", res["outcome"])
             self.assertTrue(res["skipped"])
             self.assertIn("trusted-local", res["reason"])
         self.assertEqual([], self.registry.calls)
 
     def test_scoop_skipped_without_llm(self):
         res = scoop_node(self.run_dir, {"mode": "trusted_local"})
+        self.assertEqual("skipped", res["outcome"])
         self.assertTrue(res["skipped"])
         res2 = scoop_node(self.run_dir, {"mode": "trusted_local", "base_url": "b",
                                          "model": "m", "_registry": self.registry})
+        self.assertEqual("success", res2["outcome"])
         self.assertEqual("completed", res2["phase"])
 
     def test_scoop_requires_trusted_local_mode(self):
@@ -456,6 +484,7 @@ class CampaignVendorNodesTests(unittest.TestCase):
         registry = Mock()
         result = scoop_node(self.run_dir, {"mode": "sandboxed", "base_url": "b",
                                            "model": "m", "_registry": registry})
+        self.assertEqual("skipped", result["outcome"])
         self.assertTrue(result["skipped"])
         self.assertIn("trusted-local", result["reason"])
         registry.scoop_run.assert_not_called()
@@ -508,17 +537,20 @@ class CampaignVendorNodesTests(unittest.TestCase):
                         "links": [{"node_id": "n1", "parent": "n0"}]}), encoding="utf-8")
 
     def test_dispatch_skips_without_prereqs(self):
-        # 无 LLM → 跳过
+        # 无 LLM → skipped（不得记 success）
         res = dispatch_node(self.run_dir, {"mode": "trusted_local"})
+        self.assertEqual("skipped", res["outcome"])
         self.assertTrue(res["skipped"])
         self.assertIn("--base-url", res["reason"])
-        # 非 trusted_local → 跳过
+        # 非 trusted_local → skipped
         res2 = dispatch_node(self.run_dir, {"mode": "sandboxed", "base_url": "b", "model": "m"})
+        self.assertEqual("skipped", res2["outcome"])
         self.assertTrue(res2["skipped"])
         self.assertIn("--trusted-local", res2["reason"])
-        # 有 LLM 但无 Scoop 报告 → 跳过
+        # 有 LLM 但无 Scoop 报告 → skipped
         res3 = dispatch_node(self.run_dir, {"mode": "trusted_local", "base_url": "b",
                                             "model": "m", "_registry": self.registry})
+        self.assertEqual("skipped", res3["outcome"])
         self.assertTrue(res3["skipped"])
         self.assertIn("Scoop", res3["reason"])
 
@@ -538,6 +570,7 @@ class CampaignVendorNodesTests(unittest.TestCase):
 
     def test_propose_skips_without_prereqs(self):
         res = propose_node(self.run_dir, {})
+        self.assertEqual("skipped", res["outcome"])
         self.assertTrue(res["skipped"])
         self.assertIn("--base-url", res["reason"])
         # 无 LLM 之外的缺 candidate/report
@@ -578,11 +611,13 @@ class CampaignVendorNodesTests(unittest.TestCase):
 
     def test_variant_requires_approval_and_proposal(self):
         res = variant_node(self.run_dir, {})
+        self.assertEqual("skipped", res["outcome"])
         self.assertTrue(res["skipped"])
         self.assertIn("缺少 proposal", res["reason"])
-        # 有审批但无 proposal → 跳过
+        # 有审批但无 proposal → skipped（无 LLM 时不假报 success）
         res2 = variant_node(self.run_dir, {"project": ".", "proposal_approved": True,
                                            "_registry": self.registry})
+        self.assertEqual("skipped", res2["outcome"])
         self.assertTrue(res2["skipped"])
         self.assertIn("proposal", res2["reason"])
         # 模型研究模式没有提案不能退化为配置队列完成。
@@ -640,14 +675,47 @@ class CampaignVendorNodesTests(unittest.TestCase):
         proj = _make_project(Path(tempfile.mkdtemp()))
         state = {"mode": "trusted_local", "base_url": "b", "model": "m",
                  "project": str(proj), "_registry": self.registry}
-        # 未放行 → 跳过
+        # 未放行 → skipped
         res = dispatch_node(self.run_dir, state)
+        self.assertEqual("skipped", res["outcome"])
         self.assertTrue(res["skipped"])
         self.assertIn("provisional", res["reason"])
         # 放行 → 执行
         res2 = dispatch_node(self.run_dir, {**state, "allow_provisional": True})
         self.assertEqual("implementable", res2["status"])
         self.assertIn("arbor_dispatch", self.registry.calls)
+
+
+class CampaignStageSkipTests(unittest.TestCase):
+    def test_skipped_history_is_not_painted_done(self):
+        from popper.server import STAGE_STATUS_LABELS, build_campaign_payload
+        state = {"phase": "searching", "spec": {
+            "name": "probe", "objective": "q", "metric": {"name": "mae", "direction": "min"},
+            "min_improvement": 0.1, "baseline": "mean", "seeds": [1], "budget": 1,
+        }}
+        payload = build_campaign_payload(state, [], [], [], [], [
+            {"step": "idea", "outcome": "skipped"},
+            {"step": "literature", "outcome": "skipped"},
+            {"step": "dispatch", "outcome": "skipped"},
+            {"step": "propose", "outcome": "skipped"},
+            {"step": "variant", "outcome": "skipped"},
+            {"step": "materialize", "outcome": "skipped"},
+            {"step": "dev", "outcome": "success"},
+        ])
+        by_key = {stage["key"]: stage["status"] for stage in payload["stages"]}
+        self.assertEqual("skipped", by_key["idea"])
+        self.assertEqual("skipped", by_key["literature"])
+        self.assertNotEqual("done", by_key["idea"])
+        self.assertEqual("未执行", STAGE_STATUS_LABELS["skipped"])
+        for key in ("dispatch", "propose", "variant", "materialize"):
+            if key in by_key:
+                self.assertEqual("skipped", by_key[key], key)
+                self.assertNotEqual("done", by_key[key], key)
+        done = build_campaign_payload(state, [], [{"id": "p"}], [], [], [
+            {"step": "literature", "outcome": "success"},
+        ])
+        literature = next(stage for stage in done["stages"] if stage["key"] == "literature")
+        self.assertEqual("done", literature["status"])
 
 
 if __name__ == "__main__":

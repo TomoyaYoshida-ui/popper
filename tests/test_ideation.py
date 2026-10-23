@@ -32,7 +32,10 @@ class IdeationTests(unittest.TestCase):
         self.assertIn(rid, card["motivation"])
         self.assertTrue(card["falsifiable_prediction"])
         self.assertTrue(card["minimal_discriminating_experiment"])
-        # novelty 分级永不二值，且锚定语料近邻文献
+        # 关键词常数不是文献测量，默认不输出数值 score。
+        self.assertNotIn("score", card["novelty"])
+        self.assertTrue(card["novelty"]["scaffold"])
+        self.assertTrue(card["novelty"]["non_scientific"])
         self.assertIn(card["novelty"]["level"], ("major", "incremental", "trivial"))
         self.assertEqual(card["novelty"]["anchors"], ["arXiv:2509.23189"])
 

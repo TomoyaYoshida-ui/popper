@@ -7,6 +7,7 @@
   卡片只读），不被读回决定"执行什么"或"从哪里恢复"。
 - 语义先跑通：节点函数可注入（无 LLM 时用注册队列/跳过），langgraph 只做控制流 + 中断。
 - 两种可复现：审计重放（回放历史响应）vs 复现重跑；fail 语义 success/retryable/fatal。
+  skipped 表示步骤没有执行，不计入完成，也不阻断后续已具备条件的步骤。
 - 人工审批点（interrupt/resume）：步骤 manifest 可声明 `approval: "<state 标记>"`；
   可通过 approval_artifact 绑定待审产物；标记未满足且产物待审时步骤挂起
   （waiting_approval）并中止该超步；重跑时若 checkpoint 仍有挂起任务则从挂起点续跑
@@ -31,6 +32,7 @@ PENDING, RUNNING, COMPLETED, FAILED = "pending", "running", "completed", "failed
 WAITING_APPROVAL = "waiting_approval"
 # 步骤 fail 语义
 SUCCESS, RETRYABLE, FATAL = "success", "retryable", "fatal"
+SKIPPED = "skipped"
 # 挂起审计 outcome（不视为完成）
 PENDING_APPROVAL = "pending_approval"
 
@@ -317,9 +319,11 @@ class CampaignInterrupt(Exception):
 
 
 def qualify(outcome):
-    """把步骤结果归类为 success/retryable/fatal。"""
+    """把步骤结果归类为 success/retryable/skipped/fatal。skipped 不是完成。"""
     if outcome in (SUCCESS, "passed"):
         return SUCCESS
     if outcome in (RETRYABLE, "retry"):
         return RETRYABLE
+    if outcome in (SKIPPED, "not_run"):
+        return SKIPPED
     return FATAL

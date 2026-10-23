@@ -9,11 +9,12 @@ from __future__ import annotations
 from ..core import ProtocolError
 from .base import Harness, PolicyHarness, parse_revision_proposal
 from .json_agent import JSONAgentHarness
+from .local_search import LocalSearchHarness
 from .conversation import (CONVERSATION_HARNESS_PROTOCOL, ConversationHarness,
                            ConversationHarnessDescriptor, adapt_conversation_harness)
 
 # 新增 harness = 实现 base.Harness + 在这里加一项（顺序即选择优先级）。
-_HARNESSES = (JSONAgentHarness,)
+_HARNESSES = (JSONAgentHarness, LocalSearchHarness)
 
 
 def harnesses():

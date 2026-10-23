@@ -335,17 +335,16 @@ def export_confirmation_bundle(controller, contract_envelope, pinned_public_key,
             confirmation_kind = ("scope_boundary" if
                                  decision["action"] == "request_scope_boundary_confirmation"
                                  else "positive_effect")
-            if confirmation_kind == "scope_boundary":
-                referenced = [row for row in status["observations"]
-                              if row["observation_id"] in decision["observation_refs"]
-                              and row["scope"] == "dev"
-                              and not row["hypothesis_id"].startswith("H-control-")]
-                candidates = [row for row in status["candidates"]
-                              if any(obs["hypothesis_id"] == row["hypothesis_id"]
-                                     for obs in referenced)]
-            else:
-                candidates = [row for row in status["candidates"]
-                              if row["status"] == "supported_in_scope"]
+            # Development scoring leaves candidates inconclusive; scientific
+            # support is reserved for confirmation. Bind only via the decision's
+            # non-control development observations, never via supported_in_scope.
+            referenced = [row for row in status["observations"]
+                          if row["observation_id"] in decision["observation_refs"]
+                          and row["scope"] == "dev"
+                          and not row["hypothesis_id"].startswith("H-control-")]
+            candidates = [row for row in status["candidates"]
+                          if any(obs["hypothesis_id"] == row["hypothesis_id"]
+                                 for obs in referenced)]
             if len(candidates) != 1:
                 raise ProtocolError("确认包必须唯一绑定实际选中的候选")
             selected = candidates[0]

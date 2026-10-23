@@ -1,0 +1,43 @@
+# 能力边界
+
+包名 popper-research，状态 Pre-Alpha。这是本地优先的计算实验决策内核：先登记可证伪预测，密封开发集与确认集，由独立评估器计分，再给出 supported / refuted / inconclusive。确认集只打开一次。模型不能改分数。
+
+## 现在能演示的
+
+- 冻结计分任务上的开发循环，以及一次确认。
+- 判断三态：supported、refuted、inconclusive。
+- FIGS 与 Adaptive 目前的结局是证据不足（inconclusive）。这不能当成新发现，也不能当成某种策略更优。
+
+## 还不能当产品用的
+
+- 通用文献阅读
+- 可信查新
+- 关键词新颖性分数
+- 占位语料
+- 论文写作
+- 湿实验或理论证明
+- 长程记忆
+
+Ideation 的 novelty 与 `corpus_seed` 是非科学脚手架。没有真实检索近邻之前，默认不输出 novelty 数值分数。
+
+## 执行权与默认入口
+
+默认产品路径：已登记研究走 `popper research init` → `popper research run` / `confirm`（ResearchController + ResearchRuntime）。CLI 默认 help 与本文件以此为准。
+
+1. 已登记项目的科学执行权在 ResearchController + ResearchRuntime。
+2. `popper adaptive` / AdaptiveResearchRuntime 是描述性基准夹具，也是第二套契约。默认不开 live，不是默认科研产品路径。
+3. `popper research campaign` / Orchestrator 是编排图，不是另一套科学内核。科学结果仍落 ResearchStore。编排步骤（含 idea、文献、scoop、dispatch、propose、variant、materialize）因缺查询、缺模型、非 trusted-local 或缺前置而未真正执行时，outcome 是 skipped，不是 success。跳过不等于研究完成；已有产物的幂等复用仍记 success。
+
+本轮不合并上述三条路径的实现代码，也不增加第五个循环。
+
+聊天不推进实验，也不改评测数字。
+
+## 文献摘录与只读问答
+
+已经落在本次 study 或 campaign 里的检索命中，可以按稳定 id、来源、DOI 或 arXiv、标题和一段截断摘录进入规划上下文，最多 12 条。两个标识都没有时，不把别的字符串装成 DOI 或 arXiv。规划动作如果声称依据文献，必须引用这些 id；调用方明确要求文献依据而命中为空时，直接拒绝，不让模型现写综述。不引用文献的计算实验动作仍按原规则执行。
+
+这不是通用阅读 agent，也不读取全文 PDF 来回答任意问题。
+
+聊天仍然只读：不推进实验，不写事件链，不改评测数字。助手若给出测量值、百分比、区间、p 值或改善幅度，必须同时带上本次 study 的 observation_id，或上下文里已有的文献 id。没有这些标识的数字结论会改成一段拒绝，不会当成科学结论。
+
+这些补充不能当成项目已经能独立做科研。

@@ -35,7 +35,21 @@ def parse_revision_proposal(response):
         if not isinstance(row, dict) or set(row) != {"path", "original_sha256", "replacement"}:
             raise ProtocolError("模型 CodeEdit 字段不正确")
         edits.append(CodeEdit(row["path"], row["replacement"], row["original_sha256"]))
-    return {"edits": tuple(edits), "rationale": rationale.strip()}
+    return {"edits": tuple(edits), "rationale": rationale.strip(),
+            "claim": _proposal_claim(response.get("claim"))}
+
+
+def _proposal_claim(payload):
+    """提案可以附带一张断言。不合法就拒绝这张卡，不在这里读数据。"""
+    if payload is None:
+        return None
+    if not isinstance(payload, dict) or set(payload) - {"columns", "relation", "direction"}:
+        raise ProtocolError("搜索提案里的断言字段不正确")
+    if "columns" not in payload:
+        raise ProtocolError("搜索提案里的断言必须声明列")
+    from ..research.search_session import declared_claim
+    return declared_claim(payload["columns"], payload.get("direction"),
+                          payload.get("relation", "column"))
 
 
 @runtime_checkable

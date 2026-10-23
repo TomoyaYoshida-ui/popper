@@ -140,6 +140,18 @@ def evaluator_for_metric(metric):
     raise ProtocolError(f"未支持的指标契约: {canonical(metric)}")
 
 
+def resolve_evaluator(spec):
+    """显式 evaluator_id 优先；否则沿用指标契约的第一个匹配。"""
+    chosen = spec.get("evaluator_id")
+    if chosen is None:
+        return evaluator_for_metric(spec["metric"])
+    if chosen not in EVALUATORS:
+        raise ProtocolError(f"未知评估器: {chosen}")
+    if EVALUATORS[chosen]["metric"] != spec["metric"]:
+        raise ProtocolError("evaluator_id 与指标契约不一致")
+    return chosen
+
+
 def portable_path(name):
     """把提案里的路径写法归一成规范的 POSIX 相对形式；不合规则返回 ``None``。
 
@@ -234,7 +246,7 @@ def validate_spec(spec):
                 "min_improvement", "metric"}
     if not isinstance(spec, dict) or not required <= spec.keys():
         raise ProtocolError("experiment.json 缺少必需字段")
-    evaluator_id = evaluator_for_metric(spec["metric"])
+    evaluator_id = resolve_evaluator(spec)
     pack = evaluator_pack(evaluator_id)
     # 路径字段在这里就地归一（见 `normalized_spec_path`）：调用方随后会把这份 spec 写回
     # experiment.json 或存进 state.db，落盘形状必须就是判定用的那个形状。
@@ -535,7 +547,7 @@ class Experiment:
                 raise ProtocolError(f"已注册输入发生修改: {name}；请建立新的实验")
         evaluator_id = state["evaluator_id"]
         if (evaluator_id not in EVALUATORS or digest(EVALUATORS[evaluator_id]) != state["evaluator_hash"]
-                or evaluator_for_metric(state["spec"]["metric"]) != evaluator_id):
+                or resolve_evaluator(state["spec"]) != evaluator_id):
             raise ProtocolError("评估器版本已改变；旧实验不能静默继续")
         current = {"python": sys.version, "platform": platform.platform(), "executable": sys.executable}
         if not portable_replay and current != state["environment"]:
@@ -1058,7 +1070,7 @@ def initialize(root):
     root = Path(root).resolve()
     spec = read_json(root / "experiment.json")
     validate_spec(spec)
-    evaluator_id = evaluator_for_metric(spec["metric"])
+    evaluator_id = resolve_evaluator(spec)
     files = ["experiment.json", *spec["code_files"], *spec.get("provenance_files", []),
              spec["train"], spec["dev"], spec["test"]]
     if 'confirmation_train' in spec:

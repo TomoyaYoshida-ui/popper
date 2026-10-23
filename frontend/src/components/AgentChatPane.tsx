@@ -185,6 +185,7 @@ export function AgentChatPane({ chat, chatPending, requestError, contextKey, pro
           </> : <button type="button" className="send-button" title="发送消息" aria-label="发送消息" disabled={!ready} onClick={() => { void submit() }}><WorkbenchIcon kind="arrowUp" /></button>}</div>
         </div>
       </div>
+      <span className="composer-note">{chat?.labels?.evidence_notice || '对话不是科学结论；数字必须带观测或文献标识。'}</span>
       <span className="composer-note">Enter 发送 · Shift + Enter 换行</span>
     </footer>
   </section>

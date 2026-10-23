@@ -213,7 +213,11 @@ class CampaignApprovalHttpTests(unittest.TestCase):
         self.assertIn("模板", body2["error"])
 
     def test_approve_with_materialize_realizes_manuscript(self):
-        """批准时透传 materialize → 恢复周期内真实物化稿件到 deliverables。"""
+        """批准时透传 materialize → 恢复周期内真实物化稿件到 deliverables。
+
+        去掉 proposal 后 variant 如实 skipped（不计入 campaign completed）；
+        只要 materialize 真正跑完并落盘即可。
+        """
         self._start(trusted=True)  # 默认 BUILTIN_NODES，真实 dev/freeze/confirm/materialize
         # 移除 proposal，让 variant（code-materialize）如实跳过，专注验证 materialize 透传
         shutil.rmtree(self.camp / "proposal")
@@ -225,14 +229,16 @@ class CampaignApprovalHttpTests(unittest.TestCase):
         code, body = self._post("/api/campaign", {"action": "approve", "reason": "ok",
                                                   "materialize": materialize})
         self.assertEqual(200, code)
-        deadline = time.time() + 60
-        while time.time() < deadline:
-            st = json.loads((self.camp / "campaign.json").read_text(encoding="utf-8"))
-            if st.get("status") in {"completed", "failed"}:
-                break
-            time.sleep(0.2)
+        leftover = self.server.wait_for_jobs(timeout=120)
+        self.assertEqual(0, leftover, f"后台恢复未结束：{self.server.campaign_job}")
         st = json.loads((self.camp / "campaign.json").read_text(encoding="utf-8"))
-        self.assertEqual("completed", st["status"])
+        latest = {}
+        for item in st.get("history") or []:
+            latest[item["step"]] = item.get("outcome")
+        self.assertEqual("skipped", latest.get("variant"))
+        self.assertEqual("success", latest.get("materialize"))
+        # 有步骤 skipped → campaign 保持 running（跳过≠整链完成）
+        self.assertEqual("running", st["status"])
         # 稿件真正物化并登记到 workspace
         md = self.root / "deliverables" / "manuscript.md"
         self.assertTrue(md.is_file())

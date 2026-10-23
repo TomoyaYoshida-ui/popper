@@ -6,6 +6,7 @@
 
 约束：种子只描述方法论/工程级观察，**不编造真实论文的精确数字结论**；
 `novelty_tag` 一律 None（未标定）。重复 seed 幂等（依赖 Corpus.add 的 record_id 去重）。
+这些记录是非科学脚手架，不是文献测量，不能当作查新或新颖性证据。
 """
 from __future__ import annotations
 

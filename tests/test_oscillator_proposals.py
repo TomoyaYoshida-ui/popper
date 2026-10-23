@@ -16,7 +16,7 @@ from tests.test_oscillator_broker import row
 
 class AuthoredOscillatorProposalTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.root = Path(self.temp.name)
         self.project = self.root / 'project'
         self.project.mkdir()

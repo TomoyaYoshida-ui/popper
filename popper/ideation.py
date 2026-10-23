@@ -1,9 +1,9 @@
-"""创新点引擎 · 生成层（能力 1）。
+"""创新点引擎 · 生成层（能力 1）。非科学脚手架，不是文献测量。
 
 候选贡献 = 领域语料记录 × ideation 算子；三类创新点（选题/方法/发现）共用框架。
 - ideation 算子显式、领域无关；LLM 只做算子内实例化。
 - compose(op_A, op_B) 组合算子需用户显式登记后方可使用。
-- novelty scorer：多类别锚定检索，输出 score+category+近邻文献，分级（重大/增量/平凡）永不二值。
+- novelty 记录只是脚手架：近邻不是真实检索、分数来自关键词常数时，不输出数值 score。
 - 每个候选附可证伪预测 + 预注册 scaffold。
 """
 from __future__ import annotations
@@ -173,30 +173,29 @@ class IdeationRun:
         return card
 
     def novelty_score(self, card, corpus):
-        """多类别 novelty 锚定检索；分级永不二值。
+        """Non-scientific scaffold. Keyword constants are not a literature measurement.
 
-        无语料近邻 => 保守 incremental_delta/incremental。
-        语料近邻直接覆盖 => 输出 trivial。
-        近邻仅部分相关 + 跨类别连接 => 更高级别。
+        Category and level stay for existing callers and are marked scaffold.
+        No numeric score is returned until neighbors come from a real retrieval.
         """
         overlaps = corpus.verified_records() if corpus else []
         nearest = card.get("nearest_work")
         related = [r for r in overlaps if r.get("literature_id")]
         covered = any(("已实现" in r["description"] or "已覆盖" in r["description"]
                        or "解决" in r["description"]) for r in related)
-        # 语料有"已覆盖"描述 => 平凡增量；否则按是否有近邻锚定给出分级。
         anchors = sorted({r["literature_id"] for r in related})
         if covered:
-            category, level, score = "incremental_delta", "trivial", 0.3
-            rationale = "语料存在已覆盖描述，判定平凡增量"
+            category, level = "incremental_delta", "trivial"
+            rationale = "语料存在已覆盖描述；这是脚手架分级，不是文献测量"
         elif nearest:
-            category, level, score = "new_connection", "incremental", 0.7
-            rationale = "锚定最近邻非直接覆盖，判定增量；待 scoop 反证后再裁决"
+            category, level = "new_connection", "incremental"
+            rationale = "锚定最近邻非直接覆盖；这是脚手架分级，不是文献测量"
         else:
-            category, level, score = "new_connection", "incremental", 0.7
-            rationale = "缺少已登记近邻，输出保守 incremental；待 scoop 反证后再裁决"
+            category, level = "new_connection", "incremental"
+            rationale = "缺少已登记近邻；这是脚手架分级，不是文献测量"
         return {
-            "score": score,
+            "scaffold": True,
+            "non_scientific": True,
             "category": category,
             "level": level,
             "nearest_work": nearest,

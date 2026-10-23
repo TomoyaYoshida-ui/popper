@@ -1,7 +1,8 @@
 """从 Research Kernel 投影研究笔记。笔记不是第二套事实，缺了可以重算。"""
 from __future__ import annotations
 
-from .tree_search import SMOKE_SCOPE, best_node
+from .tree_search import (FAMILY_SWITCH_INSTRUCTION, SMOKE_SCOPE, best_node,
+                          family_switch_required, node_record)
 
 
 def progress_for(hypothesis_id, observations, *, baseline_value=None, direction="min"):
@@ -19,7 +20,18 @@ def progress_for(hypothesis_id, observations, *, baseline_value=None, direction=
     return "implemented"
 
 
-def research_notes(store, manifest, question, *, limit=4000):
+def _nodes_from_observations(store, manifest):
+    """没有显式节点表时，只用候选的搜索集分数。失败运行不会变成最好成绩。"""
+    candidate_ids = set(manifest.get("candidate_hypothesis_ids") or [])
+    nodes = []
+    for index, row in enumerate(store.list("observation")):
+        if (row.get("hypothesis_id") in candidate_ids and row.get("scope") == "dev"
+                and row.get("value") is not None):
+            nodes.append(node_record(f"obs-{index}", "draft", None, 0, "scored", row["value"]))
+    return nodes
+
+
+def research_notes(store, manifest, question, *, nodes=None, limit=4000):
     """把已试节点压成一段带分数的笔记，附加到下一次代码提案的问题描述。"""
     observations = [row for row in store.list("observation")
                     if row.get("scope") in {"dev", SMOKE_SCOPE}]
@@ -28,8 +40,11 @@ def research_notes(store, manifest, question, *, limit=4000):
     baseline_rows = [row for row in observations if row.get("hypothesis_id") == control_id
                      and row.get("scope") == "dev" and row.get("value") is not None]
     baseline_value = None if not baseline_rows else baseline_rows[-1]["value"]
-    lines = [
-        question, "",
+    considered = nodes if nodes is not None else _nodes_from_observations(store, manifest)
+    lines = [question, ""]
+    if family_switch_required(considered, direction):
+        lines.extend([FAMILY_SWITCH_INSTRUCTION, ""])
+    lines.extend([
         "Experiment-tree search node: return a non-empty edits array. "
         "Empty edits are rejected and do not end the search. "
         "Change an executable statement that runs during prediction for every seed. "
@@ -38,7 +53,7 @@ def research_notes(store, manifest, question, *, limit=4000):
         "development score listed below.",
         "",
         "研究笔记（由研究记录投影，不是新的事实来源）：",
-    ]
+    ])
     for hypothesis_id in manifest["candidate_hypothesis_ids"]:
         own = [row for row in observations if row.get("hypothesis_id") == hypothesis_id]
         progress = progress_for(hypothesis_id, observations, baseline_value=baseline_value,

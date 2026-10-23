@@ -63,7 +63,13 @@ def main(argv=None):
         except (ProtocolError, OSError, ValueError, KeyError, TypeError) as error:
             print(f'Popper adaptive: {error}', file=sys.stderr)
             return 2
-    parser = argparse.ArgumentParser(prog="popper", description="Popper 实验推进 Agent · M0")
+    parser = argparse.ArgumentParser(
+        prog="popper",
+        description=("Popper Pre-Alpha：计算实验决策内核。"
+                     "默认产品路径是已登记研究（research init/run/confirm → "
+                     "ResearchController + ResearchRuntime）；"
+                     "`popper adaptive` 是描述性基准（默认不开 live）；"
+                     "`research campaign` 是编排图，不是主科研路径。"))
     commands = parser.add_subparsers(dest="command", required=True)
     demo = commands.add_parser("demo", help="从随包非 ML 模板建立离线科研项目")
     demo_commands = demo.add_subparsers(dest="demo_command", required=True)
@@ -71,7 +77,8 @@ def main(argv=None):
     demo_init.add_argument("project", type=Path)
     demo_init.add_argument("--case", choices=DEMO_CASES, default="ode-convergence")
     research = commands.add_parser(
-        "research", help="研究流程：证据驱动控制器 / campaign 编排 / 想法 / 语料 / 证据 / 稿件")
+        "research",
+        help="已登记研究主路径（ResearchController）；另含 campaign 编排与想法/语料/证据/稿件")
     research_commands = research.add_subparsers(dest="research_command", required=True)
     research_init = research_commands.add_parser("init", help="从已初始化实验建立研究契约与假设")
     research_init.add_argument("project", type=Path)
@@ -438,7 +445,8 @@ def main(argv=None):
     paper_share.add_argument("--manuscript", type=Path, default=None)
     paper_share.add_argument("--destination", default=None, help="去向（预印本/发表/社区池）")
     paper_share.add_argument("--community-dir", type=Path, default=None, help="社区共享池目录")
-    campaign = research_commands.add_parser("campaign", help="LangGraph 编排 campaign（可恢复）")
+    campaign = research_commands.add_parser(
+        "campaign", help="编排图（可恢复；科学结果仍落 ResearchStore，跳过≠完成）")
     campaign_commands = campaign.add_subparsers(dest="campaign_command", required=True)
     camp_init = campaign_commands.add_parser("init", help="初始化 campaign（步骤以 JSON 传入；缺省用内置默认编排）")
     camp_init.add_argument("run_dir", type=Path)
@@ -649,11 +657,63 @@ def main(argv=None):
     worker_serve.add_argument("--host", default="0.0.0.0")
     worker_serve.add_argument("--port", type=int, default=8670)
     worker_serve.add_argument("--token-env", default="POPPER_WORKER_TOKEN")
+    search = commands.add_parser(
+        "search", help="封存确认集后，在开发集上做最多 8 步代码树搜索")
+    search.add_argument("--project", type=Path, required=True)
+    search.add_argument("--run-dir", type=Path, required=True)
+    search.add_argument("--data", type=Path, default=None, help="CSV 数据表；与已有实验二选一")
+    search.add_argument("--target", default=None, help="目标列")
+    search.add_argument("--metric", choices=("mse", "mae"), default=None)
+    search.add_argument("--baseline", type=Path, default=None, help="基线 model.py")
+    search.add_argument("--max-steps", type=int, default=8)
+    search.add_argument("--trusted-local", action="store_true")
+    search.add_argument("--sandbox", action="store_true")
+    search.add_argument("--base-url", default=None)
+    search.add_argument("--model", default=None)
+    search.add_argument("--harness", choices=harness_names(), default=None)
+    search.add_argument("--transport-column", default=None,
+                        help="准备数据时写死的迁移列；与 --transport-threshold 同时给出")
+    search.add_argument("--transport-threshold", default=None,
+                        help="搜索为该列 ≤ 阈值，确认为该列 > 阈值；必须在准备数据时声明")
+    search.add_argument("--claim-columns", default=None,
+                        help="准备数据时声明的断言列；比值时依次为分子,分母")
+    search.add_argument("--claim-relation", choices=("column", "ratio"), default="column",
+                        help="column 使用该列；ratio 使用分子除以分母")
+    search.add_argument("--claim-direction", choices=("positive", "negative"), default=None,
+                        help="事先写死的方向；省略则只在搜索集上锁定一次")
     args = parser.parse_args(argv)
     experiment = None
     research_controller = None
     try:
-        if args.command == "demo":
+        if args.command == "search":
+            if bool(args.base_url) != bool(args.model):
+                raise ProtocolError("--base-url 和 --model 必须同时提供")
+            if any(item is not None for item in (args.data, args.target, args.metric)) and not (
+                    args.data and args.target and args.metric):
+                raise ProtocolError("数据表、目标列和指标必须同时提供")
+            baseline = args.baseline
+            if args.data is not None and baseline is None:
+                baseline = Path(__file__).resolve().parent / "research" / "baselines" / "mean_model.py"
+            if args.model and args.harness is None:
+                args.harness = "json_agent"
+            if args.harness is None and not args.model:
+                from .harness.local_search import LocalSearchHarness
+                harness = LocalSearchHarness()
+            else:
+                harness = _build_code_harness(args.harness, args.base_url, args.model,
+                                              args.run_dir / "model-diagnostics")
+            from .research.search_session import declared_claim, declared_transport, start_search
+            claim = None
+            if args.claim_columns or args.claim_direction or args.claim_relation != "column":
+                claim = declared_claim(args.claim_columns, args.claim_direction, args.claim_relation)
+            result = start_search(
+                args.project, args.run_dir, data=args.data, target=args.target,
+                metric=args.metric, baseline=baseline, max_steps=args.max_steps,
+                trusted_local=args.trusted_local, sandboxed=args.sandbox,
+                harness=harness,
+                transport=declared_transport(args.transport_column, args.transport_threshold),
+                claim=claim)
+        elif args.command == "demo":
             result = initialize_demo(args.project, args.case)
         elif args.command == "serve":
             if bool(args.chat_base_url) != bool(args.chat_model):
@@ -1035,7 +1095,14 @@ def main(argv=None):
                         if model_requests is not None:
                             model_requests.close()
                 elif args.research_command == "confirm":
+                    from .research.search_session import lock_claim_card, record_split_confirmation
+                    lock_claim_card(research_controller.project)
                     result = research_controller.confirm(args.trusted_local, args.sandbox)
+                    split_confirmation = record_split_confirmation(
+                        research_controller, sandboxed=args.sandbox,
+                        trusted_local=args.trusted_local)
+                    if split_confirmation is not None:
+                        result = {**result, "split_confirmation": split_confirmation}
                 elif args.research_command == "implement":
                     result = research_controller.implement(
                         args.hypothesis, args.parent_revision, args.gpu_count)

@@ -61,6 +61,46 @@ def _best(nodes, direction="min"):
         nodes, key=lambda node: node["value"])
 
 
+# 明显变好取较宽的一档：绝对 0.1，或相对 1%，二者里更大的那个。
+CLEAR_ABSOLUTE_IMPROVEMENT = 0.1
+CLEAR_RELATIVE_IMPROVEMENT = 0.01
+FAMILY_SWITCH_INSTRUCTION = (
+    "Model-family switch is required for this revision. The latest scored search-set "
+    "result is not clearly better than the current best score. Clear improvement means "
+    "beating that best by the wider of 0.1 absolute and 1% relative. "
+    "Replace the estimator with a tree, a kernel method, or a clearly different feature "
+    "transform. Do not submit another ridge regression, an L2-regularized linear model, "
+    "or a change that only adjusts regularization strength. "
+    "A contract-rejected node is a failure and is not the best score. "
+    "下一稿必须换模型族：树、核方法，或明确不同的特征变换。"
+    "禁止再交岭回归、L2 正则线性模型，或只改正则强度。"
+)
+
+
+def _scored_search_nodes(nodes):
+    """合同拒绝、重复和冒烟都不是搜索集成绩。"""
+    return [node for node in nodes if node.get("status") == "scored"
+            and node.get("scope") == "dev" and node.get("value") is not None]
+
+
+def improvement_margin(best_value):
+    return max(CLEAR_ABSOLUTE_IMPROVEMENT, CLEAR_RELATIVE_IMPROVEMENT * abs(best_value))
+
+
+def clearly_better(new_value, best_value, direction="min"):
+    improvement = (best_value - new_value) if direction == "min" else (new_value - best_value)
+    return improvement >= improvement_margin(best_value) - 1e-9
+
+
+def family_switch_required(nodes, direction="min"):
+    """最新已评分节点没有明显超过此前最好成绩时，下一稿必须换模型族。"""
+    scored = _scored_search_nodes(nodes)
+    if len(scored) < 2:
+        return False
+    incumbent = _best(scored[:-1], direction)["value"]
+    return not clearly_better(scored[-1]["value"], incumbent, direction)
+
+
 def best_node(nodes, direction="min"):
     scored = [node for node in nodes if node["status"] == "scored" and node.get("scope") != SMOKE_SCOPE
               and node.get("value") is not None]

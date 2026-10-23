@@ -207,6 +207,101 @@ def test_ablation_context_has_identical_raw_facts_and_no_session_writes(controll
     assert 'test.json' not in json.dumps(plain)
 
 
+def _write_hits(controller):
+    folder = controller.run_dir / 'literature'
+    folder.mkdir(parents=True)
+    (folder / 'search-fixture.json').write_text(json.dumps({'papers': [{
+        'source': 'arxiv', 'arxiv_id': '2401.00001', 'title': 'Fixture neighbor',
+        'abstract': 'A short excerpt about the registered method.',
+        'content': 'FULLTEXT_MARKER should not enter context.',
+    }]}), encoding='utf-8')
+
+
+def test_planning_context_includes_retrieved_literature(controller):
+    _write_hits(controller)
+    context = ResearchRuntime.preview_context(controller)
+    assert len(context['literature']) == 1
+    hit = context['literature'][0]
+    assert hit['id'].startswith('LIT-')
+    assert hit['source'] == 'arxiv'
+    assert hit['identifier'] == {'arxiv': '2401.00001'}
+    assert hit['title'] == 'Fixture neighbor'
+    assert 'short excerpt' in hit['excerpt']
+    assert 'FULLTEXT_MARKER' not in json.dumps(context['literature'])
+
+
+def test_registered_execution_ignores_literature_hits(controller):
+    _write_hits(controller)
+    runtime = controller.planning_runtime(max_experiments=1)
+    hid = controller.manifest['candidate_hypothesis_ids'][1]
+    result = runtime.apply_proposal(execute(hid), step=0, trusted_local=True)
+    assert result['observation_id']
+    assert result['action']['kind'] == 'execute_candidate'
+    assert 'literature_ids' not in result['action']
+
+
+def test_literature_review_rejects_unknown_id_without_execution(controller):
+    _write_hits(controller)
+    runtime = controller.planning_runtime(max_experiments=1)
+    context = runtime.context()
+    before = len(controller.store.list('run'))
+    with pytest.raises(ProtocolError) as failure:
+        runtime.apply_proposal({'action': {
+            'kind': 'novelty_conclusion', 'rationale': '查新结论',
+            'literature_ids': ['LIT-missing'],
+        }, 'assessment': None}, step=0, trusted_local=True)
+    assert failure.value.details == [{'path': 'action.literature_ids', 'rule': 'unknown_literature'}]
+    assert before == len(controller.store.list('run'))
+    accepted = runtime.apply_proposal({'action': {
+        'kind': 'literature_review', 'rationale': '摘录已覆盖该机制。',
+        'literature_ids': [context['literature'][0]['id']],
+    }, 'assessment': None}, step=0, trusted_local=True)
+    assert accepted['observation_id'] is None
+    assert accepted['action']['literature_ids'] == [context['literature'][0]['id']]
+
+
+def test_required_literature_with_no_hits_does_not_call_the_model(controller):
+    runtime = controller.planning_runtime(max_experiments=1)
+    calls = []
+
+    def forbidden(*_args, **_kwargs):
+        calls.append(1)
+        raise AssertionError('model must not be called')
+
+    result = runtime.run(forbidden, trusted_local=True, require_literature=True)
+    assert calls == []
+    assert result['planner'] == {
+        'status': 'failed', 'reason': '没有检索命中，不能生成文献综述或查新结论'}
+
+    prompted = controller.planning_runtime(session_id='neighbor-prompt', max_experiments=1)
+    prompted_calls = []
+
+    def also_forbidden(*_args, **_kwargs):
+        prompted_calls.append(1)
+        raise AssertionError('model must not be called')
+
+    prompted_result = prompted.run(
+        also_forbidden, trusted_local=True, planning_prompt='请根据近邻工作给出查新结论')
+    assert prompted_calls == []
+    assert '没有检索命中' in prompted_result['planner']['reason']
+
+
+def test_required_literature_with_hits_still_executes_registered_candidate(controller):
+    _write_hits(controller)
+    runtime = controller.planning_runtime(max_experiments=1)
+    hid = controller.manifest['candidate_hypothesis_ids'][1]
+    calls = []
+
+    def model(*_args, **_kwargs):
+        calls.append(1)
+        return execute(hid)
+
+    result = runtime.run(model, trusted_local=True, require_literature=True)
+    assert calls == [1]
+    assert result['planner']['status'] == 'stopped'
+    assert result['finalist']['hypothesis_id'] == hid
+
+
 def test_missing_scope_protocol_rejected_before_baseline_side_effect(controller):
     with patch('popper.research.project_adapter.RegisteredProjectAdapter.preflight',
                side_effect=ProtocolError('invalid frozen mapping')):

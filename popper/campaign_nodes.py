@@ -1,6 +1,6 @@
 """Campaign 内置节点：把真实 Popper 命令接线为可恢复编排步骤。
 
-每个节点签名 fn(run_dir, state) -> dict（outcome ∈ success/retryable；致命失败抛
+每个节点签名 fn(run_dir, state) -> dict（outcome ∈ success/retryable/skipped；致命失败抛
 CampaignFatal）。节点必须幂等：checkpoint 仍有挂起任务时从挂起点续跑，否则从 START
 重放全图；可恢复语义由节点自身的完成门槛保证——读取现有产物/状态即跳过，不重复副作用。
 
@@ -10,7 +10,9 @@ CampaignFatal）。节点必须幂等：checkpoint 仍有挂起任务时从挂�
   base_url/model  可选 BYOK LLM（idea/scoop 依赖）
   queries / start_year / end_year  文献检索配置（literature 依赖）
   materialize  稿件 JSON 配置 {manuscript, template, disclosure}
-LLM 依赖步骤在未提供 base_url/model 时跳过并如实标注 skipped_reason。
+缺查询、缺模型、非 trusted-local 或缺必要前置时，idea/literature/scoop/dispatch/
+propose/variant/materialize 的 outcome 为 skipped，不能当成该步已经完成。真正跑完
+并留下产物的路径仍是 success；已有产物的幂等复用也记 success。
 """
 from __future__ import annotations
 
@@ -81,6 +83,11 @@ def _llm(state):
     return bool(state.get("base_url") and state.get("model"))
 
 
+def _not_run(reason):
+    """配置不足、步骤没有执行时不得记为 success。"""
+    return {"outcome": "skipped", "skipped": True, "reason": reason}
+
+
 def _incomplete(reason, **details):
     """必要科研证据可恢复地阻断后续步骤，不把未执行工作当作完成。"""
     return {"outcome": "retryable", "reason": reason, **details}
@@ -102,8 +109,7 @@ def idea_node(run_dir, state):
             validate_candidate(read_json(candidate), contract)
         return {"outcome": "success", "process": "existing", "candidate": str(candidate)}
     if not _llm(state):
-        return {"outcome": "success", "skipped": True,
-                "reason": "未提供 --base-url/--model，跳过 Idea 导航（可手动 popper vendor idea-next 补全）"}
+        return _not_run("未提供 --base-url/--model，跳过 Idea 导航（可手动 popper vendor idea-next 补全）")
     query = state.get("query") or state.get("objective") or ""
     options = {"evaluation_contract": contract} if contract is not None else {}
     result = _registry(state).idea_next(target, query, state["base_url"], state["model"], **options)
@@ -119,12 +125,10 @@ def idea_node(run_dir, state):
 def literature_node(run_dir, state):
     """文献检索：paper-search（请求指纹缓存，天然幂等）。"""
     if state.get("mode") != "trusted_local":
-        return {"outcome": "success", "skipped": True,
-                "reason": "paper-search 需 --trusted-local（当前 mode 非 trusted_local）"}
+        return _not_run("paper-search 需 --trusted-local（当前 mode 非 trusted_local）")
     queries = state.get("queries")
     if not queries:
-        return {"outcome": "success", "skipped": True,
-                "reason": "未提供 --queries-json，跳过文献检索"}
+        return _not_run("未提供 --queries-json，跳过文献检索")
     result = _registry(state).paper_search(
         Path(run_dir), [str(q) for q in queries],
         int(state.get("start_year", 2015)), int(state.get("end_year", 2026)),
@@ -136,11 +140,9 @@ def literature_node(run_dir, state):
 def scoop_node(run_dir, state):
     """② 过滤层：Scoop-Check 七步可恢复状态机（需 BYOK LLM）。"""
     if state.get("mode") != "trusted_local":
-        return {"outcome": "success", "skipped": True,
-                "reason": "scoop-run 需 --trusted-local（当前 mode 非 trusted_local）"}
+        return _not_run("scoop-run 需 --trusted-local（当前 mode 非 trusted_local）")
     if not _llm(state):
-        return {"outcome": "success", "skipped": True,
-                "reason": "未提供 --base-url/--model，跳过 Scoop-Check（可手动 popper vendor scoop-run）"}
+        return _not_run("未提供 --base-url/--model，跳过 Scoop-Check（可手动 popper vendor scoop-run）")
     result = _registry(state).scoop_run(
         Path(run_dir) / "idea", Path(run_dir) / "scoop",
         state["base_url"], state["model"],
@@ -193,36 +195,32 @@ def dispatch_node(run_dir, state):
     """arbor-dispatch：BYOK 模型基于 Idea+Scoop 证据从预注册候选选配置并 dev 计分。
 
     幂等（dispatches.json execution_key 缓存）；缺 LLM/Scoop 报告/桥接节点/非
-    searching 阶段时如实跳过。
+    searching 阶段时如实 skipped，不得记 success。
     """
     if state.get("mode") != "trusted_local":
-        return {"outcome": "success", "skipped": True,
-                "reason": "arbor-dispatch 需 --trusted-local（当前 mode 非 trusted_local）"}
+        return _not_run("arbor-dispatch 需 --trusted-local（当前 mode 非 trusted_local）")
     if not _llm(state):
-        return {"outcome": "success", "skipped": True,
-                "reason": "未提供 --base-url/--model，跳过 arbor-dispatch"}
+        return _not_run("未提供 --base-url/--model，跳过 arbor-dispatch")
     arbor_dir, scoop_dir, idea_dir = (Path(run_dir) / "arbor",
                                       Path(run_dir) / "scoop", Path(run_dir) / "idea")
     report_path = scoop_dir / "step7.json"
     if not report_path.is_file():
-        return {"outcome": "success", "skipped": True, "reason": "缺少 Scoop 报告，跳过 arbor-dispatch"}
+        return _not_run("缺少 Scoop 报告，跳过 arbor-dispatch")
     report = read_json(report_path)
     if report.get("status") not in {"completed", "provisional"}:
-        return {"outcome": "success", "skipped": True, "reason": "Scoop 报告未完成，跳过 arbor-dispatch"}
+        return _not_run("Scoop 报告未完成，跳过 arbor-dispatch")
     if report.get("status") == "provisional" and not state.get("allow_provisional"):
-        return {"outcome": "success", "skipped": True,
-                "reason": "Scoop 报告为 provisional，未放行（--allow-provisional），跳过 arbor-dispatch"}
+        return _not_run("Scoop 报告为 provisional，未放行（--allow-provisional），跳过 arbor-dispatch")
     links_path = arbor_dir / ".popper-integration" / "idea-arbor-links.json"
     links = read_json(links_path) if links_path.is_file() else {}
     links_list = links.get("links", []) if isinstance(links, dict) else []
     if not links_list:
-        return {"outcome": "success", "skipped": True, "reason": "无 idea→arbor 桥接节点，跳过 arbor-dispatch"}
+        return _not_run("无 idea→arbor 桥接节点，跳过 arbor-dispatch")
     node = links_list[0]["node_id"]
     exp = _experiment(state)
     try:
         if exp.state()["phase"] != "searching":
-            return {"outcome": "success", "skipped": True,
-                    "reason": "实验已冻结/完成，跳过 arbor-dispatch"}
+            return _not_run("实验已冻结/完成，跳过 arbor-dispatch")
     finally:
         exp.close()
     result = _registry(state).arbor_dispatch(
@@ -236,8 +234,7 @@ def dispatch_node(run_dir, state):
 def propose_node(run_dir, state):
     """code-propose：BYOK 模型基于 Idea+Scoop 生成受控代码修改（需 completed scoop 报告）。"""
     if not _llm(state):
-        return {"outcome": "success", "skipped": True,
-                "reason": "未提供 --base-url/--model，跳过 code-propose"}
+        return _not_run("未提供 --base-url/--model，跳过 code-propose")
     idea_dir, scoop_dir = Path(run_dir) / "idea", Path(run_dir) / "scoop"
     if not (idea_dir / "phase3_revise" / "final_candidate.json").is_file():
         return _incomplete("缺少 Idea candidate，无法执行 code-propose")
@@ -267,8 +264,7 @@ def variant_node(run_dir, state):
     if not proposal_path.is_file():
         if _llm(state):
             return _incomplete("缺少 proposal，无法物化研究变体")
-        return {"outcome": "success", "skipped": True,
-                "reason": "缺少 proposal，继续运行预注册配置队列"}
+        return _not_run("缺少 proposal，继续运行预注册配置队列")
     try:
         proposal = read_json(proposal_path)
     except (ValueError, OSError) as error:
@@ -372,19 +368,19 @@ def confirm_node(run_dir, state):
 
 
 def materialize_node(run_dir, state):
-    """成果物化：渲染稿件并登记到 workspace（已物化则跳过）。"""
+    """成果物化：渲染稿件并登记到 workspace（已物化则 success 复用；缺配置则 skipped）。"""
     target = state.get("active_project") or state.get("project")
     project = Path(target) if target else None
     mat = state.get("materialize")
     if not project or not mat or not isinstance(mat.get("manuscript"), dict):
-        return {"outcome": "success", "skipped": True,
-                "reason": "未提供 project/--materialize-json，跳过成果物化"}
+        return _not_run("未提供 project/--materialize-json，跳过成果物化")
     template = mat.get("template", "md")
     disclosure = mat.get("disclosure", "nature")
     out = project / "deliverables"
     path = out / f"manuscript.{template}"
     if path.is_file():
-        return {"outcome": "success", "skipped": True, "manuscript": str(path),
+        # 已有产物：幂等复用，记 success（不是「没做」）。
+        return {"outcome": "success", "process": "existing", "manuscript": str(path),
                 "reason": "已物化，跳过"}
     res = Materializer(project).materialize(mat["manuscript"], out, template, disclosure)
     fp = Path(res["manuscript"])

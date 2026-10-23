@@ -106,6 +106,54 @@ describe('server-directed Study actions', () => {
     expect(screen.queryByText('Synthetic study')).toBeNull()
     expect(screen.queryByRole('button', { name: '批准并运行研究' })).toBeNull()
   })
+  it('shows the locked assertion instead of calling a lower error scientific support', async () => {
+    render(<StudyLifecyclePanel {...base} phase="concluded" claimCard={{
+      feature: 'dose', label: 'dose', direction: 'negative', ci95: [-1.2, -0.4],
+      scientific_status: 'supported', n_rows: 20,
+      sentence: '断言获得独立证据支持。断言为dose与目标呈负向；确认区间 [-1.2, -0.4]；开发记录（不是支持依据）：搜索集基线 MAE 13、候选 MAE 4；确认行数 20。这不建立机制。',
+    }} />)
+    const card = screen.getByLabelText('断言卡')
+    expect(card.textContent).toContain('dose')
+    expect(card.textContent).toContain('负向')
+    expect(card.textContent).toContain('[-1.2,-0.4]')
+    expect(card.textContent).toContain('科学状态：支持')
+    expect(card.textContent).not.toContain('预测更准')
+    expect(card.textContent).not.toContain('迁移规则')
+  })
+  it('shows the declared transport rule with the locked assertion', async () => {
+    render(<StudyLifecyclePanel {...base} phase="concluded" claimCard={{
+      feature: 'dose', label: 'dose', direction: 'negative', ci95: [-0.2, 0.3],
+      scientific_status: 'inconclusive', n_rows: 20, transportText: '搜索 batch ≤ 10，确认 batch > 10',
+      sentence: '证据不足。断言为dose与目标呈负向；这是预先声明的人群迁移确认：确认人群为 batch > 10，不是同一人群的随机留出；确认区间 [-0.2, 0.3]；开发记录（不是支持依据）：搜索集基线 MAE 13、候选 MAE 4；确认集基线 MAE 100、候选 MAE 1；确认行数 20。这不建立机制。',
+    }} />)
+    const card = screen.getByLabelText('断言卡')
+    expect(card.textContent).toContain('迁移规则：搜索 batch ≤ 10，确认 batch > 10')
+    expect(card.textContent).toContain('dose')
+    expect(card.textContent).toContain('负向')
+    expect(card.textContent).toContain('[-0.2,0.3]')
+    expect(card.textContent).toContain('科学状态：证据不足')
+    expect(card.textContent).toContain('确认人群为 batch > 10')
+    expect(card.textContent).toContain('这不建立机制。')
+  })
+  it('shows the finished search tree and the confirmation button without a support verdict', async () => {
+    vi.mocked(fetchStudyJobs).mockResolvedValue({
+      jobs: [],
+      search_progress: {
+        step: 2, max_steps: 8, nodes: 2, buggy: 1, best_value: 0.42,
+        dev_runs_used: 2, max_dev_runs: 8, tokens_used: 10, max_model_tokens: 100,
+        node_summaries: [
+          { id: 'node-0', parent_id: null, kind: 'draft', status: 'buggy', value: null, error_type: 'SyntaxError' },
+          { id: 'node-1', parent_id: 'node-0', kind: 'debug', status: 'scored', value: 0.42, error_type: null },
+        ],
+      },
+    })
+    render(<StudyLifecyclePanel {...base} phase="ready_for_confirmation" />)
+    await waitFor(() => expect(screen.getByLabelText('代码树搜索')).toBeTruthy())
+    expect(screen.getByText(/当前最好开发分 0.42/)).toBeTruthy()
+    expect(screen.getByText(/确认前只显示开发分/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '预览独立确认' })).toBeTruthy()
+    expect(screen.queryByText('在声明范围内获得支持')).toBeNull()
+  })
   it('prioritizes active jobs and does not mark cancellation as completion', async () => {
     vi.mocked(fetchStudyJobs).mockResolvedValue({ jobs: [job] })
     const changed = vi.fn(), open = vi.fn()

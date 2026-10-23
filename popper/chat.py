@@ -48,6 +48,7 @@ CHAT_LABELS = {
     "empty_notice": "向模型提问当前实验、指标或结论。对话记录保存在当前工作区 .popper/chat.json，"
                     "不写入事件链，不会推进实验或改动评测数字。",
     "ai_notice": "内容由 AI 生成，可能出错。对话独立于事件溯源链，不会推进实验或改动评测数字。",
+    "evidence_notice": "对话不是科学结论；数字必须带观测或文献标识。",
     "error_title": "模型调用失败（已如实记录，非模型回复）",
     "composer_placeholder": "输入消息，Enter 发送",
 }
@@ -723,6 +724,82 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
                 + (f"；{detail}" if detail else "")) from None
 
     return StreamingChatClient()
+
+
+# Numeric conclusions are measurements, percentages, intervals, p-values, or
+# effect sizes. Ordinary prose is left untouched. A failing segment is replaced
+# with a short refusal so the number is not silently dropped.
+NUMERIC_CLAIM_REFUSAL = "这段数字结论已拒绝：缺少本次研究中的观测标识或已检索文献标识。"
+_NUMERIC_CLAIM = re.compile(
+    r"\d+(?:\.\d+)?\s*%"
+    r"|百分之\s*\d"
+    r"|(?<![A-Za-z0-9])p(?:\s*|-)?(?:值|value)\s*[=:：<>≤≥]?\s*\d"
+    r"|(?<![A-Za-z0-9])p\s*[=<>≤≥]\s*\d"
+    r"|置信区间|confidence interval"
+    r"|\bCI\d*\b[^0-9\n]{0,6}\d"
+    r"|\[[\s]*-?\d+(?:\.\d+)?\s*[,，]\s*-?\d+(?:\.\d+)?\s*\]"
+    r"|(?:改善|提升|降低|下降|增幅|降幅|improved|improvement|reduced|reduction|delta|Δ)"
+    r"[^0-9\n]{0,12}-?\d"
+    r"|\b(?:MAE|MSE|RMSE|AUC|F1|accuracy|precision|recall)\b[^0-9\n]{0,8}-?\d"
+    r"|(?:误差|均值|准确率|得分)\s*(?:为|是|=|:|：)\s*-?\d"
+    r"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\s*(?:ms|μs|ns|kg|mg|mm|cm|°C|℃|mol|mA|kPa|MPa)\b",
+    re.IGNORECASE,
+)
+_CLAIM_SEGMENT = re.compile(r"(\n+|(?<=[。！？])|(?<=[.!?])(?=\s))")
+
+
+def _cites_identifier(segment, identifiers):
+    for token in identifiers:
+        if not isinstance(token, str) or not token:
+            continue
+        if re.search(r"(?<![\w])" + re.escape(token) + r"(?![\w])", segment):
+            return True
+    return False
+
+
+def _complete_json_payload(text):
+    """True when the whole reply is one JSON value (optionally fenced).
+
+    Structured protocol payloads are data, not prose numeric conclusions.
+    """
+    if not isinstance(text, str):
+        return False
+    body = text.strip()
+    if body.startswith("```json\n") and body.endswith("\n```"):
+        body = body[8:-4]
+    if not body or body[0] not in "{[" or body[-1] not in "}]":
+        return False
+    try:
+        json.loads(body)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def gate_numeric_claims(text, *, observation_ids=(), literature_ids=()):
+    """Replace uncited numeric conclusions before the reply is returned.
+
+    A segment may state a number only when it also contains an observation id
+    from this study or a literature id already in context. Non-numeric segments
+    stay. The refusal is visible; the original number is not. A complete JSON
+    object/array (including an exact ``json`` fence) is left untouched so
+    machine-authored proposals are not treated as prose claims.
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    if _complete_json_payload(text):
+        return text
+    known = tuple(observation_ids) + tuple(literature_ids)
+    pieces = []
+    for segment in _CLAIM_SEGMENT.split(text):
+        if not segment or segment.isspace() or _CLAIM_SEGMENT.fullmatch(segment):
+            pieces.append(segment)
+            continue
+        if _NUMERIC_CLAIM.search(segment) and not _cites_identifier(segment, known):
+            pieces.append(NUMERIC_CLAIM_REFUSAL)
+        else:
+            pieces.append(segment)
+    return "".join(pieces)
 
 
 def history_messages(entries):

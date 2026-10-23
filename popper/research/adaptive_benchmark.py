@@ -445,11 +445,14 @@ def report(root,cohort):
 
 
 def main(argv=None):
-    parser=argparse.ArgumentParser(prog='popper adaptive')
+    parser=argparse.ArgumentParser(
+        prog='popper adaptive',
+        description='描述性基准夹具（非默认科研产品路径；默认不开 live）')
     parser.add_argument('action',choices=['prepare','bind-code','develop','freeze','confirm','review','report'])
     parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--pilot',action='store_true')
-    parser.add_argument('--live',action='store_true')
+    parser.add_argument('--live',action='store_true',
+                        help='显式开启 live（付费盲审等）；缺省关闭')
     args=parser.parse_args(argv)
     if args.action=='prepare':result=prepare(args.root,args.pilot)
     else:

@@ -73,3 +73,13 @@
   （修订发生在仍有容量时，或先被合同层拒绝）。未复现 iid-72「修订后无复验 → 未评」。
   描述见 `adaptive-pilot-revision-capacity-synthesis-2026-10-13.md`。
   不宣称策略优势。`formal-generated-root` 仍未启动。
+- 2026-10-14：文档收束完成。跨队列索引见
+  `adaptive-v2-cohort-index-2026-10-14.md`。Adaptive live 线暂停；
+  不开 `--live`，不启动 `formal-generated-root`。扩样须新命名队列与账本计划。
+- 2026-10-14：描述性方法学收口完成。宣称分类、Methods/Results/Limitations
+  与收口自检见 `adaptive-v2-descriptive-closeout-2026-10-14.md`。
+  描述性终点达成；Adaptive live 线保持暂停。不宣称策略优势。
+  `formal-generated-root` 仍未启动。
+- 2026-10-14：下一步冻结说明见 `adaptive-v2-next-frozen-2026-10-14.md`
+  （默认停止；仅软拒绝率审稿强制 / 宣称抬到可辩护比较 / 门禁文档代码矛盾
+  三类条件可重开 live）。

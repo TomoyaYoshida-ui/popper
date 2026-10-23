@@ -320,8 +320,11 @@ class ResearchControllerIntegrationTests(unittest.TestCase):
                                  if o["scope"] == "confirmation"]))
         self.assertTrue(any(d["action"] == REQUEST_CONFIRMATION
                             for d in status["decisions"]))
-        self.assertTrue(any(c["status"] == "supported_in_scope"
-                            for c in status["candidates"]))
+        confirmed_support = {j["hypothesis_id"] for j in status["judgments"]
+                             if j.get("scope") == "confirmation" and j["new_judgment"] == "supported"}
+        for candidate in status["candidates"]:
+            if candidate["status"] == "supported_in_scope":
+                self.assertIn(candidate["hypothesis_id"], confirmed_support)
         self.assertGreater(status["budget"]["spent"], 0)
         self.assertEqual("separate_process_same_account", status["evaluation_trust"])
         self.assertEqual(1, len(status["claims"]))

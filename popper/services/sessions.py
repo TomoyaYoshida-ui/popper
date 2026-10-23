@@ -23,7 +23,7 @@ class SessionsService(HostService):
                 exp.close()
             spec = state.get('spec', {})
             metric = spec.get('metric', {})
-            lines = ['你是 Popper 科研工作台的对话助手。', f"当前实验：{spec.get('name')}", f"研究目标：{spec.get('objective')}", f"指标：{metric.get('name')}（方向 {metric.get('direction')}）", f"阶段：{PHASES.get(state.get('phase'), state.get('phase'))}", f"预注册改善阈值：{spec.get('min_improvement')}"]
+            lines = ['你是 Popper 科研工作台的对话助手。', '对话不是科学结论。数字结论必须同时写出本次 study 已有的 observation_id，或已检索文献的 id；没有这些标识时不要给出测量值、百分比、区间、p 值或改善幅度。', f"当前实验：{spec.get('name')}", f"研究目标：{spec.get('objective')}", f"指标：{metric.get('name')}（方向 {metric.get('direction')}）", f"阶段：{PHASES.get(state.get('phase'), state.get('phase'))}", f"预注册改善阈值：{spec.get('min_improvement')}"]
             claim = state.get('claim')
             if claim:
                 lines.append(f"结论：oriented delta={claim.get('delta')}（{claim.get('status')}）")
@@ -429,6 +429,29 @@ class SessionsService(HostService):
             raise ProtocolError(f"Session Harness 不兼容: {session['harness']}@{session['harness_version'] or 'unversioned'}")
         return session
 
+    def _chat_evidence_identifiers(self, root):
+        """Observation and literature ids already stored for this workspace."""
+        Path = self.dependencies.Path
+        try:
+            from ..research.literature_context import workspace_evidence_ids
+            runs = [Path(item) for item in self._visible_research_runs(root)]
+        except Exception:
+            return (), ()
+        roots = [Path(root)]
+        campaign = getattr(self, 'campaign_dir', None)
+        if campaign:
+            roots.append(Path(campaign))
+        try:
+            return workspace_evidence_ids(runs, roots)
+        except Exception:
+            return (), ()
+
+    def _gate_chat_reply(self, root, text):
+        from ..chat import gate_numeric_claims
+        observation_ids, literature_ids = self._chat_evidence_identifiers(root)
+        return gate_numeric_claims(
+            text, observation_ids=observation_ids, literature_ids=literature_ids)
+
     def _run_session_turn(self, root, session_id, turn_id, trace_id, system_prompt, cancel_event=None):
         """Run one already-persisted turn; terminal persistence is race-safe."""
         AGENT_TOOLS = self.dependencies.AGENT_TOOLS
@@ -463,7 +486,7 @@ class SessionsService(HostService):
                     on_progress=lambda progress: store.update_request_progress(turn_id, progress))
                 usage = getattr(reply, 'usage', {})
                 if isinstance(reply, str):
-                    return (store.complete_turn(turn_id, reply), getattr(reply, 'usage', {}))
+                    return (store.complete_turn(turn_id, self._gate_chat_reply(root, reply)), usage)
                 if not isinstance(reply, dict) or set(reply) != {'text', 'tool_calls'} or (not isinstance(reply['text'], str)) or (not isinstance(reply['tool_calls'], list)) or (not reply['tool_calls']):
                     raise ProtocolError('模型回复必须是文本或结构化工具提议')
                 proposals = []
@@ -492,7 +515,7 @@ class SessionsService(HostService):
                     if validation_error is not None:
                         proposal['validation_error'] = validation_error
                     proposals.append(proposal)
-                (turn, _) = store.complete_turn_with_tool_calls(turn_id, reply['text'], proposals)
+                (turn, _) = store.complete_turn_with_tool_calls(turn_id, self._gate_chat_reply(root, reply['text']), proposals)
                 return (turn, getattr(reply, 'usage', {}))
             except Exception as error:
                 try:

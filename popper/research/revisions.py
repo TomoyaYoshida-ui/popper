@@ -5,6 +5,7 @@ import hashlib
 import difflib
 import shutil
 import subprocess
+import time
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -12,6 +13,26 @@ from pathlib import Path, PurePosixPath
 from ..core import (Experiment, ProtocolError, digest, file_hash, portable_path,
                     read_json, write_json)
 from .execution import changed_statement_lines
+
+
+def _publish_staging(staging, target):
+    """把 staging 目录换成正式 revision。Windows 上索引器可能短暂锁住新文件。"""
+    last = None
+    for delay in (0.0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6):
+        if delay:
+            time.sleep(delay)
+        try:
+            staging.rename(target)
+            return
+        except PermissionError as error:
+            last = error
+    if target.exists():
+        raise last
+    shutil.copytree(staging, target)
+    try:
+        shutil.rmtree(staging)
+    except OSError:
+        pass
 
 
 def source_control_provenance(project, source_files):
@@ -196,7 +217,7 @@ class RevisionStore:
                             "status": "immutable"}
                 staging.mkdir(parents=True, exist_ok=True)
                 write_json(staging / "revision.json", manifest)
-                staging.rename(target)
+                _publish_staging(staging, target)
                 return manifest
             except Exception:
                 if staging.exists() and staging.is_relative_to(self.root):
@@ -272,7 +293,7 @@ class RevisionStore:
                 destination.write_bytes(content)
             staging.mkdir(parents=True, exist_ok=True)
             write_json(staging / "revision.json", manifest)
-            staging.rename(target)
+            _publish_staging(staging, target)
             return manifest
         except Exception:
             if staging.exists() and staging.is_relative_to(self.root):

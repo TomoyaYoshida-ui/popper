@@ -12,7 +12,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from ..core import canonical, digest, file_hash
+from ..core import canonical, digest, file_hash, read_json
 from ..identity import EntityKind, parse_id
 from .controller import research_lifecycle_phase
 
@@ -254,7 +254,13 @@ def _project(conn, study_id, manifest, run_dir) -> dict:
     events_total = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     graph = _experiment_graph(run_dir, entities, study_id)
     from .claim_projection import project_claim
-    entities['claim'] = [project_claim(row, entities['judgment']) for row in entities['claim']]
+    seeds = manifest.get("repeat_values", manifest.get("seeds", []))
+    split_path = Path(run_dir) / "split-confirmation.json"
+    split_confirmation = read_json(split_path) if split_path.is_file() else None
+    entities['claim'] = [project_claim(row, entities['judgment'], entities['observation'], seeds,
+                                       split_confirmation)
+                         for row in entities['claim']]
+    claim_card = _claim_card_view(manifest, split_confirmation)
     lifecycle = _lifecycle_projection(manifest, study, entities["decision"], run_dir)
     return {"ok": True,
             **lifecycle,
@@ -278,7 +284,57 @@ def _project(conn, study_id, manifest, run_dir) -> dict:
             "reflections": entities["reflection"],
             'judgments': entities['judgment'],
             "budget": budget, "events_total": events_total,
-            "experiment_graph": graph}
+            "experiment_graph": graph, "claim_card": claim_card}
+
+
+def _claim_card_view(manifest, split_confirmation):
+    """断言卡来自搜索集锁文件；区间和状态来自确认收据，不在这里重选特征。"""
+    card = None
+    project = manifest.get("project")
+    if project:
+        path = Path(project) / "claim-card.json"
+        if path.is_file():
+            try:
+                card = read_json(path)
+            except (OSError, ValueError):
+                card = None
+    assertion = split_confirmation.get("claim_assertion") if isinstance(split_confirmation, dict) else None
+    if not card and not assertion:
+        return None
+    transport = None
+    if isinstance(card, dict) and isinstance(card.get("population_transport"), dict):
+        transport = card.get("population_transport")
+    elif isinstance(split_confirmation, dict) and isinstance(split_confirmation.get("population_transport"), dict):
+        transport = split_confirmation.get("population_transport")
+    elif project:
+        protocol_path = Path(project) / "search-protocol.json"
+        if protocol_path.is_file():
+            try:
+                loaded = read_json(protocol_path).get("population_transport")
+            except (OSError, ValueError):
+                loaded = None
+            if isinstance(loaded, dict):
+                transport = loaded
+    view = {
+        "feature": (card or {}).get("feature") or (assertion or {}).get("feature"),
+        "label": (card or {}).get("label") or (assertion or {}).get("label"),
+        "direction": (card or {}).get("direction") or (assertion or {}).get("direction"),
+        "contrast_definition": (card or {}).get("contrast_definition"),
+        "failure_condition": (card or {}).get("failure_condition"),
+        "search_association": (card or {}).get("search_association"),
+        "search_rows_discarded": (card or {}).get("search_rows_discarded"),
+        "ci95": None if not isinstance(assertion, dict) else assertion.get("ci95"),
+        "scientific_status": None if not isinstance(assertion, dict) else assertion.get("scientific_status"),
+        "n_rows": None if not isinstance(assertion, dict) else assertion.get("n_rows"),
+    }
+    if isinstance(transport, dict):
+        view["population_transport"] = {
+            "column": transport.get("column"),
+            "search": transport.get("search"),
+            "confirmation": transport.get("confirmation"),
+            "rows_discarded": transport.get("rows_discarded"),
+        }
+    return view
 
 
 def _lifecycle_projection(manifest, study, decisions, run_dir):

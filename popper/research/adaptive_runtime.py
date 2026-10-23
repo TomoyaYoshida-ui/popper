@@ -25,6 +25,19 @@ from .workers import LocalWorker, JobSpec, InputArtifact
 from . import prediction_comparison
 
 
+# run() offers this many model steps. A revision consumes the current step, so a
+# retest needs one step after it. Experiment slots are separate and are not spent
+# by the revision itself.
+_PLANNING_STEPS = 12
+_EXPERIMENT_SLOTS = 8
+
+
+def _action_error(message):
+    error = ProtocolError(message)
+    error.details = [{'path': 'action', 'rule': message}]
+    return error
+
+
 class AdaptivePlannerClient(PydanticPlannerClient):
     tool_names = ('propose_problem', 'run_experiment', 'revise_hypothesis', 'repair_implementation', 'stop_planning')
     parse_action = staticmethod(parse_action)
@@ -119,7 +132,7 @@ class AdaptiveResearchRuntime:
                       {k:r['data'][k] for k in ('status','candidate','baseline_mae','candidate_mae',
                            'observation_refs','failure_context','error_type','evaluation_diagnostic') if k in r['data']}}
                       for r in self.records('attempt_completed')],
-                  'remaining_experiments': 8 - len(self.records('attempt_started')),
+                  'remaining_experiments': _EXPERIMENT_SLOTS - len(self.records('attempt_started')),
                   'used_wall_seconds': sum(r['data']['seconds'] for r in self.records('elapsed')),
                   'implementation_cli': 'model.py --train JSON --input label-free JSON --output JSON --config JSON --seed INT; '
                     'train rows are {id,features,y}, inputs {id,features}; output list of {id,prediction}.',
@@ -127,11 +140,26 @@ class AdaptiveResearchRuntime:
                         (self.revisions.path(r['data']['revision_id']) / 'code/model.py').read_text(encoding='utf-8')}
                       for r in self.records('candidate')]}
         if self.profile == 'evidence_driven':
-            result['structured_judgments'] = [{k: j[k] for k in ('hypothesis_id', 'hypothesis_version',
+            result['structured_judgments'] = [{k: j[k] for k in ('judgment_id', 'hypothesis_id', 'hypothesis_version',
                 'new_judgment', 'observation_refs', 'scope')} for j in self.store.list('judgment') if j['scope'] == 'dev']
             result['hypothesis_versions']=self.store.list('hypothesis')
             result['explanation_revisions']=self.records('revision')
         return result
+
+    def _latest_judged_attempt(self):
+        judged = [r['data'] for r in self.records('attempt_completed')
+                  if r['data'].get('status') == 'succeeded' and r['data'].get('judgment_id')]
+        if not judged:
+            return None
+        latest = judged[-1]
+        judgment = self.store.get('judgment', latest['judgment_id'])
+        if not judgment:
+            return None
+        evidence = judgment.get('evidence') if isinstance(judgment.get('evidence'), dict) else {}
+        quality = evidence.get('quality')
+        return {'judgment_id': latest['judgment_id'], 'new_judgment': judgment.get('new_judgment'),
+                'config': latest['candidate']['config'],
+                'quality_complete': isinstance(quality, str) and bool(quality)}
 
     def validate(self, action):
         if self.records('selection'):
@@ -139,6 +167,7 @@ class AdaptiveResearchRuntime:
         development_refs = {o['observation_id'] for o in self.store.list('observation') if o['scope'] == 'dev'}
         known = set(development_refs)
         known |= {m.get('id') for m in self.contract.materials}
+        known |= {j['judgment_id'] for j in self.store.list('judgment') if j.get('scope') == 'dev'}
         if not set(action.evidence_refs) <= known:
             raise ProtocolError('Unknown or withheld evidence reference')
         if isinstance(action, ProblemProposal):
@@ -149,7 +178,7 @@ class AdaptiveResearchRuntime:
         elif not self.records('problem'):
             raise ProtocolError('Propose a research problem before development')
         if isinstance(action, ExperimentProposal):
-            if len(self.records('attempt_started')) >= 8:
+            if len(self.records('attempt_started')) >= _EXPERIMENT_SLOTS:
                 raise ProtocolError('Frozen experiment cap reached')
             try:
                 compile(action.source_code, 'model.py', 'exec')
@@ -163,17 +192,29 @@ class AdaptiveResearchRuntime:
                 r['key']==action.parent_candidate_id and r['data']['status']=='failed'
                 for r in self.records('attempt_completed')):
                 raise ProtocolError('Repair requires a failed parent candidate')
+            if action.kind == 'run_experiment' and self.profile == 'evidence_driven':
+                latest = self._latest_judged_attempt()
+                if (latest and latest['quality_complete']
+                        and latest['new_judgment'] in {'refuted', 'inconclusive'}):
+                    if latest['judgment_id'] not in action.evidence_refs:
+                        raise _action_error('Experiment must cite judgment_id ' + latest['judgment_id'])
+                    if canonical(action.config) == canonical(latest['config']):
+                        raise _action_error('Experiment must change the configuration judged by ' + latest['judgment_id'])
         if isinstance(action, RevisionProposal):
             if not (set(action.evidence_refs) & development_refs) or not self.store.get('hypothesis', action.hypothesis_id):
                 raise ProtocolError('Revision requires an existing hypothesis and development evidence')
             if not any(action.hypothesis_id in (r['data']['hypothesis_id'],r['data']['alternative_id'])
                        for r in self.records('candidate')):
                 raise ProtocolError('Only registered candidate explanation pairs can be revised')
-            # Soft rejects: leave room to retest the new version. Do not hard-stop the cell.
-            if len(self.records('attempt_started')) >= 8:
-                raise ProtocolError('Revision requires a remaining experiment slot')
-            if len(self.records('decision_completed')) >= 11:
-                raise ProtocolError('Revision requires a remaining planning step for retest')
+            # Soft rejects: the revision spends this planning step and drops the current
+            # version's successes from finalist eligibility. A retest needs a later step
+            # and an unused experiment slot. Do not hard-stop the cell.
+            slots_after = _EXPERIMENT_SLOTS - len(self.records('attempt_started'))
+            steps_after = _PLANNING_STEPS - len(self.records('decision_completed')) - 1
+            if slots_after < 1:
+                raise _action_error('Revision requires a remaining experiment slot')
+            if steps_after < 1:
+                raise _action_error('Revision requires a remaining planning step for retest')
             hypothesis = self.store.get('hypothesis', action.hypothesis_id)
             tested_current = any(
                 row['data']['status'] == 'succeeded'
@@ -182,7 +223,7 @@ class AdaptiveResearchRuntime:
                 and row['data']['candidate']['hypothesis_version'] == hypothesis['version']
                 for row in self.records('attempt_completed'))
             if not tested_current:
-                raise ProtocolError('Revision requires a successful test of the current explanation version')
+                raise _action_error('Revision requires a successful test of the current explanation version')
 
     def _revision(self, source, hid, did, parent=None):
         compile(source, 'model.py', 'exec')
@@ -498,7 +539,38 @@ class AdaptiveResearchRuntime:
         })
         if self.records('selection'):
             return self.result()
-        for n in range(12):
+        def reject_decision(error):
+            category = getattr(error, 'category', None)
+            if category in stop_categories:
+                raise error
+            details = list(getattr(error, 'details', None) or [
+                {'path': 'action', 'rule': 'registered_action_or_evidence'}])
+            logical_id = 'RT-' + digest({'study': self.study_id, 'step': n})[:32]
+            receipts = [r['data'] for r in self.records('model_receipt')
+                        if r['data'].get('kind') == 'model_response_rejected'
+                        and r['data'].get('logical_request_id') == logical_id]
+            audit = {
+                'consumed_send': True,
+                'logical_request_id': logical_id,
+                'physical_attempts': [
+                    {'attempt_index': r.get('attempt_index'),
+                     'correction_attempt': bool(r.get('correction_attempt')),
+                     'consumed_send': r.get('consumed_send', True),
+                     'action_kind': r.get('action_kind'),
+                     'details': r.get('details')}
+                    for r in receipts],
+                'reject_receipt_count': len(receipts),
+            }
+            self.record('response', key, {
+                'rejected': True, 'category': category or 'action_contract_rejected',
+                'details': details, 'audit': audit})
+            self.record('decision_completed', key, {
+                'status': 'rejected', 'category': category or 'action_contract_rejected',
+                'details': details, 'audit': audit})
+            if not self.records('selection'):
+                self.record('elapsed', key, {'seconds': time.monotonic()-decision_start})
+
+        for n in range(_PLANNING_STEPS):
             if self.cancel_event.is_set():
                 self.freeze_selection('cancelled')
                 break
@@ -506,7 +578,7 @@ class AdaptiveResearchRuntime:
             decision_start = time.monotonic()
             if self.records('selection'):
                 break
-            if len(self.records('attempt_started')) >= 8 or self.context()['used_wall_seconds'] > 5400:
+            if len(self.records('attempt_started')) >= _EXPERIMENT_SLOTS or self.context()['used_wall_seconds'] > 5400:
                 self.freeze_selection('experiment_or_wall_limit')
                 break
             if any(r['key'] == key for r in self.records('decision_completed')):
@@ -525,36 +597,11 @@ class AdaptiveResearchRuntime:
                         cancel_event=self.cancel_event,
                         logical_request_id='RT-' + digest({'study': self.study_id, 'step': n})[:32],
                         on_event=lambda event: self.record('model_receipt', event['event_id'], event))
+                    # decide() may skip validate_action. Apply only after the same
+                    # check, and keep the refusal on the soft-reject receipt path.
+                    self.validate(parse_action(payload['action']))
                 except ProtocolError as error:
-                    category = getattr(error, 'category', None)
-                    if category in stop_categories:
-                        raise
-                    details = list(getattr(error, 'details', None) or [
-                        {'path': 'action', 'rule': 'registered_action_or_evidence'}])
-                    logical_id = 'RT-' + digest({'study': self.study_id, 'step': n})[:32]
-                    receipts = [r['data'] for r in self.records('model_receipt')
-                                if r['data'].get('kind') == 'model_response_rejected'
-                                and r['data'].get('logical_request_id') == logical_id]
-                    audit = {
-                        'consumed_send': True,
-                        'logical_request_id': logical_id,
-                        'physical_attempts': [
-                            {'attempt_index': r.get('attempt_index'),
-                             'correction_attempt': bool(r.get('correction_attempt')),
-                             'consumed_send': r.get('consumed_send', True),
-                             'action_kind': r.get('action_kind'),
-                             'details': r.get('details')}
-                            for r in receipts],
-                        'reject_receipt_count': len(receipts),
-                    }
-                    self.record('response', key, {
-                        'rejected': True, 'category': category or 'action_contract_rejected',
-                        'details': details, 'audit': audit})
-                    self.record('decision_completed', key, {
-                        'status': 'rejected', 'category': category or 'action_contract_rejected',
-                        'details': details, 'audit': audit})
-                    if not self.records('selection'):
-                        self.record('elapsed', key, {'seconds': time.monotonic()-decision_start})
+                    reject_decision(error)
                     continue
                 self.record('response', key, {'payload': payload})
             self.apply(parse_action(payload['action']), key)

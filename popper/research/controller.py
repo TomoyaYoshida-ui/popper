@@ -33,6 +33,7 @@ class RevisionExecutionError(ProtocolError):
     def __init__(self, revision_id, status, error_type):
         self.revision_id = revision_id
         self.status = status
+        self.error_type = error_type
         super().__init__(f"CodeRevision 执行失败: {status}/{error_type}")
 
 
@@ -396,6 +397,28 @@ class ResearchController:
             result.append(existing[-1] if existing else self.store.record_judgment(
                 hid, version, references, comparison_artifact=descriptor))
         return result
+
+    def _mark_development_scored(self, hypothesis_id):
+        """开发观察只表示已评分。科学支持留给确认判断。"""
+        hypothesis = self.store.get("hypothesis", hypothesis_id)
+        if hypothesis["status"] == HypothesisStatus.UNTESTED.value:
+            self.store.set_hypothesis_status(
+                hypothesis_id, hypothesis["version"], HypothesisStatus.INCONCLUSIVE)
+
+    def _apply_confirmation_statuses(self, judgments):
+        mapping = {"supported": HypothesisStatus.SUPPORTED_IN_SCOPE,
+                   "refuted": HypothesisStatus.CONTRADICTED_IN_SCOPE,
+                   "inconclusive": HypothesisStatus.INCONCLUSIVE,
+                   "not_evaluated": HypothesisStatus.INCONCLUSIVE}
+        allowed = set(self.manifest["candidate_hypothesis_ids"])
+        for judgment in judgments:
+            if judgment.get("scope") != "confirmation" or judgment["hypothesis_id"] not in allowed:
+                continue
+            target = mapping[judgment["new_judgment"]]
+            hypothesis = self.store.get("hypothesis", judgment["hypothesis_id"])
+            if hypothesis["status"] != target.value:
+                self.store.set_hypothesis_status(
+                    judgment["hypothesis_id"], hypothesis["version"], target)
 
     def _observation_for_design(self, design_id, scope="dev"):
         rows = [o for o in self.store.list("observation")
@@ -951,7 +974,7 @@ class ResearchController:
 
     def implement(self, hypothesis_id, parent_revision_id=None, gpu_count=0,
                   should_cancel=None, search_node=False, fidelity=None, seen_diffs=None,
-                  node_kind=None, design_reservation=None):
+                  node_kind=None, design_reservation=None, search_nodes=None):
         """Generate, freeze, execute and independently score one code revision.
 
         Generated code always goes through LocalWorker's OS sandbox. There is no
@@ -1002,11 +1025,14 @@ class ResearchController:
         question = self.store.get("study", self.manifest["study_id"])["question"]
         if search_node:
             from .search_memory import research_notes
-            question = research_notes(self.store, self.manifest, question)
+            question = research_notes(self.store, self.manifest, question, nodes=search_nodes)
         proposed = self.harness.propose_revision(
             question, hypothesis,
             self.manifest["configs"][hypothesis_id], code_files,
             parent_revision=parent_revision_id, failure=previous_failure)
+        if search_node:
+            from .search_session import accept_search_claim
+            accept_search_claim(self.project, proposed.get("claim"))
         if search_node:
             from .tree_search import reject_duplicate
             if not proposed["edits"]:
@@ -1340,17 +1366,7 @@ class ResearchController:
             if observation.get("scope") != "dev" or observation["hypothesis_id"] not in candidates:
                 continue
             self._update_judgments(baseline, observation)
-            hypothesis = self.store.get("hypothesis", observation["hypothesis_id"])
-            if hypothesis["status"] == HypothesisStatus.UNTESTED.value:
-                delta = (baseline["value"] - observation["value"]
-                         if self.manifest["metric"]["direction"] == "min"
-                         else observation["value"] - baseline["value"])
-                threshold = self.manifest["min_meaningful_effect"]
-                target = (HypothesisStatus.SUPPORTED_IN_SCOPE if delta >= threshold else
-                          HypothesisStatus.CONTRADICTED_IN_SCOPE if delta <= -threshold else
-                          HypothesisStatus.INCONCLUSIVE)
-                self.store.set_hypothesis_status(
-                    hypothesis["hypothesis_id"], hypothesis["version"], target)
+            self._mark_development_scored(observation["hypothesis_id"])
             self._reflect_observation(baseline, observation)
 
     def _reflection_terminal(self):
@@ -1393,7 +1409,6 @@ class ResearchController:
         consecutive_provider_failures = 0
         limit = 8 if max_steps is None else max_steps
         direction = self.manifest["metric"]["direction"]
-        threshold = self.manifest["min_meaningful_effect"]
         for step in range(limit):
             if should_cancel is not None and should_cancel():
                 raise ProtocolError("研究执行已取消")
@@ -1408,26 +1423,38 @@ class ResearchController:
                 write_usage(self.run_dir, dev_runs_used=step, tokens_used=tokens_used)
                 self.store.record_envelope_approval(envelope)
             decision = choose_action(nodes, direction=direction, rng=random.Random(step))
-            winner = best_node(nodes, direction)
-            write_json(self.run_dir / "search-progress.json", {
-                "step": step + 1, "max_steps": limit, "nodes": len(nodes),
-                "buggy": sum(1 for node in nodes if node["status"] == "buggy"),
-                "best_value": None if winner is None else winner["value"],
-                "dev_runs_used": step,
-                "max_dev_runs": None if envelope is None else envelope["max_dev_runs"],
-                "tokens_used": tokens_used,
-                "max_model_tokens": None if envelope is None else envelope["max_model_tokens"],
-            })
+
+            def write_progress(dev_runs):
+                winner = best_node(nodes, direction)
+                write_json(self.run_dir / "search-progress.json", {
+                    "step": step + 1, "max_steps": limit, "nodes": len(nodes),
+                    "buggy": sum(1 for node in nodes if node["status"] == "buggy"),
+                    "best_value": None if winner is None else winner["value"],
+                    "dev_runs_used": dev_runs,
+                    "max_dev_runs": None if envelope is None else envelope["max_dev_runs"],
+                    "tokens_used": tokens_used,
+                    "max_model_tokens": None if envelope is None else envelope["max_model_tokens"],
+                    "node_summaries": [{
+                        "id": node["node_id"], "parent_id": node["parent_id"],
+                        "kind": node["kind"], "status": node["status"],
+                        "value": node.get("value"), "error_type": node.get("error_type"),
+                    } for node in nodes],
+                })
+
+            write_progress(step)
             parent = next((node for node in nodes if node["node_id"] == decision["parent_id"]), None)
             depth = 0 if parent is None else parent["depth"] + 1
             try:
                 outcome = self.implement(
                     hypothesis_id, parent_revision_id=None if parent is None else parent.get("revision_id"),
                     search_node=True, fidelity="ladder", seen_diffs=seen, should_cancel=should_cancel,
-                    node_kind=decision["kind"])
+                    node_kind=decision["kind"], search_nodes=list(nodes))
             except RevisionExecutionError as error:
-                nodes.append(node_record(f"node-{step}", decision["kind"], decision["parent_id"],
-                                         depth, "buggy", revision_id=error.revision_id))
+                failed = node_record(f"node-{step}", decision["kind"], decision["parent_id"],
+                                     depth, "buggy", revision_id=error.revision_id)
+                failed["error_type"] = error.error_type
+                nodes.append(failed)
+                write_progress(step)
                 continue
             except ProtocolError as error:
                 message = str(error)
@@ -1437,36 +1464,39 @@ class ResearchController:
                     if consecutive_provider_failures >= 3:
                         raise ProtocolError('连续三次模型基础设施失败，研究已停止；保留已完成节点') from error
                     cancellable_wait(1, should_cancel)
-                    nodes.append(node_record(
-                        f"node-{step}", decision["kind"], decision["parent_id"], depth, "buggy"))
+                    failed = node_record(
+                        f"node-{step}", decision["kind"], decision["parent_id"], depth, "buggy")
+                    failed["error_type"] = "ProtocolError"
+                    nodes.append(failed)
+                    write_progress(step)
                     continue
                 if "重复节点" not in message and "必须给出代码修改" not in message:
                     raise
-                nodes.append(node_record(
+                failed = node_record(
                     f"node-{step}", decision["kind"], decision["parent_id"], depth,
-                    "duplicate" if "重复节点" in message else "buggy"))
+                    "duplicate" if "重复节点" in message else "buggy")
+                failed["error_type"] = "duplicate" if "重复节点" in message else "ProtocolError"
+                nodes.append(failed)
+                write_progress(step)
                 continue
             observation = outcome["observation"]
             consecutive_provider_failures = 0
             revision = outcome.get("revision") or {}
-            nodes.append(node_record(
+            scored = node_record(
                 f"node-{step}", decision["kind"], decision["parent_id"], depth, "scored",
-                observation["value"], observation.get("scope", "dev"), revision.get("revision_id")))
-            winner = best_node(nodes, direction)
-            if winner is None:
-                continue
-            delta = (baseline["value"] - winner["value"] if direction == "min"
-                     else winner["value"] - baseline["value"])
-            if delta >= threshold:
-                summary = journal_summary(nodes, direction)
-                self._record(ActionProposal(
-                    REQUEST_CONFIRMATION,
-                    f"树搜索比较了 {summary['tried']} 个节点后达到开发阈值，"
-                    f"代表节点 {summary['representative']}。冒烟失败不会进入结论。",
-                    hypothesis_id, source="tree_search"))
-                version = self.store.get("hypothesis", hypothesis_id)["version"]
-                self.store.set_hypothesis_status(hypothesis_id, version, HypothesisStatus.SUPPORTED_IN_SCOPE)
-                return self.status()
+                observation["value"], observation.get("scope", "dev"), revision.get("revision_id"))
+            nodes.append(scored)
+            write_progress(step + 1)
+            self._mark_development_scored(hypothesis_id)
+        winner = best_node(nodes, direction)
+        if winner is not None:
+            summary = journal_summary(nodes, direction)
+            self._record(ActionProposal(
+                REQUEST_CONFIRMATION,
+                f"树搜索用完 {len(nodes)} 个已尝试节点中的 {limit} 步预算，"
+                f"代表节点 {summary['representative']}。未提前因开发阈值停止。"
+                f"冒烟失败不会进入结论。",
+                hypothesis_id, source="tree_search"))
         return self.status()
 
     def run(self, trusted_local=False, sandboxed=False, max_steps=None, auto_confirm=False,
@@ -1616,14 +1646,7 @@ class ResearchController:
                      else observation["value"] - baseline["value"])
             threshold = self.manifest["min_meaningful_effect"]
             self._update_judgments(baseline, observation)
-            if delta >= threshold:
-                target = HypothesisStatus.SUPPORTED_IN_SCOPE
-            elif delta <= -threshold:
-                target = HypothesisStatus.CONTRADICTED_IN_SCOPE
-            else:
-                target = HypothesisStatus.INCONCLUSIVE
-            self.store.set_hypothesis_status(
-                hypothesis_id, self.store.get("hypothesis", hypothesis_id)["version"], target)
+            self._mark_development_scored(hypothesis_id)
             if hasattr(self.policy, "reflect"):
                 self._reflect_observation(baseline, observation)
                 steps += 1
@@ -1807,10 +1830,18 @@ class ResearchController:
         if (current_status["decisions"] and current_status["decisions"][-1]["action"]
                 == REQUEST_SCOPE_BOUNDARY_CONFIRMATION):
             raise ProtocolError("范围边界结论必须由预登记切片的独立签名保留集确认")
-        selected = next((c for c in current_status["candidates"]
-                         if (c["hypothesis_id"] == registered_selection["hypothesis_id"]
-                             if registered_selection is not None else
-                             c["status"] == HypothesisStatus.SUPPORTED_IN_SCOPE.value)), None)
+        if registered_selection is not None:
+            selected = next((c for c in current_status["candidates"]
+                             if c["hypothesis_id"] == registered_selection["hypothesis_id"]), None)
+        else:
+            selected = next((c for c in current_status["candidates"]
+                             if c["status"] == HypothesisStatus.SUPPORTED_IN_SCOPE.value), None)
+            if selected is None:
+                from .dev_threshold import first_candidate_past_dev_threshold
+                past = first_candidate_past_dev_threshold(
+                    self.manifest, current_status["observations"])
+                selected = next((c for c in current_status["candidates"]
+                                 if c["hypothesis_id"] == past), None)
         core_state = self.exp.state()
         if selected is None and core_state["phase"] == "completed":
             # A failed final status write may follow the candidate's transition
@@ -2034,6 +2065,7 @@ class ResearchController:
             passed = delta >= self.manifest["min_meaningful_effect"]
             observation_refs = tuple(o["observation_id"] for o in observations)
             judgments = self._update_judgments(observations[0], observations[1])
+            self._apply_confirmation_statuses(judgments)
             already_recorded = any(
                 d["actor"] == "confirmation_controller" and d["action"] == STOP
                 and tuple(d["observation_refs"]) == observation_refs
@@ -2053,9 +2085,13 @@ class ResearchController:
             self.store.claims.confirm(
                 self.manifest["study_id"], confirmation_decision["entity_id"],
                 observations[0]["observation_id"], observations[1]["observation_id"])
-            if not passed and selected["status"] != HypothesisStatus.INCONCLUSIVE.value:
+            judged = any(j.get("scope") == "confirmation"
+                         and j["hypothesis_id"] == selected["hypothesis_id"] for j in judgments)
+            current = self.store.get("hypothesis", selected["hypothesis_id"])
+            if (not passed and not judged
+                    and current["status"] != HypothesisStatus.INCONCLUSIVE.value):
                 self.store.set_hypothesis_status(
-                    selected["hypothesis_id"], selected["version"], HypothesisStatus.INCONCLUSIVE)
+                    selected["hypothesis_id"], current["version"], HypothesisStatus.INCONCLUSIVE)
             self.store.set_study_status(self.manifest["study_id"], StudyStatus.CONCLUDED)
             return self.status()
         except Exception:

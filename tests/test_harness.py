@@ -14,8 +14,8 @@ from popper.research.models import DeepSeekResearchPolicy, EvidenceDrivenPolicy
 
 class HarnessRegistryTests(unittest.TestCase):
     def test_registry_exposes_registered_harnesses(self):
-        self.assertEqual(("json_agent",), names())
-        self.assertEqual(1, len(harnesses()))
+        self.assertEqual(("json_agent", "local_search"), names())
+        self.assertEqual(2, len(harnesses()))
         self.assertIs(JSONAgentHarness, resolve("json_agent"))
 
     def test_unknown_name_lists_available_harnesses(self):
@@ -113,6 +113,18 @@ class RevisionProposalParsingTests(unittest.TestCase):
             with self.subTest(row=row):
                 with self.assertRaisesRegex(ProtocolError, message):
                     parse_revision_proposal({"edits": [row], "rationale": "r"})
+
+    def test_optional_claim_is_normalized_without_reading_rows(self):
+        parsed = parse_revision_proposal(
+            {"edits": [], "rationale": "register a column",
+             "claim": {"columns": ["dose"]}})
+        self.assertEqual("dose", parsed["claim"]["feature"])
+        self.assertEqual("lock_from_search", parsed["claim"]["direction"])
+        self.assertIsNone(parse_revision_proposal(
+            {"edits": [], "rationale": "no claim"})["claim"])
+        with self.assertRaisesRegex(ProtocolError, "断言"):
+            parse_revision_proposal(
+                {"edits": [], "rationale": "bad claim", "claim": {"feature": "dose"}})
 
     def test_rejects_wrong_envelope(self):
         for response in ([], {"edits": [], "rationale": "   "}, {"edits": []},

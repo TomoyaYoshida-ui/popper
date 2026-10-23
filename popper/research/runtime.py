@@ -4,6 +4,8 @@ The planner proposes actions and unverified interpretations. The controller owns
 execution, the evaluator owns measurements and judgments, and the frozen project
 owns selection. JSON reports are projections of durable receipts, never recovery
 authority. No model reply is needed to enforce a deterministic experiment limit.
+Retrieved literature enters context as bounded identifiers and excerpts.
+It is not a reading agent and cannot authorize a review without those hits.
 """
 from __future__ import annotations
 
@@ -12,6 +14,9 @@ import inspect
 import threading
 
 from ..core import ProtocolError, digest
+from .literature_context import (CLAIM_FIELDS, LITERATURE_KINDS, LiteratureClaim,
+                                 claimed_literature_ids, literature_claim_from,
+                                 literature_request_blocked, load_literature_hits)
 from .project_adapter import RegisteredProjectAdapter
 from .runtime_protocol import (ExecuteCandidate, ReviseHypothesis, StopPlanning,
                                decision_instructions, parse_action, parse_assessment)
@@ -130,6 +135,7 @@ class ResearchRuntime:
         result = {'project': project, 'objective': project['objective'],
                   'primary_scope_id': project['primary_scope_id'], 'scopes': project['scopes'],
                   'candidates': candidates, 'raw_evidence': raw,
+                  'literature': load_literature_hits(self.controller.run_dir, self.controller.project),
                   'remaining_experiments': max(0, self.max_experiments - len(seen))}
         if self.profile == 'evidence_driven':
             result['structured_judgments'] = structured
@@ -146,7 +152,39 @@ class ResearchRuntime:
             self._reject('Proposal references unknown or withheld evidence',
                          'action.evidence_refs', 'unknown_evidence')
 
+    def _parse_proposal_action(self, raw, context):
+        """Accept a computational action, or a literature claim that cites stored hits."""
+        claimed = claimed_literature_ids(raw)
+        if claimed is not None:
+            known = {item.get('id') for item in context.get('literature') or []
+                     if isinstance(item, dict)}
+            if not context.get('literature'):
+                self._reject('没有检索命中，不能生成文献综述或查新结论',
+                             'literature', 'no_literature_hits')
+            if not claimed:
+                self._reject('声称依据文献时必须引用已检索文献的 id',
+                             'action.literature_ids', 'literature_id_required')
+            if not set(claimed) <= known:
+                self._reject('规划动作引用了本次检索上下文中不存在的文献 id',
+                             'action.literature_ids', 'unknown_literature')
+        if isinstance(raw, dict) and raw.get('kind') in LITERATURE_KINDS:
+            return literature_claim_from(raw, claimed or [])
+        if isinstance(raw, dict) and claimed is not None:
+            raw = {key: value for key, value in raw.items() if key not in CLAIM_FIELDS}
+        return parse_action(raw)
+
     def _validate_action(self, action, context):
+        if isinstance(action, LiteratureClaim):
+            known = {item.get('id') for item in context.get('literature') or []
+                     if isinstance(item, dict)}
+            if not context.get('literature'):
+                self._reject('没有检索命中，不能生成文献综述或查新结论',
+                             'literature', 'no_literature_hits')
+            if not set(action.literature_ids) <= known:
+                self._reject('规划动作引用了本次检索上下文中不存在的文献 id',
+                             'action.literature_ids', 'unknown_literature')
+            self._validate_refs(action.evidence_refs, context)
+            return
         self._validate_refs(action.evidence_refs, context)
         candidates = {item['hypothesis_id']: item for item in context['candidates']}
         if isinstance(action, StopPlanning):
@@ -220,7 +258,7 @@ class ResearchRuntime:
             raise ProtocolError('Decision envelope requires action and optional assessment')
         context = self.context()
         received = self._record('response_received', step)
-        action = parse_action(payload['action'])
+        action = self._parse_proposal_action(payload['action'], context)
         if received and received['body']['payload_sha256'] != digest(payload):
             raise ProtocolError('Decision identity reused with another payload')
         recovered = None
@@ -280,7 +318,8 @@ class ResearchRuntime:
         return result
 
     def run(self, client=None, *, candidate_order=None, trusted_local=False,
-            sandboxed=False, should_cancel=None, on_progress=None):
+            sandboxed=False, should_cancel=None, on_progress=None,
+            require_literature=False, planning_prompt=None):
         if self.records('planner_closed'):
             return self.result()
         self.controller.prepare_registered_baseline(trusted_local=trusted_local,
@@ -298,6 +337,11 @@ class ResearchRuntime:
             if started and not received:
                 return self.close_planner('recovery_blocked', 'request_started_without_durable_response')
             try:
+                if received is None and literature_request_blocked(
+                        context.get('literature'), require_literature=require_literature,
+                        planning_prompt=planning_prompt):
+                    self._reject('没有检索命中，不能生成文献综述或查新结论',
+                                 'literature', 'no_literature_hits')
                 if received:
                     payload = received['body']['payload']
                 elif client is None:
@@ -327,18 +371,24 @@ class ResearchRuntime:
                         operation = (client.logical_operation(key, max_attempts=2, cancel_event=cancel)
                                      if inspect.getattr_static(client, 'logical_operation', None) is not None else nullcontext())
                         with operation:
+                            prompt = (planning_prompt if isinstance(planning_prompt, str)
+                                      and planning_prompt.strip() else decision_instructions())
                             for repair in range(2):
                                 request = context if repair == 0 else {'context': context, 'validation_errors': feedback}
-                                payload = client(decision_instructions(), request,
+                                payload = client(prompt, request,
                                                  logical_request_id=key, on_progress=on_progress,
                                                  cancel_event=cancel)
                                 try:
                                     if not isinstance(payload, dict) or set(payload) - {'action', 'assessment'}:
                                         raise ProtocolError('Decision envelope fields are invalid')
-                                    action = parse_action(payload.get('action'))
+                                    action = self._parse_proposal_action(payload.get('action'), context)
                                     self._validate_action(action, context)
                                     break
                                 except ProtocolError as error:
+                                    details = getattr(error, 'details', None) or []
+                                    if any(isinstance(item, dict) and item.get('rule') == 'no_literature_hits'
+                                           for item in details):
+                                        raise
                                     if repair:
                                         raise
                                     feedback = getattr(error, 'details', [{'path': 'action', 'rule': 'registered_action_or_evidence'}])
@@ -349,6 +399,12 @@ class ResearchRuntime:
                 if len({e['hypothesis_id'] for e in self.executions()}) >= self.max_experiments:
                     return self.close_planner('stopped', 'experiment_limit')
             except Exception as error:
+                details = getattr(error, 'details', None) or []
+                if any(isinstance(item, dict) and item.get('rule') == 'no_literature_hits'
+                       for item in details):
+                    if on_progress:
+                        on_progress({'status': 'failed', 'category': 'no_literature_hits'})
+                    return self.close_planner('failed', str(error))
                 category = getattr(error, 'category', None) or 'planner_or_execution_failure'
                 if on_progress:
                     on_progress({'status': 'failed', 'category': category})

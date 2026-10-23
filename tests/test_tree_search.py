@@ -5,9 +5,15 @@ from popper.core import ProtocolError
 from evaluation.compare_search_policies import compare
 from popper.domains.binary_classification import BinaryClassificationV1
 from popper.domains.convergence_order import ConvergenceOrderV1
+from popper.research.search_memory import research_notes
 from popper.research.tree_search import (
-    best_node, can_support_claim, choose_action, node_record, reject_duplicate,
-    representative_observation)
+    best_node, can_support_claim, choose_action, family_switch_required, node_record,
+    reject_duplicate, representative_observation)
+
+
+class _NotesStore:
+    def list(self, kind):
+        return []
 
 
 def _node(node_id, kind, status, value=None, depth=0, parent_id=None, scope="dev"):
@@ -44,6 +50,37 @@ class TreeSearchTests(unittest.TestCase):
         with self.assertRaises(ProtocolError) as caught:
             reject_duplicate(edits, seen)
         self.assertIn("重复节点", str(caught.exception))
+
+    def test_stagnant_score_requires_a_different_model_family(self):
+        stagnant = [
+            _node("n0", "draft", "scored", 7.895),
+            _node("rejected", "improve", "buggy", 5.0, depth=1, parent_id="n0"),
+            _node("n1", "improve", "scored", 7.887, depth=1, parent_id="n0"),
+        ]
+        self.assertTrue(family_switch_required(stagnant))
+        self.assertFalse(family_switch_required([
+            _node("n0", "draft", "scored", 10.0),
+            _node("rejected", "improve", "buggy", 5.0, depth=1, parent_id="n0"),
+            _node("n1", "improve", "scored", 9.85, depth=1, parent_id="n0"),
+        ]))
+        self.assertTrue(family_switch_required([
+            _node("n0", "draft", "scored", 20.0),
+            _node("n1", "improve", "scored", 19.85, depth=1, parent_id="n0"),
+        ]))
+        manifest = {"candidate_hypothesis_ids": ["H-1"], "metric": {"direction": "min"}}
+        text = research_notes(_NotesStore(), manifest, "问题", nodes=stagnant)
+        self.assertIn("换模型族", text)
+        self.assertIn("树", text)
+        self.assertIn("核方法", text)
+        self.assertIn("特征变换", text)
+        self.assertIn("岭回归", text)
+        self.assertIn("L2", text)
+        self.assertIn("正则", text)
+        clear = research_notes(_NotesStore(), manifest, "问题", nodes=[
+            _node("n0", "draft", "scored", 7.895),
+            _node("n1", "improve", "scored", 7.70, depth=1, parent_id="n0"),
+        ])
+        self.assertNotIn("换模型族", clear)
 
     def test_scripted_tree_beats_one_repair_without_model_calls(self):
         report = compare([

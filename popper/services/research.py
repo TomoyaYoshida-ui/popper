@@ -167,10 +167,15 @@ class ResearchService(HostService):
                         save_envelope(run_dir, request['envelope'])
                         controller.harness = JSONAgentHarness.from_endpoint(self.chat_base_url, self.chat_model, run_dir / 'model-diagnostics')
                         result = controller.run(sandboxed=True, max_steps=request['max_steps'], autonomous_code=True, search=True, should_cancel=cancelled)
+                        from ..research.search_session import lock_claim_card
+                        lock_claim_card(controller.project)
                     elif request['action'] == 'run':
                         result = controller.run(sandboxed=True, max_steps=request['max_steps'], auto_confirm=False, should_cancel=cancelled)
                     else:
+                        from ..research.search_session import lock_claim_card, record_split_confirmation
+                        lock_claim_card(controller.project)
                         result = controller.confirm(sandboxed=True, should_cancel=cancelled)
+                        record_split_confirmation(controller, sandboxed=True, trusted_local=False)
                     summary = {'phase': result['phase'], 'observation_ids': [row['observation_id'] for row in result['observations']], 'claim_ids': [row['claim_id'] for row in result['claims']]}
                     planning = result.get('planning_runtime')
                     if planning is not None:
@@ -1245,7 +1250,17 @@ class ResearchService(HostService):
                 ws.seed_if_empty(ws.project_spec(), ws.current_phase())
             data = ws.read()
             deliverables = ws.list_deliverables(data)
-        payload = build_campaign_payload(state, results or [], papers, arbor, deliverables)
+        history = []
+        if self.campaign_dir:
+            read_json = self.dependencies.read_json
+            from pathlib import Path
+            manifest_path = Path(self.campaign_dir) / 'campaign.json'
+            if manifest_path.is_file():
+                try:
+                    history = read_json(manifest_path).get('history') or []
+                except Exception:
+                    history = []
+        payload = build_campaign_payload(state, results or [], papers, arbor, deliverables, history)
         payload['campaign'] = campaign_pending_payload(self.campaign_dir, self.campaign_job) if self.campaign_dir else None
         return payload
 

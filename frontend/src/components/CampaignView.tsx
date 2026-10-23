@@ -37,10 +37,10 @@ export function CampaignView({ campaign, reload, stageStatusLabels }: {
 
   return (
     <>
-      <p className="eyebrow">CAMPAIGN / 统一进度</p>
+      <p className="eyebrow">CAMPAIGN / 编排进度</p>
       <h1>{data.objective ?? '实验推进'}</h1>
       <p className="muted">
-        阶段流水线（Idea → 文献 → 假设环 → Popper 开发 → 冻结 → 确认 → 物化）· 当前阶段{' '}
+        编排图（非主科研路径；科学结果落 ResearchStore；跳过≠完成）· Idea → 文献 → 假设环 → 开发 → 冻结 → 确认 → 物化 · 当前阶段{' '}
         <span className="ok">{data.phase_label}</span> · 全部取自真实状态
       </p>
 
@@ -114,7 +114,7 @@ export function CampaignView({ campaign, reload, stageStatusLabels }: {
           <div>
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
               <h2 style={{ fontSize: 15 }}>{selected.label}</h2>
-              <span className={`schip ${selected.status === 'done' ? 'pass' : selected.status === 'warn' ? 'warn' : 'open'}`}>
+              <span className={`schip ${selected.status === 'done' ? 'pass' : selected.status === 'warn' ? 'warn' : selected.status === 'skipped' ? 'skipped' : 'open'}`}>
                 {stageStatusLabels[selected.status] ?? ''}
               </span>
               <span className="muted" style={{ marginLeft: 'auto', fontSize: 11 }}>数据源 · {selected.src}</span>

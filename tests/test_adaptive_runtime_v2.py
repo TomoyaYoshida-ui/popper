@@ -21,7 +21,7 @@ def executor(command, workspace, env, stdout, stderr, spec):
     subprocess.run(command, cwd=workspace, env=env, stdout=stdout, stderr=stderr, check=True)
 
 
-def make_runtime(tmp_path):
+def make_runtime(tmp_path, profile='evidence_driven'):
     paths, groups = {}, {}
     for split, offset in [('train', 0), ('dev', 100), ('confirmation', 200)]:
         rows = [{'id': str(i), 'features': [float(i + 1)], 'y': float(i + 1)} for i in range(offset, offset + 40)]
@@ -35,7 +35,8 @@ def make_runtime(tmp_path):
         sampling={'design': 'iid_row', 'generator_version': 'adaptive-tasks/v1'},
         groups=groups, bootstrap_seed=123, model_seed=17,
         materials=[{'id':'dataset-card','text':'Independent continuous predictor and target'}]).model_dump()
-    return AdaptiveResearchRuntime(tmp_path / 'run', contract, paths, BASELINE, executor=executor)
+    return AdaptiveResearchRuntime(tmp_path / 'run', contract, paths, BASELINE,
+                                   profile=profile, executor=executor)
 
 
 def problem():
@@ -46,10 +47,13 @@ def problem():
         'evidence_refs':['dataset-card']})
 
 
-def experiment(source=CANDIDATE):
-    return parse_action({'kind':'run_experiment','mechanism':'The measured predictor carries signal',
-        'intervention':'Use the measured predictor', 'config':{}, 'source_code':source,
-        'rationale':'Test a new executable intervention'})
+def experiment(source=CANDIDATE, *, config=None, evidence_refs=None):
+    body = {'kind':'run_experiment','mechanism':'The measured predictor carries signal',
+        'intervention':'Use the measured predictor', 'config': {} if config is None else config,
+        'source_code':source, 'rationale':'Test a new executable intervention'}
+    if evidence_refs is not None:
+        body['evidence_refs'] = evidence_refs
+    return parse_action(body)
 
 
 def test_v2_problem_execution_confirmation_and_replay(tmp_path):
@@ -115,7 +119,9 @@ def test_revised_version_does_not_inherit_prior_support(tmp_path):
         r.apply(_revise(evidence, hid), '2')
         assert r.store.get('hypothesis',hid)['version']==2
         assert not any(j['hypothesis_version']==2 for j in r.store.list('judgment'))
-        assert r.freeze_selection('revision')['finalist'] is None
+        selection=r.freeze_selection('revision')
+        assert selection['finalist'] is None
+        assert selection['empty_finalist_reason']=='successful_attempts_superseded_by_revision'
         assert r.store.verify()['ok']
     finally:r.close()
 
@@ -131,7 +137,10 @@ def test_revision_rejected_when_experiment_cap_is_full(tmp_path):
             r.apply(experiment().model_copy(update={'parent_candidate_id': '1'}), str(index))
         assert len(r.records('attempt_started')) == 8
         with pytest.raises(ProtocolError, match='remaining experiment slot'):
-            r.validate(_revise(evidence, hid))
+            r.apply(_revise(evidence, hid), 'revise')
+        selection = r.freeze_selection('cap')
+        assert selection['finalist']['candidate']['hypothesis_version'] == 1
+        assert r.store.get('hypothesis', hid)['version'] == 1
     finally:
         r.close()
 
@@ -147,7 +156,10 @@ def test_revision_rejected_on_last_planning_step(tmp_path):
             r.record('decision_completed', str(index), {'status': 'synthetic'})
         assert len(r.records('decision_completed')) == 11
         with pytest.raises(ProtocolError, match='remaining planning step'):
-            r.validate(_revise(evidence, hid))
+            r.apply(_revise(evidence, hid), 'revise')
+        selection = r.freeze_selection('last-step')
+        assert selection['finalist']['candidate']['hypothesis_version'] == 1
+        assert r.store.get('hypothesis', hid)['version'] == 1
     finally:
         r.close()
 
@@ -413,3 +425,117 @@ def test_transport_stop_still_aborts_after_soft_progress(tmp_path):
         assert len(r.records('problem'))==1
         assert not r.records('selection')
     finally:r.close()
+
+
+def test_revision_with_one_retest_step_is_allowed_and_has_no_finalist_yet(tmp_path):
+    """Ten completed decisions leave the current step plus one later step."""
+    r = make_runtime(tmp_path)
+    try:
+        r.apply(problem(), '0')
+        r.apply(experiment(), '1')
+        evidence = r.records('attempt_completed')[0]['data']
+        hid = evidence['candidate']['hypothesis_id']
+        for index in range(10):
+            r.record('decision_completed', str(index), {'status': 'synthetic'})
+        r.apply(_revise(evidence, hid), 'revise')
+        assert r.store.get('hypothesis', hid)['version'] == 2
+        selection = r.freeze_selection('capacity')
+        assert selection['finalist'] is None
+        assert selection['empty_finalist_reason'] == 'successful_attempts_superseded_by_revision'
+    finally:
+        r.close()
+
+
+def test_full_slots_reject_revision_even_when_a_planning_step_remains(tmp_path):
+    r = make_runtime(tmp_path)
+    try:
+        r.apply(problem(), '0')
+        r.apply(experiment(), '1')
+        evidence = r.records('attempt_completed')[0]['data']
+        hid = evidence['candidate']['hypothesis_id']
+        for index in range(2, 9):
+            r.apply(experiment().model_copy(update={'parent_candidate_id': '1'}), str(index))
+        for index in range(10):
+            r.record('decision_completed', 'pad-' + str(index), {'status': 'synthetic'})
+        with pytest.raises(ProtocolError, match='remaining experiment slot'):
+            r.apply(_revise(evidence, hid), 'revise')
+        assert r.freeze_selection('cap')['finalist']['candidate']['hypothesis_version'] == 1
+    finally:
+        r.close()
+
+
+def test_last_planning_step_revision_is_soft_rejected_inside_run(tmp_path):
+    r = make_runtime(tmp_path)
+    r.apply(problem(), '0')
+    r.apply(experiment(), '1')
+    evidence = r.records('attempt_completed')[0]['data']
+    hid = evidence['candidate']['hypothesis_id']
+    for index in range(11):
+        r.record('decision_completed', str(index), {'status': 'synthetic'})
+    class Client:
+        def decide(self, *args, **kwargs):
+            return {'action': _revise(evidence, hid).model_dump()}
+    try:
+        r.run(Client())
+        rejected = [x for x in r.records('response') if x['data'].get('rejected')]
+        assert rejected
+        assert any('remaining planning step' in item.get('rule', '')
+                   for item in rejected[0]['data']['details'])
+        assert r.store.get('hypothesis', hid)['version'] == 1
+        finalist = r.records('selection')[0]['data']['finalist']
+        assert finalist['candidate']['hypothesis_version'] == 1
+        assert finalist['candidate']['hypothesis_id'] == hid
+    finally:
+        r.close()
+
+
+def test_evidence_driven_experiment_must_cite_judgment_and_change_config(tmp_path):
+    r = make_runtime(tmp_path)
+    try:
+        r.apply(problem(), '0')
+        r.validate(experiment())
+        r.apply(experiment(BASELINE), '1')
+        judged = r.records('attempt_completed')[0]['data']
+        assert judged['judgment'] in {'refuted', 'inconclusive'}
+        judgment = r.store.get('judgment', judged['judgment_id'])
+        assert isinstance(judgment['evidence'].get('quality'), str) and judgment['evidence']['quality']
+        jid = judged['judgment_id']
+        with pytest.raises(ProtocolError, match='judgment_id'):
+            r.validate(experiment(CANDIDATE, config={'degree': 1}))
+        with pytest.raises(ProtocolError, match='configuration'):
+            r.validate(experiment(BASELINE, evidence_refs=[jid]))
+        follow = experiment(CANDIDATE, config={'degree': 1}, evidence_refs=[jid])
+        r.validate(follow)
+        r.apply(follow, '2')
+        assert r.records('attempt_completed')[-1]['data']['status'] == 'succeeded'
+        assert 'judgment_id' in r.context()['structured_judgments'][0]
+    finally:
+        r.close()
+
+
+def test_supported_judgment_still_allows_stop(tmp_path):
+    r = make_runtime(tmp_path)
+    try:
+        r.apply(problem(), '0')
+        r.apply(experiment(), '1')
+        assert r.records('attempt_completed')[0]['data']['judgment'] == 'supported'
+        r.apply(parse_action({'kind': 'stop_planning', 'rationale': 'Supported result is enough'}), '2')
+        assert r.records('selection')[0]['data']['finalist'] is not None
+    finally:
+        r.close()
+
+
+def test_generic_iteration_can_repeat_config_without_judgment_citation(tmp_path):
+    r = make_runtime(tmp_path, profile='generic_iteration')
+    try:
+        r.apply(problem(), '0')
+        r.apply(experiment(BASELINE), '1')
+        judged = r.records('attempt_completed')[0]['data']
+        assert judged['judgment'] in {'refuted', 'inconclusive'}
+        r.apply(experiment(BASELINE), '2')
+        assert r.records('attempt_completed')[-1]['data']['status'] == 'succeeded'
+        proposal = next(r for r in r.records('attempt_started') if r['key'] == '2')['data']['proposal']
+        assert judged['judgment_id'] not in proposal['evidence_refs']
+        assert 'structured_judgments' not in r.context()
+    finally:
+        r.close()

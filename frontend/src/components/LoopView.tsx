@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { scientificClaimLabel, scientificClaimEffect } from '../scientificClaim'
+import { scientificClaimLabel, scientificClaimEffect, hypothesisStatusText, claimCardSummary } from '../scientificClaim'
 import { cancelDesignJob, cancelRevisionJob, createBenchmark, createBoundDraft, createFollowup, createRevisionWorktree, executeInitialRevision, executeWorktreeRevision, executeDesign, fetchArbor, fetchBenchmarkJob, fetchBenchmarkJobs, fetchBoundDrafts, fetchDesignDetail, fetchDesignJob, fetchDesignJobs, fetchFollowupPreview, fetchRevision, fetchRevisionJob, fetchRevisionWorktrees, migrateRevisionDiff, proposeWorktreeRevision, removeRevisionWorktree, retryDesignJob, submitWorktreeRevision, type ArborTree, type BenchmarkDetail, type BenchmarkJob, type BoundDraftRow, type CreatedBoundDraft, type CreatedFollowup, type DesignDetail, type DesignExecutionJob, type FollowupPreview, type ResearchRunState, type ResearchState, type RevisionDetail, type RevisionExecutionJob, type RevisionWorktree } from '../api'
 import { MetricBars, BudgetBar, LegendDot, type BarPoint } from './charts'
 import { StudyLifecyclePanel } from './StudyLifecyclePanel'
@@ -331,7 +331,8 @@ function ResearchRunBody({ run, labels, trustedLocal, onResearchChanged, onOpenR
       {run.manifest && <StudyLifecyclePanel studyId={run.manifest.study_id}
         concluded={study?.status === 'concluded'} trustedLocal={trustedLocal} onChanged={onResearchChanged} onOpenResource={onOpenResource}
         phase={run.lifecycle_phase} phaseReason={run.lifecycle_reason} resourceConsumed={run.confirmation_resource_consumed}
-        confirmationMode={run.confirmation_mode} stateVersion={run.state_version} budgetAvailable={run.budget?.available} projectKey={run.manifest.project ?? run.run_dir} />}
+        confirmationMode={run.confirmation_mode} stateVersion={run.state_version} budgetAvailable={run.budget?.available} projectKey={run.manifest.project ?? run.run_dir}
+        claimCard={claimCardSummary(run)} />}
       <details className="section research-records"><summary>技术信息、源码与溯源 · {graph?.integrity.ok === false ? '完整性需核对' : '查看冻结记录'}</summary>
       <dl className="resource-facts">
         <div><dt>Study 标识</dt><dd><code>{run.manifest?.study_id ?? '未提供'}</code></dd></div>
@@ -526,7 +527,7 @@ function ResearchRunBody({ run, labels, trustedLocal, onResearchChanged, onOpenR
       {hypotheses.map((h) => (
         <div className="row" key={h.entity_id}>
           <div>
-            <div><span className="code">{h.entity_id}</span> · v{h.version} · {labels.hypothesis?.[h.status] ?? ''}</div>
+            <div><span className="code">{h.entity_id}</span> · v{h.version} · {hypothesisStatusText(h.status, claims.find((claim) => claim.hypothesis_id === h.entity_id)?.scientific_status, labels.hypothesis?.[h.status] ?? h.status)}</div>
             <div style={{ fontSize: 13 }}>{h.mechanism}</div>
             <div className="muted" style={{ fontSize: 12 }}>
               适用：{h.applicability}｜预测 {h.predictions.length} 条｜证伪判据 {h.falsification.length} 条
@@ -681,10 +682,13 @@ function ResearchRunBody({ run, labels, trustedLocal, onResearchChanged, onOpenR
           <div>
             <div>{onOpenResource ? <button type="button" className="resource-inline" onClick={() => onOpenResource({ kind: 'claim', ref: claim.entity_id, studyId: run.manifest?.study_id, title: `${claim.metric} 结论` })} title={claim.entity_id}>{claim.metric} 结论 ↗</button> : <span>{claim.metric} 结论</span>} ·
               {scientificClaimLabel(claim)}</div>
-            <div style={{ fontSize: 12 }}>
-              {scientificClaimEffect(claim)} · 登记阈值 {JSON.stringify(claim.threshold ?? null)}
-              {claim.ci95 && <> · 95% 区间 {JSON.stringify(claim.ci95)}</>}
-            </div>
+            {claim.measurement_line && !claim.compiled_sentence?.includes(claim.measurement_line) && <div style={{ fontSize: 12 }}>{claim.measurement_line}</div>}
+            {claim.conclusion_basis === 'locked_directional_claim'
+              ? <div style={{ fontSize: 12 }}>科学状态以投影句为准。开发记录不作为支持依据。</div>
+              : <div style={{ fontSize: 12 }}>
+                {scientificClaimEffect(claim)} · 登记阈值 {JSON.stringify(claim.threshold ?? null)}
+                {claim.ci95 && <> · 95% 区间 {JSON.stringify(claim.ci95)}</>}
+              </div>}
             <div className="muted" style={{ fontSize: 12 }}>历史描述性阈值记录：{claim.descriptive_status ?? claim.status}，不作为科学支持判据。</div>
             {claim.slice_effects && claim.slice_effects.length > 0 && (
               <div style={{ fontSize: 12 }}>

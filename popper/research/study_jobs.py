@@ -43,6 +43,11 @@ def preview_study_action(run_dir, action, max_steps=1, envelope=None):
     selected = next((row for row in state["hypotheses"]
                      if row["hypothesis_id"] in manifest["candidate_hypothesis_ids"]
                      and row["status"] == "supported_in_scope"), None)
+    if selected is None:
+        from .dev_threshold import first_candidate_past_dev_threshold
+        past = first_candidate_past_dev_threshold(manifest, state["observations"])
+        selected = next((row for row in state["hypotheses"]
+                         if row.get("hypothesis_id") == past), None)
     ready = last_action == "request_confirmation"
     protocol = core["spec"].get("metadata", {}).get("planning_protocol")
     if protocol not in {None, "research-runtime/v1"}:

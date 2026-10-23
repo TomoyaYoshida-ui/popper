@@ -50,7 +50,8 @@ export function EntityPanel({ tab, research, onOpenResource }: { tab: WorkbenchT
     j.hypothesis_version === claim.hypothesis_version && j.observation_refs.length === claim.observation_refs.length &&
     j.observation_refs.every((id, index) => id === claim.observation_refs[index])) : []
   if (!value) return null
-  return <div className="resource-detail"><span className="eyebrow">{claim ? '研究结论 / CLAIM' : '实验观察 / OBSERVATION'}</span><h2>{claim ? `${claim.metric} 的研究结论` : '实验观察结果'}</h2><span className="resource-status">{scientificJudgments.length ? '科研判断见独立证据；下列效应为描述性结果' : label(value.status)}</span><p className="muted">所属研究：{studyName(run)}</p>
+  const claimStatus = claim ? scientificClaimLabel(claim) : label(value.status)
+  return <div className="resource-detail"><span className="eyebrow">{claim ? '研究结论 / CLAIM' : '实验观察 / OBSERVATION'}</span><h2>{claim ? `${claim.metric} 的研究结论` : '实验观察结果'}</h2><span className="resource-status">{claim ? claimStatus : label(value.status)}</span><p className="muted">所属研究：{studyName(run)}</p>
     <p className="resource-scope">适用范围：{scopes[value.scope] ?? value.scope}</p><dl className="resource-facts">
       {claim ? <><div><dt>指标方向</dt><dd>{claim.metric_direction === 'max' ? '越大越好' : '越小越好'}</dd></div><div><dt>方向统一效应</dt><dd>{claim.oriented_delta}</dd></div><div><dt>预注册阈值</dt><dd>{claim.min_meaningful_effect}</dd></div></>
         : observation && <><div><dt>观察值</dt><dd>{observation.value} {observation.unit}</dd></div><div><dt>不确定度</dt><dd>{observation.uncertainty ?? '未提供'}</dd></div><div><dt>信任级别</dt><dd>{observation.trust}</dd></div></>}

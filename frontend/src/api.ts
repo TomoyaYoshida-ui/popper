@@ -146,6 +146,13 @@ export type ResearchClaim = {
   judgment_ref?: string | null; effect_type?: string; effect_unit?: string
   effect_value?: number; threshold?: number | number[] | null; ci95?: number[] | null
   descriptive_status?: string; conclusion_basis?: string
+  compiled_sentence?: string; sentence_sha256?: string; evidence_quality?: string | null
+  claim_feature?: string | null
+  claim_direction?: 'positive' | 'negative' | null
+  claim_label?: string | null
+  dev_baseline?: number | null; dev_candidate?: number | null
+  confirmation_baseline?: number | null; confirmation_candidate?: number | null
+  n_seeds?: number; interval_reason?: string | null; measurement_line?: string
   entity_id: string; entity_ref: EntityRef; status: string; study_id: string
   decision_id: string; hypothesis_id: string; hypothesis_version: number
   design_id: string; observation_refs: string[]; metric: string
@@ -233,6 +240,22 @@ export type ResearchRunState = {
   budget?: { family_id: string; cap: number; reserved: number; spent: number; available: number } | null
   events_total?: number
   experiment_graph?: ExperimentGraph
+  claim_card?: {
+    feature?: string | null; label?: string | null
+    direction?: 'positive' | 'negative' | null
+    ci95?: number[] | null
+    scientific_status?: ResearchClaim['scientific_status'] | null
+    n_rows?: number | null
+    contrast_definition?: string | null
+    failure_condition?: string | null
+    search_rows_discarded?: number | null
+    population_transport?: {
+      column?: string | null
+      search?: { operator?: string; threshold?: number } | null
+      confirmation?: { operator?: string; threshold?: number } | null
+      rows_discarded?: number | null
+    } | null
+  } | null
 }
 export type ResearchState = {
   runs: ResearchRunState[]
@@ -256,9 +279,14 @@ export type StudyLifecycleJob = {
   cancel_requested: boolean; error: string | null
   result: { phase: string; observation_ids: string[]; claim_ids: string[] } | null
 }
+export type SearchNodeSummary = {
+  id: string; parent_id: string | null; kind: string; status: string
+  value: number | null; error_type?: string | null
+}
 export type SearchProgress = {
   step: number; max_steps: number; nodes: number; buggy: number; best_value: number | null
   dev_runs_used: number; max_dev_runs: number | null; tokens_used: number; max_model_tokens: number | null
+  node_summaries?: SearchNodeSummary[]
 }
 export function fetchStudyJobs(studyId: string): Promise<{ jobs: StudyLifecycleJob[]; search_progress?: SearchProgress | null }> {
   return projectFilesRequest(`/api/v1/research/${encodeURIComponent(studyId)}/lifecycle`)
@@ -784,7 +812,7 @@ export type CampaignStage = {
   key: string
   label: string
   src: string
-  status: 'done' | 'active' | 'todo' | 'warn'
+  status: 'done' | 'active' | 'todo' | 'warn' | 'skipped'
   evidence: { k: string; v: string }[]
 }
 

@@ -516,13 +516,15 @@ EVENT_NAMES = {
 # campaign 阶段状态→中文标签：后端单一定义，前端不再硬编码或回退。
 STAGE_STATUS_LABELS = {
     "done": "已完成", "active": "进行中", "todo": "待推进", "warn": "待补充",
+    "skipped": "未执行",
 }
 
 
-def build_campaign_payload(state, results, papers, arbor, deliverables):
+def build_campaign_payload(state, results, papers, arbor, deliverables, history=None):
     """从真实状态派生统一切磋进度（不做假数据）。
 
-    每个阶段 status ∈ done/active/todo/warn，附真实证据摘要。
+    每个阶段 status ∈ done/active/todo/warn/skipped，附真实证据摘要。
+    campaign 历史里 outcome 为 skipped 的阶段不会标成已完成。
     """
     spec = state.get("spec", {})
     claim = state.get("claim")
@@ -609,6 +611,13 @@ def build_campaign_payload(state, results, papers, arbor, deliverables):
         stages.append({"key": key, "label": st["label"], "src": st["src"],
                        "status": status,
                        "evidence": [{"k": k, "v": v} for k, v in st["evidence"] if v != ""]})
+    latest = {}
+    for item in history or []:
+        if isinstance(item, dict) and item.get("step"):
+            latest[item["step"]] = item.get("outcome")
+    for stage in stages:
+        if latest.get(stage["key"]) == "skipped":
+            stage["status"] = "skipped"
     return {"objective": spec.get("name") or state.get("mode", ""),
             "phase": phase, "phase_label": PHASES.get(phase, phase),
             "stages": stages}

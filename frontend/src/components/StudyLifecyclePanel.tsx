@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { cancelStudyJob, executeStudyAction, fetchStudyJobs, previewStudyAction,
-  type SearchProgress, type StudyActionPreview, type StudyLifecycleJob } from '../api'
+  type SearchNodeSummary, type SearchProgress, type StudyActionPreview, type StudyLifecycleJob } from '../api'
+import type { ClaimCardSummary } from '../scientificClaim'
 import type { WorkbenchResource } from '../workbench'
 
 const jobLabels: Record<StudyLifecycleJob['status'], string> = {
@@ -28,16 +29,44 @@ const descriptions: Record<string, string> = {
   unavailable: '服务端尚未提供可核对的研究阶段，请重新载入。不会根据候选或界面状态猜测确认资格。',
 }
 const isActive = (job: StudyLifecycleJob) => job.status === 'queued' || job.status === 'running'
+const nodeStatus: Record<string, string> = { scored: '已评分', buggy: '失败', duplicate: '重复' }
+function SearchTree({ progress }: { progress: SearchProgress }) {
+  const summaries = progress.node_summaries ?? []
+  return <div className="notice" role="status" aria-label="代码树搜索">
+    <div>第 {progress.step}/{progress.max_steps} 步 · 当前最好开发分 {progress.best_value ?? '尚无'}</div>
+    {summaries.length > 0 && <ul>{summaries.map((node: SearchNodeSummary) => <li key={node.id}>
+      {node.kind} · {nodeStatus[node.status] ?? node.status}
+      {node.value != null && <> · {node.value}</>}
+      {node.error_type && <> · {node.error_type}</>}
+    </li>)}</ul>}
+    <div>确认前只显示开发分。</div>
+  </div>
+}
+const claimStatusText: Record<string, string> = {
+  supported: '支持', refuted: '反驳', inconclusive: '证据不足', not_evaluated: '尚无独立科学判断',
+}
+function ClaimCard({ card }: { card: ClaimCardSummary }) {
+  const direction = card.direction === 'positive' ? '正向' : card.direction === 'negative' ? '负向' : '未登记'
+  const status = card.scientific_status ? (claimStatusText[card.scientific_status] ?? card.scientific_status) : '尚无确认'
+  return <div className="notice" role="status" aria-label="断言卡">
+    {card.transportText && <div>迁移规则：{card.transportText}</div>}
+    <div>断言特征：{card.label ?? '未登记'} · 方向：{direction}</div>
+    <div>确认区间：{card.ci95 ? JSON.stringify(card.ci95) : '没有区间'}</div>
+    <div>科学状态：{status}</div>
+    {card.sentence && <div>{card.sentence}</div>}
+  </div>
+}
 const scopeLabel = (scope: string) => scope === 'dev' ? '固定开发划分' :
   scope === 'dev_search' ? '开发划分上的实验树搜索' :
   scope === 'registered_independent_confirmation' ? '预注册独立确认范围' : scope
 
 export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenResource, concluded = false,
-  phase, phaseReason, resourceConsumed, confirmationMode, stateVersion, projectKey = '', budgetAvailable }: {
-  studyId: string; trustedLocal: boolean; onChanged: () => void
+  phase, phaseReason, resourceConsumed, confirmationMode, stateVersion, projectKey = '', budgetAvailable, claimCard = null }: {
+    studyId: string; trustedLocal: boolean; onChanged: () => void
   concluded?: boolean; phase?: string; phaseReason?: string | null
   resourceConsumed?: boolean; confirmationMode?: 'local' | 'signed_external'
   stateVersion?: number | null; projectKey?: string; budgetAvailable?: number
+  claimCard?: ClaimCardSummary | null
   onOpenResource?: (resource: WorkbenchResource) => void
 }) {
   // A missing optional field on an older server is not evidence of eligibility.
@@ -196,12 +225,13 @@ export function StudyLifecyclePanel({ studyId, trustedLocal, onChanged, onOpenRe
   </div>
 
   return <section className="box study-action-panel" aria-label="研究下一步" style={{ marginTop: 12 }}>
+    {searchProgress && <SearchTree progress={searchProgress} />}
+    {claimCard && <ClaimCard card={claimCard} />}
     <div className="study-action-heading"><span className="step-kicker">下一步</span><strong>{active ? '查看正在执行的作业' : phaseLabels[lifecycle] || '核对研究状态'}</strong></div>
     {!active && <p className="muted">{phaseReason || descriptions[lifecycle] || '当前阶段请先核对研究记录。'}</p>}
     {!jobsLoaded && <p role="status" className="muted">正在核对作业状态…</p>}
-    {activeJobs.some((job) => job.request.action === 'autopilot') && searchProgress && <div className="notice" role="status">
-      第 {searchProgress.step}/{searchProgress.max_steps} 步 · 节点 {searchProgress.nodes} · 失败 {searchProgress.buggy}
-      {searchProgress.best_value != null && <> · 当前最优 {searchProgress.best_value}</>}
+    {activeJobs.some((job) => job.request.action === 'autopilot') && searchProgress && <div className="muted">
+      节点 {searchProgress.nodes} · 失败 {searchProgress.buggy}
       {searchProgress.max_dev_runs != null && <> · 开发运行 {searchProgress.dev_runs_used}/{searchProgress.max_dev_runs}</>}
       {searchProgress.max_model_tokens != null && <> · token {searchProgress.tokens_used}/{searchProgress.max_model_tokens}</>}
     </div>}

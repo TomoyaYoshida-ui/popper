@@ -1,5 +1,15 @@
 # 统一研究运行时改造
 
+## 当前契约
+
+执行权以 [能力边界](../capability-boundary.md) 为准。已登记项目的科学执行权在
+ResearchController + ResearchRuntime。AdaptiveResearchRuntime 是描述性基准夹具，
+默认不开 live，不是默认科研产品路径。Campaign 是编排图，科学结果仍落 ResearchStore；
+步骤跳过不是研究完成。本计划不另立产品路径，也不合并这些运行时。
+
+本轮不合并 ResearchController / AdaptiveResearchRuntime / Orchestrator 的实现代码；
+默认入口以上述能力边界为准（已登记研究为主路径，adaptive 为基准，campaign 为编排）。
+
 实施对象：本机原仓库 `C:\Users\wangj\Desktop\research\research-agent-v2`。
 本轮不发送真实模型请求，不推送远端，不重写旧实验及其失败结果。
 
