@@ -1,6 +1,6 @@
 # Popper
 
-本地优先的计算实验决策内核（Pre-Alpha）。不是通用科研助手。能力边界见 [docs/capability-boundary.md](docs/capability-boundary.md)。
+本地优先的计算实验决策内核（Pre-Alpha）。不是通用科研助手。能力边界见 [docs/capability-boundary.md](docs/capability-boundary.md)（含 2026-10-23 演示冻结说明）。验收记录见 [docs/maintenance/working-tree-verification.md](docs/maintenance/working-tree-verification.md)。
 
 ## 最小离线路径
 

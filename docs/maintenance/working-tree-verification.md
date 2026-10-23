@@ -1,6 +1,8 @@
 # 工作树验证记录
 
-对应**当前未提交工作树**，不是 `docs/maintenance/completion.md` 里的历史快照数字。
+对应分支 `autopilot` 上已提交的验收，不是 `docs/maintenance/completion.md` 里的历史快照数字。
+
+**演示冻结点**：`c929f08`（含稿件写作门禁 `5dbe734` 与本记录）。工作树应干净；相对 `origin/autopilot` 超前，**未 push**（需同步时再明确执行）。
 
 日期：2026-10-23（本机 Windows）。
 
