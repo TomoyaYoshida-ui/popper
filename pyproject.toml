@@ -16,13 +16,13 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-adaptive = ["numpy==2.2.6", "scikit-learn==1.7.2", "pandas==2.3.3", "openpyxl>=3.1,<4", "xlrd==2.0.1", "pydantic-ai-slim[openai]>=2.54.0,<2.55"]
+adaptive = ["numpy==2.2.6", "scikit-learn==1.7.2", "pandas==2.3.3", "openpyxl>=3.1,<4", "xlrd==2.0.1", "pydantic-ai-slim[openai]>=2.54.0,<2.55", "httpx2>=2.14,<3"]
 analysis = ["numpy==2.2.6"]
 ml = ["scikit-learn>=1.7,<1.8"]
 intake = ["pyarrow>=18,<25"]
 research = ["requests>=2.31,<3", "pypdf>=5,<7"]
 orchestration = ["langgraph>=0.2", "langgraph-checkpoint-sqlite>=2"]
-agent = ["pydantic-ai-slim[openai]>=2.54.0,<2.55"]
+agent = ["pydantic-ai-slim[openai]>=2.54.0,<2.55", "httpx2>=2.14,<3"]
 confirmation = ["cryptography>=48,<49"]
 workstation = ["pywinpty>=3,<4; platform_system == 'Windows'"]
 figs = ["numpy==2.2.6", "scikit-learn==1.7.2", "pandas==2.3.3",

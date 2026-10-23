@@ -12,8 +12,9 @@
 | 再扩 harness / tree_search / sampling_audit | **135 passed**, 16 subtests passed（约 53s） |
 | `tests/test_campaign_nodes.py` + `test_approve_with_materialize_realizes_manuscript`（跳过语义修后） | **31 passed**（约 18s） |
 | `cd frontend && npm test`（vitest run） | **25 files / 169 tests passed** |
-| 裸全量 `python -m pytest -q --tb=line` | 收集失败：缺 `httpx2`（adaptive 三文件）。预存环境依赖，未为绿改代码。 |
+| 裸全量 `python -m pytest -q --tb=line` | 此前收集失败：缺 `httpx2`（adaptive 三文件）。现已声明进 `agent`/`adaptive` extra 并本机安装。 |
 | 全量并 `--ignore` 上述三个 adaptive 文件 | **1731 passed**, 30 skipped, **3 failed**, 1 teardown error（约 15m41s）。见下「已修」。 |
+| Adaptive 三文件（补 `httpx2` 后，2026-10-23） | `pytest tests/test_adaptive_runtime_v2.py tests/test_adaptive_benchmark.py tests/test_adaptive_linux_sandbox.py -q` → **35 passed, 3 skipped**（约 43s）。3 skip 为 Windows 上 `test_adaptive_linux_sandbox`（需非 root Linux + cgroup），属预期。 |
 
 ### 本轮修复后的复验（全量里那 3 fail + 1 error）
 
@@ -37,9 +38,11 @@
 3. **Windows teardown `campaign.sqlite` 占用**  
    **修**：oscillator 夹具 `TemporaryDirectory(ignore_cleanup_errors=True)`。
 
-### 仍未解决 / 未改环境
+### Adaptive / httpx2（已收口）
 
-- adaptive 三文件收集需 `httpx2`：`popper.capabilities` 的 `agent` extra 探测含 `httpx2`，但 `pyproject.toml` `[project.optional-dependencies].agent` 未声明该包；本机未安装。按约定不为此大改环境；全量仍可 `--ignore` 那三个文件。
+- `capabilities.agent` 探测含 `httpx2`；`adaptive_runtime` → `pydantic_planner` → `httpx2`。
+- 已在 `pyproject.toml` 的 `agent` 与 `adaptive` optional-dependencies 声明 `httpx2>=2.14,<3`；本机 `pip install -e ".[agent]"`（另已单独装过 httpx2）。
+- 三文件跑测见上表；linux sandbox 在 Windows 上 skip，未强改。
 
 ## 本轮契约与跳过语义（摘要）
 
