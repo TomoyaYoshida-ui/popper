@@ -5,7 +5,12 @@ import sys
 from pathlib import Path
 
 from .core import Experiment, ProtocolError, canonical, initialize, read_json
-from .demo import CASES as DEMO_CASES, initialize_demo
+from .demo import (
+    CASES as DEMO_CASES,
+    initialize_demo,
+    run_offline_smoke,
+    summarize_research_status,
+)
 from .evaluation import Evaluator
 from .brownfield import Brownfield
 from .campaign_nodes import BUILTIN_NODES, DEFAULT_CAMPAIGN_STEPS
@@ -76,6 +81,12 @@ def main(argv=None):
     demo_init = demo_commands.add_parser("init", help="在空目录中创建并初始化示例")
     demo_init.add_argument("project", type=Path)
     demo_init.add_argument("--case", choices=DEMO_CASES, default="ode-convergence")
+    demo_smoke = demo_commands.add_parser(
+        "smoke", help="离线冒烟：demo → research init/run/confirm，输出人读摘要")
+    demo_smoke.add_argument("--case", choices=DEMO_CASES, default="ode-convergence")
+    demo_smoke.add_argument(
+        "--root", type=Path, default=None,
+        help="可选空根目录；默认使用临时目录")
     research = commands.add_parser(
         "research",
         help="已登记研究主路径（ResearchController）；另含 campaign 编排与想法/语料/证据/稿件")
@@ -185,6 +196,9 @@ def main(argv=None):
                              help="指定实现代码的编码 Agent 接入（默认从 --base-url/--model 推导）")
     research_status = research_commands.add_parser("status")
     research_status.add_argument("run_dir", type=Path)
+    research_status.add_argument(
+        "--brief", action="store_true",
+        help="只输出人读摘要（phase / judgment / integrity）")
     planning = research_commands.add_parser('plan', help='通过公共研究运行时执行冻结候选规划')
     planning.add_argument('run_dir', type=Path)
     planning.add_argument('--session', default='default')
@@ -714,7 +728,10 @@ def main(argv=None):
                 transport=declared_transport(args.transport_column, args.transport_threshold),
                 claim=claim)
         elif args.command == "demo":
-            result = initialize_demo(args.project, args.case)
+            if args.demo_command == "smoke":
+                result = run_offline_smoke(root=args.root, case=args.case)
+            else:
+                result = initialize_demo(args.project, args.case)
         elif args.command == "serve":
             if bool(args.chat_base_url) != bool(args.chat_model):
                 raise ProtocolError("--chat-base-url 和 --chat-model 必须同时提供")
@@ -1114,6 +1131,8 @@ def main(argv=None):
                     result = research_controller.accept_external_confirmation(read_json(args.receipt))
                 else:
                     result = research_controller.status()
+                    if getattr(args, "brief", False):
+                        result = summarize_research_status(result)
         elif args.command == "experiment" and args.experiment_command == "reproduce":
             if args.reproduce_command == "inspect":
                 result = inspect_reproduction(args.project)
@@ -1282,6 +1301,8 @@ def main(argv=None):
         print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
         if (args.command == "research" and args.research_command == "benchmark"
                 and result["status"] != "passed"):
+            return 1
+        if args.command == "demo" and args.demo_command == "smoke" and not result.get("ok"):
             return 1
         return 0
     except (ProtocolError, OSError, ValueError, KeyError, TypeError) as error:

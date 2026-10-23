@@ -4,12 +4,12 @@
 
 **产品策略（故意保留）**：入口可以有 registered / adaptive / campaign 三种，**科学权威只有一条**（Controller + `scientific_execution` / 授权闸）。不把三套实现揉成一个巨类——对用户更好用，也更不容易改崩基准。
 
-**演示冻结**：默认只演示已登记研究的证据闭环。下面「能演示 / 不能当产品」以此为准。审计级查新 FPR、接第三方技能库、开放写论文、物理并类——故意延后。验收见 `docs/maintenance/working-tree-verification.md`；运行时硬收敛相关提交至 `32622ae`。
+**演示冻结**：默认只演示已登记研究的证据闭环。一条命令：`popper demo smoke`（或逐步 `demo init` → `research init/run/confirm`，再用 `research status --brief` 读摘要）。审计级查新 FPR、接第三方技能库、开放写论文、物理并类——故意延后。验收见 `docs/maintenance/working-tree-verification.md`。
 
 ## 现在能演示的
 
-- 冻结计分任务上的开发循环，以及一次确认。
-- 判断三态：supported、refuted、inconclusive。
+- 冻结计分任务上的开发循环，以及一次确认（离线冒烟：`popper demo smoke`）。
+- 判断三态：supported、refuted、inconclusive；短摘要不会把 inconclusive 当成失败。
 - FIGS 与 Adaptive 目前的结局是证据不足（inconclusive）。这不能当成新发现，也不能当成某种策略更优。
 - 有界能力（均非开放 agent）：文献 / 查新 / 已下载全文摘录进规划且必须引用真实 id；会话记忆笔记；聊天数字结论门禁；稿件物化的 claim/ev/ref 门禁。
 
