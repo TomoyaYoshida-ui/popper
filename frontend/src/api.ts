@@ -1196,16 +1196,24 @@ export async function materialize(
   manuscript: import('./types').Manuscript,
   template: MaterializeTemplate,
   disclosure: MaterializeDisclosure,
-): Promise<{ status: string; item: Deliverable }> {
+): Promise<{ status: string; item: Deliverable; writing_gate?: string }> {
   const t = await sessionToken()
   const res = await fetch('/api/materialize', {
     method: 'POST',
     headers: { 'X-Popper-Token': t, 'Content-Type': 'application/json' },
     body: JSON.stringify({ manuscript, template, disclosure }),
   })
-  const body = (await res.json().catch(() => ({}))) as { error?: string; status?: string; item?: Deliverable }
-  if (!res.ok || !body.item) throw new Error(body.error || `HTTP ${res.status}`)
-  return { status: body.status ?? 'materialized', item: body.item }
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: string; status?: string; writing_gate?: string; item?: Deliverable
+  }
+  if (!res.ok || body.status === 'gate_failed' || !body.item) {
+    const gate = body.status === 'gate_failed' || body.writing_gate === 'gate_failed'
+    throw new Error(
+      body.error
+      || (gate ? '稿件写作门禁未通过：数字结论须带 claim/ev/ref，且引用 id 须在当前 study 中存在。' : `HTTP ${res.status}`),
+    )
+  }
+  return { status: body.status ?? 'materialized', item: body.item, writing_gate: body.writing_gate }
 }
 
 export function fileUrl(item: string): string {

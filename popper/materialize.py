@@ -29,9 +29,8 @@ class Materializer:
         self.root = Path(project_dir).resolve()
 
     # -- 稿件模板 -----------------------------------------------------------
-    def materialize(self, manuscript_json, out_dir, template="md", disclosure="nature"):
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
+    def materialize(self, manuscript_json, out_dir, template="md", disclosure="nature",
+                    *, known_ids=(), enforce_writing_gate=True):
         if isinstance(manuscript_json, list):
             raise ProtocolError("单次仅处理一篇稿件，不支持批量生成")
         if not isinstance(manuscript_json, dict):
@@ -41,6 +40,12 @@ class Materializer:
             raise ProtocolError("manuscript sections 必须是列表")
         if disclosure is not None and disclosure not in DISCLOSURES:
             raise ProtocolError("未知披露声明口径")
+        gate = None
+        if enforce_writing_gate:
+            from .research.manuscript_gate import enforce_manuscript_writing
+            gate = enforce_manuscript_writing(manuscript_json, known_ids=known_ids)
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
         title = str(manuscript_json.get("title") or "Untitled")
         abstract = str(manuscript_json.get("abstract") or "")
         if template in ("docx", "pdf"):
@@ -54,8 +59,11 @@ class Materializer:
             else:
                 from .pdfgen import PdfRenderer
                 PdfRenderer().render(blocks, path)
-            return {"status": "materialized", "manuscript": str(path), "template": template,
-                    "disclosure": disclosure}
+            result = {"status": "materialized", "manuscript": str(path), "template": template,
+                      "disclosure": disclosure}
+            if gate is not None:
+                result["writing_gate"] = gate["status"]
+            return result
         if template == "md":
             body = self._render_markdown(title, abstract, sections)
         elif template == "tex":
@@ -71,8 +79,11 @@ class Materializer:
         name = f"manuscript.{template}"
         path = out_dir / name
         path.write_text(body, encoding="utf-8")
-        return {"status": "materialized", "manuscript": str(path), "template": template,
-                "disclosure": disclosure}
+        result = {"status": "materialized", "manuscript": str(path), "template": template,
+                  "disclosure": disclosure}
+        if gate is not None:
+            result["writing_gate"] = gate["status"]
+        return result
 
     @staticmethod
     def _render_disclosure(disclosure, template):

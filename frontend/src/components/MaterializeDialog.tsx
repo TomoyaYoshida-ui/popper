@@ -37,6 +37,7 @@ export function MaterializeDialog({
     inFlight.current = true
     setBusy(true)
     setError(null)
+    setResult(null)
     try {
       const clean = sections.filter((s) => s.heading.trim() || s.body.trim())
       const res = await materialize(
@@ -47,6 +48,7 @@ export function MaterializeDialog({
       setResult(res.item)
       onReload()
     } catch (e) {
+      setResult(null)
       setError((e as Error).message)
     } finally {
       inFlight.current = false
@@ -69,7 +71,7 @@ export function MaterializeDialog({
           <button className="modal-close" disabled={busy} aria-label="关闭导出稿件" onClick={() => { void close() }}>✕</button>
         </div>
 
-        <p className="notice">这是独立导出产物，不是证据绑定快照。科研结论仍需在 Study 稿件中绑定 Claim 并人工审校。</p>
+        <p className="notice">这是独立导出产物，不是证据绑定快照，也不是自动写论文。含数字结论或科学主张时须带 [[claim:]] / [[ev:]] / [[ref:]]，且 observation / LIT- / SCOOP- / FT- id 须在当前 study 可引用；门禁失败不会生成成功产物。</p>
 
         <div className="fld">
           <label>标题</label>
@@ -120,9 +122,9 @@ export function MaterializeDialog({
           </button>
         </div>
 
-        {result && (
+        {result && !error && (
           <div className="box" style={{ marginTop: 8 }}>
-            <div className="row"><span className="muted">已生成</span>
+            <div className="row"><span className="muted">已生成（写作门禁已通过）</span>
               <span className="metric">{result.filename}</span></div>
             <div className="row"><span className="muted">模板 / 披露</span>
               <span className="metric">{result.template} · {result.disclosure ?? '无'}</span></div>

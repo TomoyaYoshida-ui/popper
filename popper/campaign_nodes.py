@@ -368,7 +368,11 @@ def confirm_node(run_dir, state):
 
 
 def materialize_node(run_dir, state):
-    """成果物化：渲染稿件并登记到 workspace（已物化则 success 复用；缺配置则 skipped）。"""
+    """成果物化：渲染稿件并登记到 workspace（已物化则 success 复用；缺配置则 skipped）。
+
+    含数字结论/科学主张的稿件须通过写作门禁（claim/ev/ref + 可引用 id）；
+    门禁失败抛 CampaignFatal，不得记为论文完成。
+    """
     target = state.get("active_project") or state.get("project")
     project = Path(target) if target else None
     mat = state.get("materialize")
@@ -382,7 +386,13 @@ def materialize_node(run_dir, state):
         # 已有产物：幂等复用，记 success（不是「没做」）。
         return {"outcome": "success", "process": "existing", "manuscript": str(path),
                 "reason": "已物化，跳过"}
-    res = Materializer(project).materialize(mat["manuscript"], out, template, disclosure)
+    from .research.manuscript_gate import load_known_manuscript_ids
+    known_ids = load_known_manuscript_ids(run_dir, project, run_dirs=(run_dir,))
+    try:
+        res = Materializer(project).materialize(
+            mat["manuscript"], out, template, disclosure, known_ids=known_ids)
+    except ProtocolError as error:
+        raise CampaignFatal(str(error)) from error
     fp = Path(res["manuscript"])
     ws = Workspace(project)
     if ws.is_empty():
@@ -391,7 +401,7 @@ def materialize_node(run_dir, state):
     ws.register_deliverable(data, fp.name, template, disclosure, fp.stat().st_size)
     ws.save(data)
     return {"outcome": "success", "manuscript": str(fp), "template": template,
-            "bytes": fp.stat().st_size}
+            "bytes": fp.stat().st_size, "writing_gate": res.get("writing_gate", "passed")}
 
 
 BUILTIN_NODES = {

@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ..core import ProtocolError, digest, read_json
+from ..core import ProtocolError, digest, is_safe_relative, portable_path, read_json
 from .literature_context import EXCERPT_CHARS, project_paper
 from .scoop_context import project_scoop_hit
 
@@ -149,9 +149,12 @@ def _artifact_text_path(root, scoop_dir, record):
                 if resolved.is_file() and resolved.is_relative_to(root):
                     return resolved
         return None
-    path = Path(raw)
-    if not path.is_absolute():
-        path = scoop_dir / path
+    # Join only portable relative paths under scoop_dir. Host-shaped absolute
+    # strings still resolve, then must sit under the study/campaign root.
+    if is_safe_relative(raw):
+        path = scoop_dir / portable_path(raw)
+    else:
+        path = Path(raw)
     try:
         resolved = path.resolve()
     except OSError:
