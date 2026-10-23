@@ -2,7 +2,9 @@
 
 包名 popper-research，状态 Pre-Alpha。这是本地优先的计算实验决策内核：先登记可证伪预测，密封开发集与确认集，由独立评估器计分，再给出 supported / refuted / inconclusive。确认集只打开一次。模型不能改分数。
 
-**演示冻结（2026-10-23）**：扩能力收口停在本文件所述范围。默认演示路径是已登记研究的证据闭环；下面「能演示 / 不能当产品」以此为准。大块工程债（合并三条运行时、审计级查新 FPR、接第三方技能库、开放写论文）故意延后，不要在冻结点上继续堆半成品。验收数字见 `docs/maintenance/working-tree-verification.md`（冻结 HEAD `c929f08` 一带）。
+**产品策略（故意保留）**：入口可以有 registered / adaptive / campaign 三种，**科学权威只有一条**（Controller + `scientific_execution` / 授权闸）。不把三套实现揉成一个巨类——对用户更好用，也更不容易改崩基准。
+
+**演示冻结**：默认只演示已登记研究的证据闭环。下面「能演示 / 不能当产品」以此为准。审计级查新 FPR、接第三方技能库、开放写论文、物理并类——故意延后。验收见 `docs/maintenance/working-tree-verification.md`；运行时硬收敛相关提交至 `32622ae`。
 
 ## 现在能演示的
 

@@ -1,18 +1,19 @@
 # Popper
 
-本地优先的计算实验决策内核（Pre-Alpha）。不是通用科研助手。能力边界见 [docs/capability-boundary.md](docs/capability-boundary.md)（含 2026-10-23 演示冻结说明）。验收记录见 [docs/maintenance/working-tree-verification.md](docs/maintenance/working-tree-verification.md)。
+本地优先的计算实验决策内核（Pre-Alpha）。不是通用科研助手。能力边界见 [docs/capability-boundary.md](docs/capability-boundary.md)。验收记录见 [docs/maintenance/working-tree-verification.md](docs/maintenance/working-tree-verification.md)。
 
-## 最小离线路径
+## 默认只演示这一条
 
-在本目录、不提供模型端点时：
+已登记研究的证据闭环（`ResearchController` + `ResearchRuntime`）。科学写入（judgment / 确认集）只有一条合法路径；Adaptive 是基准夹具入口，Campaign 是编排图——**都不另立计分权威**，也不急着揉成一个巨类。
 
 ```powershell
 python -m pip install -e .
 popper demo init demo-ode --case ode-convergence
 popper research init demo-ode demo-run
 popper research run demo-run --trusted-local
+popper research confirm demo-run --trusted-local
 ```
 
-`research run` 必须且只能选择 `--trusted-local` 或 `--sandbox`。这一步登记可证伪预测，并在开发集上由独立评估器计分。确认集只在 `popper research confirm demo-run --trusted-local` 打开一次。判断是 supported / refuted / inconclusive 三态。模型不能改分数。
+`research run` / `confirm` 必须且只能选 `--trusted-local` 或 `--sandbox`。确认集只打开一次。判断三态：supported / refuted / inconclusive。模型不能改分数。
 
-默认产品路径就是上面的已登记研究（ResearchController + ResearchRuntime）。`popper adaptive` 是描述性基准（默认不开 live）。`popper research campaign` 是编排图，跳过不等于完成。
+旁路（需要时再用）：`popper adaptive`（描述性基准，默认不开 live）；`popper research campaign`（编排；dev/freeze/confirm 须 `planning_protocol=research-runtime/v1`，跳过≠完成）。

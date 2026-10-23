@@ -2,7 +2,7 @@
 
 对应分支 `autopilot` 上已提交的验收，不是 `docs/maintenance/completion.md` 里的历史快照数字。
 
-**演示冻结点**：`c929f08`（含稿件写作门禁 `5dbe734` 与本记录）。工作树应干净；相对 `origin/autopilot` 超前，**未 push**（需同步时再明确执行）。
+**演示 + 权威收敛点**：`32622ae`（含确认/证据硬闸、Adaptive 执行进 `scientific_execution`、Campaign 科学步骤去 Experiment）。工作树应干净并与 `origin/autopilot` 对齐。
 
 日期：2026-10-23（本机 Windows）。
 
