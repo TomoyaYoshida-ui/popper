@@ -18,6 +18,7 @@
 | **裸全量（不 ignore Adaptive）** `python -m pytest -q --tb=line`（2026-10-23，HEAD `3821b0e`，autopilot，Windows） | **1798 passed**, **32 skipped**, 764 subtests passed（约 15m26s）。**0 failed**。含 Adaptive 三文件；Windows 上 linux sandbox 等仍为 skip。 |
 | 记忆接入后（工作树，相对 `3821b0e`）`test_memory_context` + `test_memory` + `test_research_runtime` | **29 passed**（约 26s）。 |
 | 可信查新（scoop_context + literature_context + research_runtime + campaign_nodes，相对 `a037d14`） | **61 passed**（约 39s）。跳过≠查新完成；非 provisional scoop 可引用；空/仅 provisional 拒绝「无撞车」类结论。 |
+| 有界全文摘录（fulltext_context + chat 门禁 + literature/scoop/runtime/campaign_nodes，相对 `2cdb20f`） | **76 passed**（约 39s）。仅投影已落盘 scoop `step5` 公开全文；`FT-*` 可引用；无全文拒绝正文/页码主张。 |
 
 ### 本轮修复后的复验（全量里那 3 fail + 1 error）
 

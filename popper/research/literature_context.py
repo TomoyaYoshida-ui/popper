@@ -276,6 +276,17 @@ def observation_ids(run_dirs):
 
 
 def workspace_evidence_ids(run_dirs, search_roots):
-    """Ids a chat reply may cite: stored observations and retrieved literature."""
-    literature = load_literature_hits(*search_roots, *run_dirs)
-    return observation_ids(run_dirs), [hit['id'] for hit in literature]
+    """Ids a chat reply may cite: observations, literature, scoop, and fulltext excerpts."""
+    from .fulltext_context import load_fulltext_excerpts
+    from .scoop_context import load_scoop_hits
+
+    roots = (*search_roots, *run_dirs)
+    literature = load_literature_hits(*roots)
+    scoop = load_scoop_hits(*roots)
+    fulltext = load_fulltext_excerpts(*roots)
+    citable = (
+        [hit['id'] for hit in literature]
+        + [hit['id'] for hit in scoop]
+        + [hit['id'] for hit in fulltext]
+    )
+    return observation_ids(run_dirs), citable

@@ -8,6 +8,8 @@ Retrieved literature enters context as bounded identifiers and excerpts.
 It is not a reading agent and cannot authorize a review without those hits.
 Completed (non-provisional) scoop hits enter the same way for novelty claims;
 skipped or provisional scoop is not novelty completion.
+Already-downloaded public fulltext enters as bounded ``FT-*`` excerpts only;
+page or body claims must cite those ids. No open-web fetch happens here.
 Study-scoped session memory (working / short-term notes) also enters context
 for planning and reflection. Memory never replaces independent scores or
 judgment three-states.
@@ -19,6 +21,11 @@ import inspect
 import threading
 
 from ..core import ProtocolError, digest
+from .fulltext_context import (CLAIM_FIELDS as FULLTEXT_CLAIM_FIELDS,
+                               FULLTEXT_KINDS, FulltextClaim,
+                               claimed_fulltext_ids, citable_fulltext_ids,
+                               fulltext_claim_from, fulltext_request_blocked,
+                               load_fulltext_excerpts)
 from .literature_context import (CLAIM_FIELDS, LITERATURE_KINDS, LiteratureClaim,
                                  claimed_literature_ids, literature_claim_from,
                                  literature_request_blocked, load_literature_hits)
@@ -148,6 +155,7 @@ class ResearchRuntime:
                   'candidates': candidates, 'raw_evidence': raw,
                   'literature': load_literature_hits(*roots),
                   'scoop': load_scoop_hits(*roots),
+                  'fulltext': load_fulltext_excerpts(*roots),
                   'memory': project_memory_context(self.controller.run_dir),
                   'remaining_experiments': max(0, self.max_experiments - len(seen))}
         if self.profile == 'evidence_driven':
@@ -166,7 +174,24 @@ class ResearchRuntime:
                          'action.evidence_refs', 'unknown_evidence')
 
     def _parse_proposal_action(self, raw, context):
-        """Accept a computational action, or a literature/scoop claim that cites stored hits."""
+        """Accept a computational action, or a literature/scoop/fulltext claim that cites stored hits."""
+        fulltext_claimed = claimed_fulltext_ids(raw)
+        if fulltext_claimed is not None:
+            known = citable_fulltext_ids(context)
+            if not known:
+                self._reject('没有已下载全文摘录，不能引用论文正文或页码',
+                             'fulltext', 'no_fulltext_hits')
+            if not fulltext_claimed:
+                self._reject('声称依据全文时必须引用已下载全文摘录的 id',
+                             'action.fulltext_ids', 'fulltext_id_required')
+            if not set(fulltext_claimed) <= known:
+                self._reject('规划动作引用了本次上下文中不存在的全文摘录 id',
+                             'action.fulltext_ids', 'unknown_fulltext')
+            if isinstance(raw, dict) and raw.get('kind') in FULLTEXT_KINDS:
+                return fulltext_claim_from(raw, fulltext_claimed)
+            raw = {key: value for key, value in raw.items()
+                   if key not in FULLTEXT_CLAIM_FIELDS}
+            # Fall through so literature/scoop/compute fields on the same action still parse.
         scoop_claimed = claimed_scoop_ids(raw)
         if scoop_claimed is not None:
             known = citable_novelty_ids(context)
@@ -201,9 +226,21 @@ class ResearchRuntime:
             return literature_claim_from(raw, claimed or [])
         if isinstance(raw, dict) and claimed is not None:
             raw = {key: value for key, value in raw.items() if key not in CLAIM_FIELDS}
+        if isinstance(raw, dict) and fulltext_claimed is not None:
+            raw = {key: value for key, value in raw.items() if key not in FULLTEXT_CLAIM_FIELDS}
         return parse_action(raw)
 
     def _validate_action(self, action, context):
+        if isinstance(action, FulltextClaim):
+            known = citable_fulltext_ids(context)
+            if not known:
+                self._reject('没有已下载全文摘录，不能引用论文正文或页码',
+                             'fulltext', 'no_fulltext_hits')
+            if not set(action.fulltext_ids) <= known:
+                self._reject('规划动作引用了本次上下文中不存在的全文摘录 id',
+                             'action.fulltext_ids', 'unknown_fulltext')
+            self._validate_refs(action.evidence_refs, context)
+            return
         if isinstance(action, ScoopClaim):
             known = citable_novelty_ids(context)
             cited = set(action.scoop_ids) | set(action.literature_ids)
@@ -384,7 +421,8 @@ class ResearchRuntime:
 
     def run(self, client=None, *, candidate_order=None, trusted_local=False,
             sandboxed=False, should_cancel=None, on_progress=None,
-            require_literature=False, require_scoop=False, planning_prompt=None):
+            require_literature=False, require_scoop=False, require_fulltext=False,
+            planning_prompt=None):
         if self.records('planner_closed'):
             return self.result()
         self.controller.prepare_registered_baseline(trusted_local=trusted_local,
@@ -402,6 +440,11 @@ class ResearchRuntime:
             if started and not received:
                 return self.close_planner('recovery_blocked', 'request_started_without_durable_response')
             try:
+                if received is None and fulltext_request_blocked(
+                        context.get('fulltext'), require_fulltext=require_fulltext,
+                        planning_prompt=planning_prompt):
+                    self._reject('没有已下载全文摘录，不能引用论文正文或页码',
+                                 'fulltext', 'no_fulltext_hits')
                 if received is None and scoop_request_blocked(
                         context.get('scoop'), context.get('literature'),
                         require_scoop=require_scoop, planning_prompt=planning_prompt):
@@ -457,7 +500,8 @@ class ResearchRuntime:
                                 except ProtocolError as error:
                                     details = getattr(error, 'details', None) or []
                                     if any(isinstance(item, dict) and item.get('rule') in {
-                                            'no_literature_hits', 'no_scoop_hits'}
+                                            'no_literature_hits', 'no_scoop_hits',
+                                            'no_fulltext_hits'}
                                            for item in details):
                                         raise
                                     if repair:
@@ -471,6 +515,11 @@ class ResearchRuntime:
                     return self.close_planner('stopped', 'experiment_limit')
             except Exception as error:
                 details = getattr(error, 'details', None) or []
+                if any(isinstance(item, dict) and item.get('rule') == 'no_fulltext_hits'
+                       for item in details):
+                    if on_progress:
+                        on_progress({'status': 'failed', 'category': 'no_fulltext_hits'})
+                    return self.close_planner('failed', str(error))
                 if any(isinstance(item, dict) and item.get('rule') == 'no_scoop_hits'
                        for item in details):
                     if on_progress:

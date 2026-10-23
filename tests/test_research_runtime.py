@@ -325,6 +325,62 @@ def test_literature_review_rejects_unknown_id_without_execution(controller):
     assert accepted['action']['literature_ids'] == [context['literature'][0]['id']]
 
 
+def _write_fulltext(controller):
+    scoop = controller.run_dir / 'scoop'
+    papers = scoop / 'papers'
+    papers.mkdir(parents=True)
+    paper = {
+        'paper_id': 'P-ft01', 'source': 'arxiv', 'arxiv_id': '2401.00042',
+        'title': 'Fixture fulltext paper', 'doi': '10.1000/fixture.fulltext',
+        'abstract': 'Abstract must not replace the downloaded excerpt.',
+    }
+    body = (
+        'This is the actual methodological passage used for bounded fulltext '
+        'projection into planning context. Extra padding keeps length above floor. '
+    ) * 4
+    text_path = papers / 'P-ft01.txt'
+    text_path.write_text(body, encoding='utf-8')
+    (scoop / 'step2.json').write_text(json.dumps({'papers': [paper]}), encoding='utf-8')
+    (scoop / 'step5.json').write_text(json.dumps({'papers': [{
+        'paper_id': 'P-ft01', 'access': 'fulltext',
+        'artifacts': {
+            'text': str(text_path), 'text_sha256': 'e' * 64,
+            'source_url': 'https://arxiv.org/pdf/2401.00042',
+        },
+    }]}), encoding='utf-8')
+
+
+def test_planning_context_includes_downloaded_fulltext_excerpts(controller):
+    _write_fulltext(controller)
+    context = ResearchRuntime.preview_context(controller)
+    assert len(context['fulltext']) == 1
+    hit = context['fulltext'][0]
+    assert hit['id'].startswith('FT-')
+    assert hit['literature_id'].startswith('LIT-')
+    assert 'methodological passage' in hit['excerpt']
+    assert len(hit['excerpt']) <= 480
+
+
+def test_passage_claim_requires_downloaded_fulltext_id(controller):
+    runtime = controller.planning_runtime(max_experiments=1)
+    with pytest.raises(ProtocolError) as empty:
+        runtime.apply_proposal({'action': {
+            'kind': 'passage_claim', 'rationale': '论文正文第 1 页说了机制',
+            'fulltext_ids': ['FT-missing'],
+        }, 'assessment': None}, step=0, trusted_local=True)
+    assert empty.value.details == [{'path': 'fulltext', 'rule': 'no_fulltext_hits'}]
+
+    _write_fulltext(controller)
+    runtime2 = controller.planning_runtime(session_id='fulltext-pass', max_experiments=1)
+    ft_id = runtime2.context()['fulltext'][0]['id']
+    accepted = runtime2.apply_proposal({'action': {
+        'kind': 'passage_claim', 'rationale': '依据已下载全文摘录',
+        'fulltext_ids': [ft_id],
+    }, 'assessment': None}, step=0, trusted_local=True)
+    assert accepted['action']['fulltext_ids'] == [ft_id]
+    assert accepted['observation_id'] is None
+
+
 def test_novelty_conclusion_cites_literature_or_scoop_and_blocks_without_hits(controller):
     runtime = controller.planning_runtime(max_experiments=1)
     with pytest.raises(ProtocolError) as empty:
@@ -382,6 +438,19 @@ def test_required_literature_with_no_hits_does_not_call_the_model(controller):
     assert scoop_calls == []
     assert '查新' in scoop_result['planner']['reason']
     assert scoop_result['planner']['status'] == 'failed'
+
+    ft_prompted = controller.planning_runtime(session_id='fulltext-prompt', max_experiments=1)
+    ft_calls = []
+
+    def ft_forbidden(*_args, **_kwargs):
+        ft_calls.append(1)
+        raise AssertionError('model must not be called')
+
+    ft_result = ft_prompted.run(
+        ft_forbidden, trusted_local=True, planning_prompt='请根据论文正文第 2 页回答')
+    assert ft_calls == []
+    assert '全文' in ft_result['planner']['reason'] or '页码' in ft_result['planner']['reason']
+    assert ft_result['planner']['status'] == 'failed'
 
 
 def test_required_literature_with_hits_still_executes_registered_candidate(controller):

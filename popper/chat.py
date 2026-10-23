@@ -730,6 +730,13 @@ def make_chat_client(base_url, model, *, enable_file_tools=False, api_key=None,
 # effect sizes. Ordinary prose is left untouched. A failing segment is replaced
 # with a short refusal so the number is not silently dropped.
 NUMERIC_CLAIM_REFUSAL = "这段数字结论已拒绝：缺少本次研究中的观测标识或已检索文献标识。"
+FULLTEXT_CLAIM_REFUSAL = "这段全文/页码主张已拒绝：缺少已下载全文摘录标识。"
+_FULLTEXT_CLAIM = re.compile(
+    r"论文正文|全文(?:中|里|说|提到)|某页(?:说|提到)|第\s*\d+\s*页"
+    r"|on\s+page\s+\d+|page\s+\d+\s+(?:says|states|mentions)"
+    r"|full[- ]?text\s+(?:says|states)|paper\s+body|from\s+the\s+pdf",
+    re.IGNORECASE,
+)
 _NUMERIC_CLAIM = re.compile(
     r"\d+(?:\.\d+)?\s*%"
     r"|百分之\s*\d"
@@ -776,24 +783,34 @@ def _complete_json_payload(text):
     return True
 
 
-def gate_numeric_claims(text, *, observation_ids=(), literature_ids=()):
-    """Replace uncited numeric conclusions before the reply is returned.
+def gate_numeric_claims(text, *, observation_ids=(), literature_ids=(), fulltext_ids=()):
+    """Replace uncited numeric or fulltext/page conclusions before the reply returns.
 
     A segment may state a number only when it also contains an observation id
-    from this study or a literature id already in context. Non-numeric segments
-    stay. The refusal is visible; the original number is not. A complete JSON
-    object/array (including an exact ``json`` fence) is left untouched so
-    machine-authored proposals are not treated as prose claims.
+    from this study or a literature/scoop/fulltext id already in context.
+    Segments that claim paper body or page content must cite a downloaded
+    ``FT-*`` excerpt id; without one they are refused so invented page quotes
+    do not ship. Non-claim segments stay. A complete JSON object/array
+    (including an exact ``json`` fence) is left untouched so machine-authored
+    proposals are not treated as prose claims.
     """
     if not isinstance(text, str) or not text:
         return text
     if _complete_json_payload(text):
         return text
-    known = tuple(observation_ids) + tuple(literature_ids)
+    known = tuple(observation_ids) + tuple(literature_ids) + tuple(fulltext_ids)
+    # FT ids may arrive via literature_ids from workspace_evidence_ids; keep both.
+    fulltext_known = tuple(
+        token for token in known
+        if isinstance(token, str) and token.startswith('FT-')
+    ) or tuple(fulltext_ids)
     pieces = []
     for segment in _CLAIM_SEGMENT.split(text):
         if not segment or segment.isspace() or _CLAIM_SEGMENT.fullmatch(segment):
             pieces.append(segment)
+            continue
+        if _FULLTEXT_CLAIM.search(segment) and not _cites_identifier(segment, fulltext_known):
+            pieces.append(FULLTEXT_CLAIM_REFUSAL)
             continue
         if _NUMERIC_CLAIM.search(segment) and not _cites_identifier(segment, known):
             pieces.append(NUMERIC_CLAIM_REFUSAL)
