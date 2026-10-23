@@ -1,26 +1,19 @@
 # 科学执行权硬收敛
 
 日期：2026-10-23  
-状态：确认闸已落地；本轮补齐 Adaptive 评估写入收敛与统一科学入口  
+状态：确认闸 + 证据闸 + Adaptive 执行/评估共享模块 + Campaign 科学步骤去 Experiment  
 仓库：`research-agent-v2` / 分支 `autopilot`
 
 ## 已完成
 
-1. **确认集**：`claims.confirm` / `confirm_signed` 必须经 `authorize_confirmation`。
-2. **Campaign confirm**：禁止 `Experiment.confirm`；需要 `research-runtime/v1` + Controller。
-3. **证据写入**：`record_judgment` 与终态假设状态（supported / contradicted）必须经 `authorize_evidence_write`。
-4. **Adaptive `_evaluate`**：worker 调度仍在 Adaptive；独立比较子进程与 observation/judgment/终态写入经 `scientific_execution`（强制证据授权）。`_run` 仍是本地 JobSpec/Worker（与 Controller 的 worker 同型能力，不另立计分权威）。
-5. **统一科学入口**：`ScientificRuntime`（`runtime_facade.py`）打开 registered / adaptive 会话。Orchestrator **不是** ScientificRuntime（`campaign_is_not_scientific_runtime()`）。
+1. **确认集**：`claims.confirm` / `confirm_signed` → `authorize_confirmation`
+2. **证据写入**：`record_judgment`、终态 supported/contradicted → `authorize_evidence_write`
+3. **Adaptive**：`_run` → `scientific_execution.execute_adaptive_candidate_run`；`_evaluate` 发布 → `publish_paired_mae_result`
+4. **Campaign**：`dev` / `freeze` / `confirm` 一律要求 `research-runtime/v1` + `ResearchController`；禁止 `Experiment.search/freeze/confirm`
+5. **统一入口**：`ScientificRuntime`；Orchestrator 不是科学运行时
 
-## 刻意不做的「物理三合一」
+## 仍保留
 
-不把 `ResearchController`、`AdaptiveResearchRuntime`、`Orchestrator` 揉成一个 5000 行类。产品层已收敛为：
-
-- 科学：`ScientificRuntime` → Controller 或 Adaptive（评估写入共享模块）
-- 编排：Orchestrator（确认必须进 Controller）
-
-## 成功标准
-
-- 未授权 `record_judgment` / 终态 status / `claims.confirm` 均失败。
-- Adaptive 评估发布路径只存在于 `scientific_execution`。
-- Adaptive 基准经 `ScientificRuntime.open_adaptive` 构造。
+- Adaptive 类本身仍存在（描述性基准夹具），但执行与计分不在类内私自完成
+- idea_node 等非科学步骤可读 Experiment 规格（只读契约），不跑开发/确认
+- 不把三套类物理揉成一个文件

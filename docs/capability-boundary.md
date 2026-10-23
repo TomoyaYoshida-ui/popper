@@ -61,9 +61,9 @@ Campaign 的 scoop 步骤缺模型、非 trusted-local 或配置不足时 outcom
 
 1. 已登记项目的科学执行权在 ResearchController + ResearchRuntime。
 2. `popper adaptive` 是描述性基准夹具。默认不开 live。经 `ScientificRuntime.open_adaptive` 进入；**确认集**经 `authorize_confirmation`；**judgment / 终态假设**经 `authorize_evidence_write`；评估发布走 `scientific_execution`（禁止 Adaptive 私自 `record_judgment`）。
-3. `popper research campaign` / Orchestrator 是编排图，**不是** `ScientificRuntime`。科学结果仍落 ResearchStore。**confirm 节点**必须 `planning_protocol=research-runtime/v1` 并走 ResearchController；旧 `Experiment.confirm` 旁路已关闭。编排步骤因缺查询、缺模型、非 trusted-local 或缺前置而未真正执行时，outcome 是 skipped，不是 success。
+3. `popper research campaign` / Orchestrator 是编排图，**不是** `ScientificRuntime`。科学结果仍落 ResearchStore。**dev / freeze / confirm** 必须 `planning_protocol=research-runtime/v1` 并走 ResearchController；旧 `Experiment.search/freeze/confirm` 旁路已关闭。编排步骤因缺查询、缺模型、非 trusted-local 或缺前置而未真正执行时，outcome 是 skipped，不是 success。
 
-硬闸见 `scientific_authority.py` / `scientific_execution.py` / `runtime_facade.py` 与对应 spec。产品入口收敛为「科学会话 + 编排」两层，不把三套实现揉成一个巨类，也不增加第五个循环。
+硬闸见 `scientific_authority.py` / `scientific_execution.py`（含 Adaptive worker 调度）/ `runtime_facade.py`。产品入口收敛为「科学会话 + 编排」两层，不把三套实现揉成一个巨类，也不增加第五个循环。
 
 聊天不推进实验，也不改评测数字。
 

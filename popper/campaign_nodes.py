@@ -71,6 +71,17 @@ def _registered_planning(state):
     return root if protocol else None
 
 
+def _require_registered_science(state, step: str):
+    """Scientific campaign steps only run on research-runtime/v1 via Controller."""
+    project = _registered_planning(state)
+    if project is None:
+        raise CampaignFatal(
+            f"{step} 需要 experiment.json metadata.planning_protocol="
+            "research-runtime/v1；旧 Experiment 开发/冻结/确认旁路已关闭，"
+            "只能经 ResearchController")
+    return project
+
+
 def _planning_controller(project, *, initialize=False):
     from .research.controller import ResearchController
     run_dir = Path(project) / ".popper" / "research-runtime"
@@ -217,12 +228,15 @@ def dispatch_node(run_dir, state):
     if not links_list:
         return _not_run("无 idea→arbor 桥接节点，跳过 arbor-dispatch")
     node = links_list[0]["node_id"]
-    exp = _experiment(state)
+    project = _registered_planning(state)
+    if project is None:
+        return _not_run("arbor-dispatch 需要 research-runtime/v1，跳过旧 Experiment 相位检查旁路")
+    controller = _planning_controller(project)
     try:
-        if exp.state()["phase"] != "searching":
+        if controller.exp.state()["phase"] != "searching":
             return _not_run("实验已冻结/完成，跳过 arbor-dispatch")
     finally:
-        exp.close()
+        controller.close()
     result = _registry(state).arbor_dispatch(
         idea_dir, scoop_dir, arbor_dir, state["project"], node,
         state.get("base_url"), state.get("model"), trusted_local=True,
@@ -288,68 +302,43 @@ def variant_node(run_dir, state):
 
 
 def dev_node(run_dir, state):
-    """Popper 开发集搜索（基线 + 候选循环，预算内可恢复；冻结后跳过）。"""
+    """开发集搜索：只经 ResearchController，禁止 Experiment.search 旁路。"""
     if not state.get("mode"):
         raise CampaignFatal("dev 节点需要 --trusted-local 或 --sandbox")
-    project = _registered_planning(state)
-    if project is not None:
-        controller = _planning_controller(project, initialize=True)
-        try:
-            result = controller.run(trusted_local=state["mode"] == "trusted_local",
-                                    sandboxed=state["mode"] == "sandboxed")
-            planned = result.get("planning_runtime")
-            if planned and planned["planner"]["status"] != "stopped":
-                return _incomplete("研究规划未完成；保留有效证据，停止后续自动确认", planning_runtime=planned)
-            return {"outcome": "success", "phase": result["phase"],
-                    "dev_runs": len([o for o in result["observations"] if o["scope"].startswith("dev")]),
-                    "planning_runtime": planned}
-        finally:
-            controller.close()
-    exp = _experiment(state)
+    project = _require_registered_science(state, "dev")
+    controller = _planning_controller(project, initialize=True)
     try:
-        phase = exp.state()["phase"]
-        if phase != "searching":
-            return {"outcome": "success", "phase": phase, "note": "开发集搜索已完成，跳过"}
-        exp.search(trusted_local=state["mode"] == "trusted_local",
-                   sandboxed=state["mode"] == "sandboxed")
-        return {"outcome": "success", "phase": "searching",
-                "dev_runs": len(exp.results("dev"))}
+        result = controller.run(trusted_local=state["mode"] == "trusted_local",
+                                sandboxed=state["mode"] == "sandboxed")
+        planned = result.get("planning_runtime")
+        if planned and planned["planner"]["status"] != "stopped":
+            return _incomplete("研究规划未完成；保留有效证据，停止后续自动确认",
+                               planning_runtime=planned)
+        return {"outcome": "success", "phase": result["phase"],
+                "dev_runs": len([o for o in result["observations"]
+                                 if o["scope"].startswith("dev")]),
+                "planning_runtime": planned}
     finally:
-        exp.close()
+        controller.close()
 
 
 def freeze_node(run_dir, state):
-    """冻结 dev 最优候选（仅 searching 可冻结）。"""
-    project = _registered_planning(state)
-    if project is not None:
-        controller = _planning_controller(project)
-        try:
-            receipt = controller.prepare_registered_selection()
-            return {"outcome": "success", "phase": "ready_for_confirmation",
-                    "selected": receipt["hypothesis_id"], "selection_receipt": receipt}
-        finally:
-            controller.close()
-    exp = _experiment(state)
+    """冻结候选：只经 ResearchController，禁止 Experiment.freeze 旁路。"""
+    project = _require_registered_science(state, "freeze")
+    controller = _planning_controller(project)
     try:
-        phase = exp.state()["phase"]
-        if phase != "searching":
-            return {"outcome": "success", "phase": phase, "note": "候选已冻结或已确认，跳过"}
-        after = exp.freeze()
-        return {"outcome": "success", "phase": "frozen", "selected": after.get("selected")}
+        receipt = controller.prepare_registered_selection()
+        return {"outcome": "success", "phase": "ready_for_confirmation",
+                "selected": receipt["hypothesis_id"], "selection_receipt": receipt}
     finally:
-        exp.close()
+        controller.close()
 
 
 def confirm_node(run_dir, state):
     """一次性最终确认：只经 ResearchController，禁止 Experiment.confirm 旁路。"""
     if not state.get("mode"):
         raise CampaignFatal("confirm 节点需要 --trusted-local 或 --sandbox")
-    project = _registered_planning(state)
-    if project is None:
-        raise CampaignFatal(
-            "confirm 需要 experiment.json metadata.planning_protocol="
-            "research-runtime/v1；旧 Experiment.confirm 旁路已关闭，"
-            "科学确认只能经 ResearchController")
+    project = _require_registered_science(state, "confirm")
     controller = _planning_controller(project)
     try:
         result = controller.confirm(trusted_local=state["mode"] == "trusted_local",

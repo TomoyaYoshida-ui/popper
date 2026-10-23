@@ -16,7 +16,7 @@ from ..transport.pydantic_planner import PydanticPlannerClient
 from .adaptive_contract import AdaptiveTaskContract
 from .adaptive_protocol import ProblemProposal, ExperimentProposal, RevisionProposal, StopProposal, parse_action, instructions
 from .adaptive_sandbox import strict_executor
-from .contracts import Study, StudyStatus, Hypothesis, ExperimentDesign, RunStatus, Decision
+from .contracts import Study, StudyStatus, Hypothesis, ExperimentDesign, Decision
 from .revisions import RevisionStore
 from .store import ResearchStore
 from .workers import LocalWorker, JobSpec, InputArtifact
@@ -277,67 +277,15 @@ class AdaptiveResearchRuntime:
         return payload
 
     def _run(self, candidate, split):
-        rid = 'RUN-' + digest({'revision': candidate['revision_id'], 'split': split})[:24]
-        revision = self.revisions.path(candidate['revision_id'])
-        registered = self.store.get('run', rid)
-        if registered and registered['status'] in {'implementation_failed', 'infrastructure_failed', 'cancelled'}:
-            raise ProtocolError('Previous failed execution is immutable')
-        if registered is None:
-            with self.store.transaction():
-                reservation = self.store.budget(self.study_id).reserve(self.study_id, rid, 1.,
-                    kind='confirmation' if split == 'confirmation' else 'dev')
-                self.record('run_budget', rid, reservation)
-                self.store.runs.register(rid, candidate['design_id'], revision_id=candidate['revision_id'],
-                                         revision_manifest_sha256=file_hash(revision / 'revision.json'))
-                self.store.runs.set_status(rid, RunStatus.RUNNING)
-        io = self.root / 'inputs' / rid
-        io.mkdir(parents=True, exist_ok=True)
-        training = read_json(self.paths['train'])
-        if split == 'confirmation':
-            training += read_json(self.paths['dev'])
-        write_json(io / 'train.json', training)
-        write_json(io / 'inputs.json', model_inputs(read_json(self.paths[split]), 'vector-mae-v1'))
-        write_json(io / 'config.json', candidate['config'])
-        spec = JobSpec(rid, candidate['revision_id'], file_hash(revision / 'revision.json'), candidate['design_id'],
-            'model.py', args=('--train', 'inputs/train.json', '--input', 'inputs/inputs.json',
-                             '--config', 'inputs/config.json', '--output', 'outputs/predictions.json',
-                             '--seed', str(self.contract.model_seed)),
-            inputs=tuple(InputArtifact(str(io / name), name, file_hash(io / name), role) for name, role in
-                         [('train.json', 'training_data'), ('inputs.json', 'features_without_labels'), ('config.json', 'config')]),
-            outputs=('outputs/predictions.json',), timeout_seconds=300, mem_limit_mb=4096,
-            cpu_time_seconds=300, max_processes=32, sandboxed=True)
-        prior = self.worker.read_manifest(spec.job_id) if (self.worker.root / spec.job_id / 'job.json').exists() else None
-        if prior and prior['status'] == 'running':
-            raise ProtocolError('Interrupted worker outcome requires audit; not automatically replayed')
-        receipt = self.worker.run(spec)
-        if not any(r['key'] == rid for r in self.records('run_budget_settled')):
-            with self.store.transaction():
-                reservation = next(r['data'] for r in self.records('run_budget') if r['key'] == rid)
-                self.store.budget(self.study_id).settle(reservation['reservation_id'], 1.)
-                self.record('run_budget_settled', rid, {'receipt_sha256': digest(receipt)})
-        if receipt['status'] != 'succeeded':
-            if self.store.get('run', rid)['status'] == 'running':
-                self.store.runs.set_status(rid, {'infrastructure_failed': RunStatus.INFRA_FAILED,
-                    'cancelled': RunStatus.CANCELLED}.get(receipt['status'], RunStatus.IMPLEMENTATION_FAILED))
-            context = self.worker.failure_context(spec.job_id)
-            stderr = (((context.get('logs') or {}).get('stderr.log') or {}).get('text') or '')
-            error = ProtocolError('Candidate execution failed; retained worker receipt available')
-            error.category = receipt['status']
-            error.details = [{
-                'path': 'worker', 'rule': receipt['status'],
-                'job_id': spec.job_id,
-                'stderr_tail': stderr[-4000:],
-            }]
-            raise error
-        if self.store.get('run', rid)['status'] == 'running':
-            self.store.runs.set_status(rid, RunStatus.SUCCEEDED)
-        path = self.root / 'predictions' / (rid + '.json')
-        path.parent.mkdir(exist_ok=True)
-        self.worker.fetch_artifact(spec.job_id, 'outputs/predictions.json', path)
-        return rid, path, self.worker.root / spec.job_id / 'receipt.json'
+        """Delegate worker scheduling to scientific_execution (no private run authority)."""
+        from .scientific_execution import execute_adaptive_candidate_run
+        return execute_adaptive_candidate_run(
+            store=self.store, study_id=self.study_id, root=self.root, paths=self.paths,
+            contract=self.contract, worker=self.worker, revisions=self.revisions,
+            candidate=candidate, split=split, record=self.record, records=self.records)
 
     def _evaluate(self, candidate, split):
-        """Schedule worker jobs locally; publish scores only via scientific_execution."""
+        """Worker + comparison publish only via scientific_execution."""
         from .scientific_execution import (
             publish_paired_mae_result, run_prediction_comparison_subprocess)
         controls = self.records('control')
