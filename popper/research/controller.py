@@ -2082,9 +2082,11 @@ class ResearchController:
                 d for d in self.store.list_with_ids("decision")
                 if d["actor"] == "confirmation_controller" and d["action"] == STOP
                 and tuple(d["observation_refs"]) == observation_refs)
-            self.store.claims.confirm(
-                self.manifest["study_id"], confirmation_decision["entity_id"],
-                observations[0]["observation_id"], observations[1]["observation_id"])
+            from .scientific_authority import authorize_confirmation
+            with authorize_confirmation(actor="confirmation_controller"):
+                self.store.claims.confirm(
+                    self.manifest["study_id"], confirmation_decision["entity_id"],
+                    observations[0]["observation_id"], observations[1]["observation_id"])
             judged = any(j.get("scope") == "confirmation"
                          and j["hypothesis_id"] == selected["hypothesis_id"] for j in judgments)
             current = self.store.get("hypothesis", selected["hypothesis_id"])
@@ -2293,10 +2295,12 @@ class ResearchController:
                                          "trust": result["trust"]}),
                     actor="external_confirmation_controller"))
             if result["status"] == "succeeded":
-                self.store.claims.confirm_signed(
-                    self.manifest["study_id"], decision_id, signed_result,
-                    enrollment["contract"], submission,
-                    enrollment["pinned_public_key"])
+                from .scientific_authority import authorize_confirmation
+                with authorize_confirmation(actor="external_confirmation_controller"):
+                    self.store.claims.confirm_signed(
+                        self.manifest["study_id"], decision_id, signed_result,
+                        enrollment["contract"], submission,
+                        enrollment["pinned_public_key"])
             if (result["status"] == "succeeded"
                     and (not result["passed"] or result.get("confirmation_kind") == "scope_boundary")):
                 selected = self.store.get("hypothesis", identity["hypothesis_id"])

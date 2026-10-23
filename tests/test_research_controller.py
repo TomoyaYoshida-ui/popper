@@ -340,17 +340,26 @@ class ResearchControllerIntegrationTests(unittest.TestCase):
         decision_id = next(row["entity_id"] for row in
                            controller.store.list_with_ids("decision")
                            if row["actor"] == "confirmation_controller")
-        duplicate = controller.store.claims.confirm(
-            controller.manifest["study_id"], decision_id,
-            *claim["observation_refs"])
+        from popper.research.scientific_authority import (
+            REFUSAL, authorize_confirmation)
+        with self.assertRaisesRegex(ProtocolError, "authorize_confirmation"):
+            controller.store.claims.confirm(
+                controller.manifest["study_id"], decision_id,
+                *claim["observation_refs"])
+        with authorize_confirmation(actor="confirmation_controller"):
+            duplicate = controller.store.claims.confirm(
+                controller.manifest["study_id"], decision_id,
+                *claim["observation_refs"])
         self.assertEqual(claim, duplicate)
         dev_observation = next(item for item in status["observations"]
                                if item["scope"] == "dev")
-        with self.assertRaisesRegex(ProtocolError, "决策"):
-            controller.store.claims.confirm(
-                controller.manifest["study_id"], decision_id,
-                dev_observation["observation_id"],
-                claim["observation_refs"][1])
+        with authorize_confirmation(actor="confirmation_controller"):
+            with self.assertRaisesRegex(ProtocolError, "决策"):
+                controller.store.claims.confirm(
+                    controller.manifest["study_id"], decision_id,
+                    dev_observation["observation_id"],
+                    claim["observation_refs"][1])
+        self.assertIn("authorize_confirmation", REFUSAL)
 
     def test_resume_does_not_repeat_completed_side_effects(self):
         controller = self._open()

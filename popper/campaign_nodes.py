@@ -341,30 +341,23 @@ def freeze_node(run_dir, state):
 
 
 def confirm_node(run_dir, state):
-    """一次性最终确认：消费测试集产出 claim。"""
+    """一次性最终确认：只经 ResearchController，禁止 Experiment.confirm 旁路。"""
     if not state.get("mode"):
         raise CampaignFatal("confirm 节点需要 --trusted-local 或 --sandbox")
     project = _registered_planning(state)
-    if project is not None:
-        controller = _planning_controller(project)
-        try:
-            result = controller.confirm(trusted_local=state["mode"] == "trusted_local",
-                                        sandboxed=state["mode"] == "sandboxed")
-            return {"outcome": "success", "phase": result["phase"],
-                    "status": result["study"]["status"], "claims": result["claims"]}
-        finally:
-            controller.close()
-    exp = _experiment(state)
+    if project is None:
+        raise CampaignFatal(
+            "confirm 需要 experiment.json metadata.planning_protocol="
+            "research-runtime/v1；旧 Experiment.confirm 旁路已关闭，"
+            "科学确认只能经 ResearchController")
+    controller = _planning_controller(project)
     try:
-        phase = exp.state()["phase"]
-        if phase != "frozen":
-            return {"outcome": "success", "phase": phase, "note": "最终确认已完成，跳过"}
-        claim = exp.confirm(trusted_local=state["mode"] == "trusted_local",
-                            sandboxed=state["mode"] == "sandboxed")
-        return {"outcome": "success", "phase": "completed",
-                "delta": claim.get("delta"), "status": claim.get("status")}
+        result = controller.confirm(trusted_local=state["mode"] == "trusted_local",
+                                    sandboxed=state["mode"] == "sandboxed")
+        return {"outcome": "success", "phase": result["phase"],
+                "status": result["study"]["status"], "claims": result["claims"]}
     finally:
-        exp.close()
+        controller.close()
 
 
 def materialize_node(run_dir, state):

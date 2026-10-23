@@ -7,8 +7,10 @@ ResearchController + ResearchRuntime。AdaptiveResearchRuntime 是描述性基�
 默认不开 live，不是默认科研产品路径。Campaign 是编排图，科学结果仍落 ResearchStore；
 步骤跳过不是研究完成。本计划不另立产品路径，也不合并这些运行时。
 
-本轮不合并 ResearchController / AdaptiveResearchRuntime / Orchestrator 的实现代码；
-默认入口以上述能力边界为准（已登记研究为主路径，adaptive 为基准，campaign 为编排）。
+本轮不物理合并 ResearchController / AdaptiveResearchRuntime / Orchestrator 的类层次；
+但 **确认集消费**已硬收敛：`claims.confirm` / `confirm_signed` 必须经
+`scientific_authority.authorize_confirmation`；Campaign confirm 禁止
+`Experiment.confirm` 旁路。默认入口仍以上述能力边界为准。
 
 实施对象：本机原仓库 `C:\Users\wangj\Desktop\research\research-agent-v2`。
 本轮不发送真实模型请求，不推送远端，不重写旧实验及其失败结果。

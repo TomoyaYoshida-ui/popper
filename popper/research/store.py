@@ -136,12 +136,16 @@ class ClaimWriter:
 
     def confirm(self, study_id, decision_id, baseline_observation_id,
                 candidate_observation_id):
+        from .scientific_authority import require_confirmation_authorized
+        require_confirmation_authorized()
         return self._store._record_confirmation_claim(
             study_id, decision_id, baseline_observation_id,
             candidate_observation_id)
 
     def confirm_signed(self, study_id, decision_id, signed_result,
                        contract_envelope, submission, pinned_public_key):
+        from .scientific_authority import require_confirmation_authorized
+        require_confirmation_authorized()
         return self._store._record_signed_confirmation_claim(
             study_id, decision_id, signed_result, contract_envelope,
             submission, pinned_public_key)

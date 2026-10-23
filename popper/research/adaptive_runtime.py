@@ -622,13 +622,15 @@ class AdaptiveResearchRuntime:
         else:
             self.record('confirmation_started', 'once', {'selection_sha256': digest(selection)})
             result = self._evaluate(selection['finalist']['candidate'], 'confirmation')
+            from .scientific_authority import authorize_confirmation
             with self.store.transaction():
                 decision = Decision('DEC-' + digest(result)[:24], self.study_id,
                     self.store.get('study', self.study_id)['state_version'], tuple(result['observation_refs']),
                     action='stop', rationale='Frozen independent confirmation; no model feedback',
                     actor='confirmation_controller', judgment_refs=(result['judgment_id'],))
                 self.store.add_decision(decision)
-                self.store.claims.confirm(self.study_id, decision.decision_id, *result['observation_refs'])
+                with authorize_confirmation(actor='confirmation_controller'):
+                    self.store.claims.confirm(self.study_id, decision.decision_id, *result['observation_refs'])
                 result = {'status': 'confirmation_completed', **result}
                 self.record('confirmation_completed', 'once', result)
                 self.store.set_study_status(self.study_id, StudyStatus.CONCLUDED)

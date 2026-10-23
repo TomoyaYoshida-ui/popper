@@ -96,27 +96,16 @@ class CampaignExperimentNodesTests(unittest.TestCase):
         # dev 在冻结后：跳过
         dev3 = dev_node(run_dir, self._state())
         self.assertIn("跳过", dev3["note"])
-        # confirm
-        confirmed = confirm_node(run_dir, self._state())
-        self.assertEqual("completed", confirmed["phase"])
-        self.assertIn("delta", confirmed)
-        self.assertIn("status", confirmed)
-        # confirm 重跑：跳过
-        confirmed2 = confirm_node(run_dir, self._state())
-        self.assertEqual("completed", confirmed2["phase"])
-        self.assertIn("跳过", confirmed2["note"])
-        # materialize
+        # confirm：无 research-runtime/v1 时禁止 Experiment.confirm 旁路
+        with self.assertRaises(CampaignFatal) as blocked:
+            confirm_node(run_dir, self._state())
+        self.assertIn("research-runtime/v1", str(blocked.exception))
+        self.assertIn("Experiment.confirm", str(blocked.exception))
+        # materialize 仍可在无确认的情况下按配置校验（门禁/配置路径另测）；
+        # 本用例在关闭旧确认旁路后只验证到 freeze，确认权收敛见 test_runtime_entrypoints。
         mat = materialize_node(run_dir, self._state(materialize=materialize))
         self.assertEqual("success", mat["outcome"])
         self.assertTrue((self.root / "deliverables" / "manuscript.md").is_file())
-        ws = (self.root / ".popper" / "workspace.json")
-        self.assertTrue(ws.is_file())
-        self.assertEqual(1, len(json.loads(ws.read_text(encoding="utf-8"))["deliverables"]))
-        # materialize 重跑：已有产物 → 仍 success（幂等复用，不是「没做」）
-        mat2 = materialize_node(run_dir, self._state(materialize=materialize))
-        self.assertEqual("success", mat2["outcome"])
-        self.assertEqual("existing", mat2["process"])
-        self.assertIn("已物化", mat2["reason"])
 
     def test_materialize_skipped_without_config(self):
         """缺 project/稿件配置 → skipped，不得记 success。"""
@@ -150,10 +139,10 @@ class CampaignExperimentNodesTests(unittest.TestCase):
                              "manuscript": {"title": "t", "abstract": "a",
                                             "sections": [{"heading": "方法", "body": "b"}]},
                              "template": "md", "disclosure": "nature"}))
-        self.assertEqual("running", result["status"])
-        self.assertEqual(["confirm", "materialize"], result["steps"][-2:])
+        # 无 research-runtime/v1 时 confirm 必须失败，不能靠 Experiment.confirm 装完成
+        self.assertEqual("failed", result["status"])
         data = run._load()
-        self.assertEqual("running", data["status"])
+        self.assertEqual("failed", data["status"])
         latest = {}
         for item in data["history"]:
             latest[item["step"]] = item["outcome"]
@@ -163,11 +152,9 @@ class CampaignExperimentNodesTests(unittest.TestCase):
         self.assertEqual("skipped", latest["dispatch"])
         self.assertEqual("skipped", latest["propose"])
         self.assertEqual("skipped", latest["variant"])
-        self.assertEqual("success", latest["confirm"])
-        self.assertEqual("success", latest["materialize"])
-        self.assertEqual(len(DEFAULT_CAMPAIGN_STEPS), len(data["history"]))
-        # 所有历史 outcome 均非挂起
-        self.assertTrue(all(h["outcome"] != "pending_approval" for h in data["history"]))
+        self.assertEqual("fatal", latest["confirm"])
+        confirm_result = next(h["result"] for h in data["history"] if h["step"] == "confirm")
+        self.assertIn("research-runtime/v1", confirm_result.get("error", ""))
         self.assertNotIn("waiting_approval", data)
 
     def test_approval_gate_hangs_then_resumes(self):
@@ -197,18 +184,20 @@ class CampaignExperimentNodesTests(unittest.TestCase):
                                  "manuscript": {"title": "t", "abstract": "a",
                                                 "sections": [{"heading": "方法", "body": "b"}]},
                                  "template": "md", "disclosure": "nature"}))
-        self.assertEqual("running", result2["status"])
+        # 审批与 variant 可完成；无 v1 协议时 confirm 硬失败，不能装编排科研完成
+        self.assertEqual("failed", result2["status"])
         data2 = run._load()
-        self.assertEqual("running", data2["status"])
+        self.assertEqual("failed", data2["status"])
         self.assertNotIn("waiting_approval", data2)
         self.assertIn("code_materialize", reg.calls)
-        # 挂起审计记录保留（如实），但 variant 最终成功执行
         variant_entries = [h for h in data2["history"] if h["step"] == "variant"]
         self.assertTrue(any(h["outcome"] == "success" for h in variant_entries))
         self.assertTrue(any(h["outcome"] == "pending_approval" for h in variant_entries))
-        # 挂起不阻塞完成判定
-        self.assertEqual(len(DEFAULT_CAMPAIGN_STEPS),
-                         len({h["step"] for h in data2["history"]}))
+        confirm_entries = [h for h in data2["history"] if h["step"] == "confirm"]
+        self.assertTrue(any(h["outcome"] == "fatal" for h in confirm_entries))
+        # confirm 失败后依赖它的 materialize 可不执行；审批与 variant 仍须落历史
+        self.assertIn("variant", {h["step"] for h in data2["history"]})
+        self.assertIn("confirm", {h["step"] for h in data2["history"]})
 
     def test_approval_gate_with_proposal_materializes_variant(self):
         """审批 + proposal 存在 → variant 真正执行 code-materialize。"""
@@ -227,8 +216,10 @@ class CampaignExperimentNodesTests(unittest.TestCase):
                                 "manuscript": {"title": "t", "abstract": "a",
                                                "sections": [{"heading": "方法", "body": "b"}]},
                                 "template": "md", "disclosure": "nature"}))
-        self.assertEqual("running", result["status"])
+        self.assertEqual("failed", result["status"])
         self.assertIn("code_materialize", reg.calls)
+        confirm = next(h for h in run._load()["history"] if h["step"] == "confirm")
+        self.assertEqual("fatal", confirm["outcome"])
 
     def test_provisional_research_stops_then_resumes_to_real_proposal_review(self):
         """全文不足不能伪报审批或消耗最终测试集；证据恢复后才生成待审提案。"""
@@ -307,13 +298,16 @@ class CampaignExperimentNodesTests(unittest.TestCase):
                              materialize={"manuscript": {"title": "variant", "abstract": "a",
                                  "sections": [{"heading": "Results", "body": "b"}]},
                                  "template": "md", "disclosure": "nature"})
-        self.assertEqual("running", run.run(nodes=BUILTIN_NODES, config=config)["status"])
+        # 变体可开发/冻结；confirm 无 v1 协议时必须失败，不得 Experiment.confirm 装完成
+        first = run.run(nodes=BUILTIN_NODES, config=config)
+        self.assertEqual("failed", first["status"])
+        confirm = next(h for h in run._load()["history"] if h["step"] == "confirm")
+        self.assertEqual("fatal", confirm["outcome"])
         derived = proposal / "variant-project"
-        self.assertTrue((derived / "deliverables" / "manuscript.md").is_file())
         self.assertFalse((self.root / "deliverables" / "manuscript.md").exists())
         exp = Experiment(derived)
         try:
-            self.assertEqual("completed", exp.state()["phase"])
+            self.assertEqual("frozen", exp.state()["phase"])
             scores = exp.results("dev")
             self.assertEqual(2, len(scores))
             self.assertGreater(scores[0]["mean"], scores[1]["mean"])
@@ -321,12 +315,12 @@ class CampaignExperimentNodesTests(unittest.TestCase):
             exp.replay()
         finally:
             exp.close()
-        # Recreate the orchestrator as the CLI does; cache hit must restore routing.
         resumed = Orchestrator(camp)
-        self.assertEqual("running", resumed.run(nodes=BUILTIN_NODES, config=config)["status"])
+        self.assertEqual("failed", resumed.run(nodes=BUILTIN_NODES, config=config)["status"])
         exp = Experiment(derived)
         try:
             self.assertEqual(before, exp.results())
+            self.assertEqual("frozen", exp.state()["phase"])
         finally:
             exp.close()
         source_exp = Experiment(self.root)
