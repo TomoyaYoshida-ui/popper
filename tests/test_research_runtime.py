@@ -230,6 +230,71 @@ def test_planning_context_includes_retrieved_literature(controller):
     assert 'FULLTEXT_MARKER' not in json.dumps(context['literature'])
 
 
+def test_planning_context_includes_study_memory_and_writes_persist(controller):
+    from popper.research.memory_context import record_memory_entry
+
+    empty = ResearchRuntime.preview_context(controller)
+    assert empty['memory']['schema'] == 'research-memory-context/v1'
+    assert empty['memory']['trust'] == 'unverified_session_notes'
+    assert empty['memory']['entries'] == []
+
+    runtime = controller.planning_runtime(max_experiments=1)
+    hid = controller.manifest['candidate_hypothesis_ids'][1]
+    runtime.apply_proposal(execute(hid), step=0, trusted_local=True)
+    after = runtime.context()
+    assert after['memory']['entries']
+    kinds = {e['kind'] for e in after['memory']['entries']}
+    assert 'judgment_outcome' in kinds
+    assert all(e['id'].startswith('MEM-') for e in after['memory']['entries'])
+    # Next context sees the same durable notes (short-term summary under run_dir/memory).
+    again = ResearchRuntime.preview_context(controller)
+    assert {e['id'] for e in again['memory']['entries']} == {
+        e['id'] for e in after['memory']['entries']}
+
+    record_memory_entry(
+        controller.run_dir, 'rejection_reason', 'fixture rejection note',
+        study_id=controller.manifest['study_id'])
+    noted = runtime.context()
+    assert any(e['kind'] == 'rejection_reason' for e in noted['memory']['entries'])
+
+
+def test_memory_ids_cannot_serve_as_observation_scores(controller):
+    from popper.research.memory_context import record_memory_entry
+
+    record_memory_entry(
+        controller.run_dir, 'action_note', 'not a measurement',
+        study_id=controller.manifest['study_id'])
+    runtime = controller.planning_runtime(max_experiments=1)
+    context = runtime.context()
+    mem_ids = [e['id'] for e in context['memory']['entries']]
+    assert mem_ids
+    # Memory never appears as raw evidence / scores.
+    blob = json.dumps(context['memory'])
+    assert 'mean_effect' not in blob
+    assert 'baseline_mae' not in blob
+    for item in context['raw_evidence']:
+        for ref in item['evidence_refs']:
+            assert not str(ref).startswith('MEM-')
+    # Citing a memory id as evidence is rejected like any unknown observation.
+    hid = controller.manifest['candidate_hypothesis_ids'][1]
+    with pytest.raises(ProtocolError) as failure:
+        runtime.apply_proposal({
+            'action': {
+                'kind': 'revise_hypothesis', 'hypothesis_id': hid,
+                'mechanism': 'm', 'applicability': 'a', 'predictions': ['p'],
+                'rationale': 'r', 'evidence_refs': mem_ids[:1],
+            },
+            'assessment': None,
+        }, step=0, trusted_local=True)
+    assert failure.value.details == [
+        {'path': 'action.evidence_refs', 'rule': 'unknown_evidence'}]
+    with pytest.raises(ProtocolError, match='evaluation fields'):
+        record_memory_entry(
+            controller.run_dir, 'action_note',
+            {'summary': 'x', 'mean_effect': 0.5},
+            study_id=controller.manifest['study_id'])
+
+
 def test_registered_execution_ignores_literature_hits(controller):
     _write_hits(controller)
     runtime = controller.planning_runtime(max_experiments=1)

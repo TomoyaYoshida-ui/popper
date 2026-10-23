@@ -6,6 +6,9 @@ owns selection. JSON reports are projections of durable receipts, never recovery
 authority. No model reply is needed to enforce a deterministic experiment limit.
 Retrieved literature enters context as bounded identifiers and excerpts.
 It is not a reading agent and cannot authorize a review without those hits.
+Study-scoped session memory (working / short-term notes) also enters context
+for planning and reflection. Memory never replaces independent scores or
+judgment three-states.
 """
 from __future__ import annotations
 
@@ -17,6 +20,7 @@ from ..core import ProtocolError, digest
 from .literature_context import (CLAIM_FIELDS, LITERATURE_KINDS, LiteratureClaim,
                                  claimed_literature_ids, literature_claim_from,
                                  literature_request_blocked, load_literature_hits)
+from .memory_context import project_memory_context, record_action_memory
 from .project_adapter import RegisteredProjectAdapter
 from .runtime_protocol import (ExecuteCandidate, ReviseHypothesis, StopPlanning,
                                decision_instructions, parse_action, parse_assessment)
@@ -136,6 +140,7 @@ class ResearchRuntime:
                   'primary_scope_id': project['primary_scope_id'], 'scopes': project['scopes'],
                   'candidates': candidates, 'raw_evidence': raw,
                   'literature': load_literature_hits(self.controller.run_dir, self.controller.project),
+                  'memory': project_memory_context(self.controller.run_dir),
                   'remaining_experiments': max(0, self.max_experiments - len(seen))}
         if self.profile == 'evidence_driven':
             result['structured_judgments'] = structured
@@ -251,7 +256,9 @@ class ResearchRuntime:
             received = self._record('response_received', step)
             if received['body']['payload_sha256'] != digest(payload):
                 raise ProtocolError('Decision identity reused with another payload')
-            return previous['body']
+            body = previous['body']
+            self._persist_action_memory(body, step)
+            return body
         if self.records('planner_closed'):
             raise ProtocolError('Planning channel is closed')
         if not isinstance(payload, dict) or set(payload) - {'action', 'assessment'} or 'action' not in payload:
@@ -313,9 +320,31 @@ class ResearchRuntime:
         result = {'action': action.model_dump(), 'assessment': assessment,
                   'observation_id': executed['observation']['observation_id'] if executed else None}
         self._write('action_completed', step, result)
+        self._persist_action_memory(result, step)
         if isinstance(action, StopPlanning):
             self.close_planner('stopped', 'agent_stop')
         return result
+
+    def _persist_action_memory(self, body, step):
+        """Session notes only; never written into observations or judgments."""
+        action = body.get('action') if isinstance(body, dict) else None
+        if not isinstance(action, dict):
+            return
+        rejection = None
+        if self._record('assessment_rejected', step) and body.get('assessment') is None:
+            rejection = 'assessment rejected: not bound to verified evidence'
+        judgments = None
+        observation_id = body.get('observation_id')
+        hid = action.get('candidate_id') or action.get('hypothesis_id')
+        if observation_id and hid:
+            judgments = [
+                j for j in self.store.list('judgment')
+                if j.get('hypothesis_id') == hid]
+        record_action_memory(
+            self.controller.run_dir, study_id=self.study_id,
+            action=action, assessment=body.get('assessment'),
+            observation_id=observation_id, judgments=judgments,
+            rejection=rejection)
 
     def run(self, client=None, *, candidate_order=None, trusted_local=False,
             sandboxed=False, should_cancel=None, on_progress=None,

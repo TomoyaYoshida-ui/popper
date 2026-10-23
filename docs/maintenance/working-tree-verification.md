@@ -15,6 +15,8 @@
 | 裸全量 `python -m pytest -q --tb=line` | 此前收集失败：缺 `httpx2`（adaptive 三文件）。现已声明进 `agent`/`adaptive` extra 并本机安装。 |
 | 全量并 `--ignore` 上述三个 adaptive 文件 | **1731 passed**, 30 skipped, **3 failed**, 1 teardown error（约 15m41s）。见下「已修」。 |
 | Adaptive 三文件（补 `httpx2` 后，2026-10-23） | `pytest tests/test_adaptive_runtime_v2.py tests/test_adaptive_benchmark.py tests/test_adaptive_linux_sandbox.py -q` → **35 passed, 3 skipped**（约 43s）。3 skip 为 Windows 上 `test_adaptive_linux_sandbox`（需非 root Linux + cgroup），属预期。 |
+| **裸全量（不 ignore Adaptive）** `python -m pytest -q --tb=line`（2026-10-23，HEAD `3821b0e`，autopilot，Windows） | **1798 passed**, **32 skipped**, 764 subtests passed（约 15m26s）。**0 failed**。含 Adaptive 三文件；Windows 上 linux sandbox 等仍为 skip。 |
+| 记忆接入后（工作树，相对 `3821b0e`）`test_memory_context` + `test_memory` + `test_research_runtime` | **29 passed**（约 26s）。 |
 
 ### 本轮修复后的复验（全量里那 3 fail + 1 error）
 
