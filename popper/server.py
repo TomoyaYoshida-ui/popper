@@ -495,9 +495,10 @@ def build_review_payload(state):
     return review
 
 
-# campaign 阶段顺序：与"LangGraph 8 阶段流水线"对齐，对应 Idea→检索→假设→Popper 开发→冻结→确认→写作。
+# campaign 阶段顺序：Idea→检索→查新→假设→Popper 开发→冻结→确认→写作。
+# scoop 跳过/provisional 绝不能显示为查新完成。
 CAMPAIGN_STAGES = (
-    "idea", "literature", "dataset", "baseline", "arbor",
+    "idea", "literature", "scoop", "dataset", "baseline", "arbor",
     "dev", "freeze", "confirm", "materialize",
 )
 PHASE_ORDINAL = {"searching": 1, "frozen": 2, "confirming": 3,
@@ -535,9 +536,10 @@ def build_campaign_payload(state, results, papers, arbor, deliverables, history=
     n_papers = len(papers)
     arbor_nodes = sum(len(r.get("nodes", [])) for r in arbor)
     arbor_frontier = sum(len(r.get("frontier", [])) for r in arbor)
-    done = {  # 每阶段的实际门槛
+    done = {  # 每阶段的实际门槛；scoop 不靠旁路产物推断完成，只认 history success
         "idea": 1 <= ordinal,
         "literature": n_papers > 0,
+        "scoop": False,
         "dataset": 1 <= ordinal,
         "baseline": bool(basis),
         "arbor": arbor_nodes > 0,
@@ -556,6 +558,10 @@ def build_campaign_payload(state, results, papers, arbor, deliverables, history=
         "literature": {
             "label": "文献检索", "src": "vendor paper_search",
             "evidence": [("检索入库", f"{n_papers} 篇（跨 run 去重后）")],
+        },
+        "scoop": {
+            "label": "查新（Scoop）", "src": "vendor scoop-run",
+            "evidence": [("查新", "仅 completed 报告算完成；跳过/provisional 不算")],
         },
         "dataset": {
             "label": "数据就位", "src": "controller 契约",
@@ -616,8 +622,17 @@ def build_campaign_payload(state, results, papers, arbor, deliverables, history=
         if isinstance(item, dict) and item.get("step"):
             latest[item["step"]] = item.get("outcome")
     for stage in stages:
-        if latest.get(stage["key"]) == "skipped":
+        outcome = latest.get(stage["key"])
+        if outcome == "skipped":
             stage["status"] = "skipped"
+        elif stage["key"] == "scoop":
+            # 查新：只有 campaign 记 success 才算完成；retryable（含 provisional）标 warn。
+            if outcome == "success":
+                stage["status"] = "done"
+            elif outcome == "retryable":
+                stage["status"] = "warn"
+            elif outcome is None and stage["status"] != "skipped":
+                stage["status"] = "todo"
     return {"objective": spec.get("name") or state.get("mode", ""),
             "phase": phase, "phase_label": PHASES.get(phase, phase),
             "stages": stages}

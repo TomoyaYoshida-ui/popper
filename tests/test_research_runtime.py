@@ -312,7 +312,7 @@ def test_literature_review_rejects_unknown_id_without_execution(controller):
     before = len(controller.store.list('run'))
     with pytest.raises(ProtocolError) as failure:
         runtime.apply_proposal({'action': {
-            'kind': 'novelty_conclusion', 'rationale': '查新结论',
+            'kind': 'literature_review', 'rationale': '文献综述',
             'literature_ids': ['LIT-missing'],
         }, 'assessment': None}, step=0, trusted_local=True)
     assert failure.value.details == [{'path': 'action.literature_ids', 'rule': 'unknown_literature'}]
@@ -323,6 +323,26 @@ def test_literature_review_rejects_unknown_id_without_execution(controller):
     }, 'assessment': None}, step=0, trusted_local=True)
     assert accepted['observation_id'] is None
     assert accepted['action']['literature_ids'] == [context['literature'][0]['id']]
+
+
+def test_novelty_conclusion_cites_literature_or_scoop_and_blocks_without_hits(controller):
+    runtime = controller.planning_runtime(max_experiments=1)
+    with pytest.raises(ProtocolError) as empty:
+        runtime.apply_proposal({'action': {
+            'kind': 'novelty_conclusion', 'rationale': '查新完成，无撞车',
+            'scoop_ids': ['SCOOP-x'],
+        }, 'assessment': None}, step=0, trusted_local=True)
+    assert empty.value.details == [{'path': 'scoop', 'rule': 'no_scoop_hits'}]
+
+    _write_hits(controller)
+    runtime2 = controller.planning_runtime(session_id='novelty-lit', max_experiments=1)
+    lit_id = runtime2.context()['literature'][0]['id']
+    accepted = runtime2.apply_proposal({'action': {
+        'kind': 'novelty_conclusion', 'rationale': '依据已检索文献说明近邻',
+        'literature_ids': [lit_id],
+    }, 'assessment': None}, step=0, trusted_local=True)
+    assert accepted['action']['literature_ids'] == [lit_id]
+    assert accepted['observation_id'] is None
 
 
 def test_required_literature_with_no_hits_does_not_call_the_model(controller):
@@ -336,7 +356,7 @@ def test_required_literature_with_no_hits_does_not_call_the_model(controller):
     result = runtime.run(forbidden, trusted_local=True, require_literature=True)
     assert calls == []
     assert result['planner'] == {
-        'status': 'failed', 'reason': '没有检索命中，不能生成文献综述或查新结论'}
+        'status': 'failed', 'reason': '没有检索命中，不能生成文献综述'}
 
     prompted = controller.planning_runtime(session_id='neighbor-prompt', max_experiments=1)
     prompted_calls = []
@@ -346,9 +366,22 @@ def test_required_literature_with_no_hits_does_not_call_the_model(controller):
         raise AssertionError('model must not be called')
 
     prompted_result = prompted.run(
-        also_forbidden, trusted_local=True, planning_prompt='请根据近邻工作给出查新结论')
+        also_forbidden, trusted_local=True, planning_prompt='请根据近邻工作回答')
     assert prompted_calls == []
     assert '没有检索命中' in prompted_result['planner']['reason']
+
+    scoop_prompted = controller.planning_runtime(session_id='scoop-prompt', max_experiments=1)
+    scoop_calls = []
+
+    def scoop_forbidden(*_args, **_kwargs):
+        scoop_calls.append(1)
+        raise AssertionError('model must not be called')
+
+    scoop_result = scoop_prompted.run(
+        scoop_forbidden, trusted_local=True, planning_prompt='请给出查新结论：是否无撞车')
+    assert scoop_calls == []
+    assert '查新' in scoop_result['planner']['reason']
+    assert scoop_result['planner']['status'] == 'failed'
 
 
 def test_required_literature_with_hits_still_executes_registered_candidate(controller):

@@ -696,6 +696,7 @@ class CampaignStageSkipTests(unittest.TestCase):
         payload = build_campaign_payload(state, [], [], [], [], [
             {"step": "idea", "outcome": "skipped"},
             {"step": "literature", "outcome": "skipped"},
+            {"step": "scoop", "outcome": "skipped"},
             {"step": "dispatch", "outcome": "skipped"},
             {"step": "propose", "outcome": "skipped"},
             {"step": "variant", "outcome": "skipped"},
@@ -705,7 +706,9 @@ class CampaignStageSkipTests(unittest.TestCase):
         by_key = {stage["key"]: stage["status"] for stage in payload["stages"]}
         self.assertEqual("skipped", by_key["idea"])
         self.assertEqual("skipped", by_key["literature"])
+        self.assertEqual("skipped", by_key["scoop"])
         self.assertNotEqual("done", by_key["idea"])
+        self.assertNotEqual("done", by_key["scoop"])
         self.assertEqual("未执行", STAGE_STATUS_LABELS["skipped"])
         for key in ("dispatch", "propose", "variant", "materialize"):
             if key in by_key:
@@ -716,6 +719,17 @@ class CampaignStageSkipTests(unittest.TestCase):
         ])
         literature = next(stage for stage in done["stages"] if stage["key"] == "literature")
         self.assertEqual("done", literature["status"])
+        scoop_done = build_campaign_payload(state, [], [], [], [], [
+            {"step": "scoop", "outcome": "success"},
+        ])
+        scoop = next(stage for stage in scoop_done["stages"] if stage["key"] == "scoop")
+        self.assertEqual("done", scoop["status"])
+        scoop_retry = build_campaign_payload(state, [], [], [], [], [
+            {"step": "scoop", "outcome": "retryable"},
+        ])
+        scoop_warn = next(stage for stage in scoop_retry["stages"] if stage["key"] == "scoop")
+        self.assertEqual("warn", scoop_warn["status"])
+        self.assertNotEqual("done", scoop_warn["status"])
 
 
 if __name__ == "__main__":

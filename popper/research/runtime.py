@@ -6,6 +6,8 @@ owns selection. JSON reports are projections of durable receipts, never recovery
 authority. No model reply is needed to enforce a deterministic experiment limit.
 Retrieved literature enters context as bounded identifiers and excerpts.
 It is not a reading agent and cannot authorize a review without those hits.
+Completed (non-provisional) scoop hits enter the same way for novelty claims;
+skipped or provisional scoop is not novelty completion.
 Study-scoped session memory (working / short-term notes) also enters context
 for planning and reflection. Memory never replaces independent scores or
 judgment three-states.
@@ -24,6 +26,10 @@ from .memory_context import project_memory_context, record_action_memory
 from .project_adapter import RegisteredProjectAdapter
 from .runtime_protocol import (ExecuteCandidate, ReviseHypothesis, StopPlanning,
                                decision_instructions, parse_action, parse_assessment)
+from .scoop_context import (SCOOP_CLAIM_FIELDS, SCOOP_KINDS, ScoopClaim,
+                            claimed_scoop_ids, citable_novelty_ids,
+                            load_scoop_hits, scoop_claim_from,
+                            scoop_request_blocked)
 
 
 class ResearchRuntime:
@@ -136,10 +142,12 @@ class ResearchRuntime:
                 raw.append({'hypothesis_id': o['hypothesis_id'], 'version': o['hypothesis_version'],
                             'scope': o['scope'], 'evidence_refs': [o['observation_id']],
                             'metric': o['unit'], 'value': o['value'], 'quality': 'descriptive_only'})
+        roots = (self.controller.run_dir, self.controller.project)
         result = {'project': project, 'objective': project['objective'],
                   'primary_scope_id': project['primary_scope_id'], 'scopes': project['scopes'],
                   'candidates': candidates, 'raw_evidence': raw,
-                  'literature': load_literature_hits(self.controller.run_dir, self.controller.project),
+                  'literature': load_literature_hits(*roots),
+                  'scoop': load_scoop_hits(*roots),
                   'memory': project_memory_context(self.controller.run_dir),
                   'remaining_experiments': max(0, self.max_experiments - len(seen))}
         if self.profile == 'evidence_driven':
@@ -158,13 +166,30 @@ class ResearchRuntime:
                          'action.evidence_refs', 'unknown_evidence')
 
     def _parse_proposal_action(self, raw, context):
-        """Accept a computational action, or a literature claim that cites stored hits."""
+        """Accept a computational action, or a literature/scoop claim that cites stored hits."""
+        scoop_claimed = claimed_scoop_ids(raw)
+        if scoop_claimed is not None:
+            known = citable_novelty_ids(context)
+            if not known:
+                self._reject('没有合格查新命中，不能生成查新完成或无撞车结论',
+                             'scoop', 'no_scoop_hits')
+            if not scoop_claimed:
+                self._reject('声称依据查新时必须引用已落盘 scoop/文献命中的 id',
+                             'action.scoop_ids', 'scoop_id_required')
+            if not set(scoop_claimed) <= known:
+                self._reject('规划动作引用了本次上下文中不存在的查新/文献 id',
+                             'action.scoop_ids', 'unknown_scoop')
+            if isinstance(raw, dict) and raw.get('kind') in SCOOP_KINDS:
+                return scoop_claim_from(raw, scoop_claimed)
+            raw = {key: value for key, value in raw.items()
+                   if key not in SCOOP_CLAIM_FIELDS and key not in CLAIM_FIELDS}
+            return parse_action(raw)
         claimed = claimed_literature_ids(raw)
         if claimed is not None:
             known = {item.get('id') for item in context.get('literature') or []
                      if isinstance(item, dict)}
             if not context.get('literature'):
-                self._reject('没有检索命中，不能生成文献综述或查新结论',
+                self._reject('没有检索命中，不能生成文献综述',
                              'literature', 'no_literature_hits')
             if not claimed:
                 self._reject('声称依据文献时必须引用已检索文献的 id',
@@ -179,11 +204,22 @@ class ResearchRuntime:
         return parse_action(raw)
 
     def _validate_action(self, action, context):
+        if isinstance(action, ScoopClaim):
+            known = citable_novelty_ids(context)
+            cited = set(action.scoop_ids) | set(action.literature_ids)
+            if not known:
+                self._reject('没有合格查新命中，不能生成查新完成或无撞车结论',
+                             'scoop', 'no_scoop_hits')
+            if not cited <= known:
+                self._reject('规划动作引用了本次上下文中不存在的查新/文献 id',
+                             'action.scoop_ids', 'unknown_scoop')
+            self._validate_refs(action.evidence_refs, context)
+            return
         if isinstance(action, LiteratureClaim):
             known = {item.get('id') for item in context.get('literature') or []
                      if isinstance(item, dict)}
             if not context.get('literature'):
-                self._reject('没有检索命中，不能生成文献综述或查新结论',
+                self._reject('没有检索命中，不能生成文献综述',
                              'literature', 'no_literature_hits')
             if not set(action.literature_ids) <= known:
                 self._reject('规划动作引用了本次检索上下文中不存在的文献 id',
@@ -348,7 +384,7 @@ class ResearchRuntime:
 
     def run(self, client=None, *, candidate_order=None, trusted_local=False,
             sandboxed=False, should_cancel=None, on_progress=None,
-            require_literature=False, planning_prompt=None):
+            require_literature=False, require_scoop=False, planning_prompt=None):
         if self.records('planner_closed'):
             return self.result()
         self.controller.prepare_registered_baseline(trusted_local=trusted_local,
@@ -366,10 +402,15 @@ class ResearchRuntime:
             if started and not received:
                 return self.close_planner('recovery_blocked', 'request_started_without_durable_response')
             try:
+                if received is None and scoop_request_blocked(
+                        context.get('scoop'), context.get('literature'),
+                        require_scoop=require_scoop, planning_prompt=planning_prompt):
+                    self._reject('没有合格查新命中，不能生成查新完成或无撞车结论',
+                                 'scoop', 'no_scoop_hits')
                 if received is None and literature_request_blocked(
                         context.get('literature'), require_literature=require_literature,
                         planning_prompt=planning_prompt):
-                    self._reject('没有检索命中，不能生成文献综述或查新结论',
+                    self._reject('没有检索命中，不能生成文献综述',
                                  'literature', 'no_literature_hits')
                 if received:
                     payload = received['body']['payload']
@@ -415,7 +456,8 @@ class ResearchRuntime:
                                     break
                                 except ProtocolError as error:
                                     details = getattr(error, 'details', None) or []
-                                    if any(isinstance(item, dict) and item.get('rule') == 'no_literature_hits'
+                                    if any(isinstance(item, dict) and item.get('rule') in {
+                                            'no_literature_hits', 'no_scoop_hits'}
                                            for item in details):
                                         raise
                                     if repair:
@@ -429,6 +471,11 @@ class ResearchRuntime:
                     return self.close_planner('stopped', 'experiment_limit')
             except Exception as error:
                 details = getattr(error, 'details', None) or []
+                if any(isinstance(item, dict) and item.get('rule') == 'no_scoop_hits'
+                       for item in details):
+                    if on_progress:
+                        on_progress({'status': 'failed', 'category': 'no_scoop_hits'})
+                    return self.close_planner('failed', str(error))
                 if any(isinstance(item, dict) and item.get('rule') == 'no_literature_hits'
                        for item in details):
                     if on_progress:

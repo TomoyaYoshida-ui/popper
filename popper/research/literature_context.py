@@ -14,15 +14,15 @@ from ..core import ProtocolError, digest, read_json
 
 LITERATURE_LIMIT = 12
 EXCERPT_CHARS = 480
-LITERATURE_KINDS = frozenset({'literature_review', 'novelty_conclusion'})
+LITERATURE_KINDS = frozenset({'literature_review'})
 CLAIM_FIELDS = (
     'literature_ids', 'literature', 'citations', 'citation',
     'neighbor_work', 'neighbors',
 )
 _PROMPT_MARKERS = (
-    '近邻工作', '文献综述', '查新结论', '根据文献', '依据文献',
+    '近邻工作', '文献综述', '根据文献', '依据文献',
     'neighbor work', 'neighbouring work', 'neighboring work',
-    'literature review', 'novelty conclusion',
+    'literature review',
 )
 _DOI = re.compile(r'^10\.\d{4,9}/\S+$', re.IGNORECASE)
 _ARXIV = re.compile(

@@ -130,9 +130,10 @@ def test_unknown_literature_id_is_rejected_and_compute_actions_are_not():
 
 
 def test_neighbor_prompt_requires_hits_and_default_planning_prompt_does_not():
-    assert prompt_requires_literature('请根据近邻工作给出查新结论')
+    assert prompt_requires_literature('请根据近邻工作回答')
     assert prompt_requires_literature('Write a literature review of the neighbors')
     assert not prompt_requires_literature('执行已登记候选')
+    assert not prompt_requires_literature('请给出查新结论')
     assert not prompt_requires_literature(decision_instructions())
     from popper.research.literature_context import literature_request_blocked
     assert literature_request_blocked([], require_literature=True)
