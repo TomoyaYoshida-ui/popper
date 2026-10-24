@@ -44,7 +44,8 @@ def main() -> None:
         run(sys.executable, "-m", "pip", "install", "pytest")
         run(sys.executable, "-m", "pytest", "tests/test_demo.py",
             "tests/test_packaged_web.py", "tests/test_doc_consistency.py", "-q")
-    print("Ready. Try: popper demo init <empty-directory> --case ode-convergence")
+    print("Ready. Try: popper demo smoke")
+    print("  (or stepwise demo init → research init/run/confirm → status --brief)")
 
 
 if __name__ == "__main__":
