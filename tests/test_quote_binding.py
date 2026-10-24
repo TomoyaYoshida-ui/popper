@@ -18,7 +18,7 @@ def test_passage_too_short_fails():
 
 
 def test_passage_exactly_twenty_chars_bound():
-    span = "methodological pass"  # 20 chars, no trailing space
+    span = "methodological passe"  # 20 chars, consecutive in CONTENT
     assert len(span) == 20
     assert span in CONTENT
     assert passage_bound_to_fulltext(span, CONTENT)
