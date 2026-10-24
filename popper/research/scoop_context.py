@@ -1,9 +1,11 @@
 """Project completed Scoop-Check hits into bounded planning context.
 
-Only non-provisional scoop reports contribute citable hits. Skipped,
-failed, or provisional scoop is not novelty completion. Hits carry a
-stable id, source, DOI and/or arXiv when stored, a title, and a truncated
-excerpt. Full text is not loaded. This is not an audit-grade FPR product
+Citable hits are the subset: step7 completed ∩ step4 selected ∩
+step5 access=fulltext. Metadata still comes from step2; matching key is
+pipeline ``paper_id``. Skipped, failed, or provisional scoop is not
+novelty completion. Hits carry a stable SCOOP-* id, source, DOI and/or
+arXiv when stored, a title, and a truncated excerpt. Full text is not
+loaded into planning context. This is not an audit-grade FPR product
 and does not fetch papers.
 """
 from __future__ import annotations
@@ -68,7 +70,7 @@ def scoop_request_blocked(scoop, literature=None, *, require_scoop=False, planni
     return bool(require_scoop) or prompt_requires_scoop(planning_prompt)
 
 
-def project_scoop_hit(paper):
+def project_scoop_hit(paper, *, verified_fulltext=False):
     """One bounded scoop hit, or None when the record has no usable title."""
     base = project_paper(paper)
     if base is None:
@@ -84,7 +86,31 @@ def project_scoop_hit(paper):
     }
     if identifier:
         record['identifier'] = identifier
+    if verified_fulltext:
+        record['verified_fulltext'] = True
     return record
+
+
+def _verified_fulltext_paper_ids(scoop_dir):
+    """paper_id set: step4 selected ∩ step5 access=fulltext. Empty if unreadable."""
+    try:
+        step4 = read_json(scoop_dir / 'step4.json')
+        step5 = read_json(scoop_dir / 'step5.json')
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(step4, dict) or not isinstance(step5, dict):
+        return set()
+    selected = step4.get('candidate_paper_ids')
+    deep = step5.get('papers')
+    if not isinstance(selected, list) or not isinstance(deep, list):
+        return set()
+    selected_ids = {pid for pid in selected if isinstance(pid, str) and pid.strip()}
+    fulltext_ids = {
+        item.get('paper_id') for item in deep
+        if isinstance(item, dict) and item.get('access') == 'fulltext'
+        and isinstance(item.get('paper_id'), str) and item.get('paper_id').strip()
+    }
+    return selected_ids & fulltext_ids
 
 
 def _scoop_dirs(roots):
@@ -134,13 +160,20 @@ def _completed_report(scoop_dir):
 
 
 def load_scoop_hits(*roots, limit=SCOOP_LIMIT):
-    """Read papers from completed scoop runs only. Never contacts a search service."""
+    """Read selected fulltext papers from completed scoop runs only.
+
+    Never contacts a search service. Unselected or abstract-only papers are
+    not citable even when step7 is completed.
+    """
     if type(limit) is not int or limit < 1:
         raise ProtocolError('Scoop context limit is invalid')
     hits = []
     seen = set()
     for scoop_dir in _scoop_dirs(roots):
         if _completed_report(scoop_dir) is None:
+            continue
+        allowed = _verified_fulltext_paper_ids(scoop_dir)
+        if not allowed:
             continue
         search_path = scoop_dir / 'step2.json'
         if not search_path.is_file():
@@ -153,7 +186,12 @@ def load_scoop_hits(*roots, limit=SCOOP_LIMIT):
         if not isinstance(papers, list):
             continue
         for paper in papers:
-            hit = project_scoop_hit(paper)
+            if not isinstance(paper, dict):
+                continue
+            paper_id = paper.get('paper_id')
+            if not isinstance(paper_id, str) or paper_id not in allowed:
+                continue
+            hit = project_scoop_hit(paper, verified_fulltext=True)
             if hit is None or hit['id'] in seen:
                 continue
             seen.add(hit['id'])

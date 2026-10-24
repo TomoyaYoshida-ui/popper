@@ -13,6 +13,7 @@ from popper.research.runtime import ResearchRuntime
 
 def _paper(**extra):
     base = {
+        'paper_id': 'P-default01',
         'source': 'arxiv', 'arxiv_id': '2401.00099', 'title': 'Scoop neighbor',
         'abstract': 'A short scoop excerpt about prior art.',
         'content': 'FULLTEXT_MARKER ' * 40,
@@ -21,14 +22,25 @@ def _paper(**extra):
     return base
 
 
-def _write_scoop(root, *, status='completed', papers=None):
+def _write_scoop(root, *, status='completed', papers=None, selected=None, step5=None):
+    """Write a minimal scoop run. By default every step2 paper is selected+fulltext."""
     scoop = root / 'scoop'
     scoop.mkdir(parents=True)
+    papers = papers or [_paper()]
     (scoop / 'step7.json').write_text(
         json.dumps({'status': status, 'level': 5, 'label': 'No Overlap'}),
         encoding='utf-8')
     (scoop / 'step2.json').write_text(
-        json.dumps({'papers': papers or [_paper()]}), encoding='utf-8')
+        json.dumps({'papers': papers}), encoding='utf-8')
+    ids = [p['paper_id'] for p in papers if isinstance(p.get('paper_id'), str)]
+    if selected is None:
+        selected = list(ids)
+    (scoop / 'step4.json').write_text(
+        json.dumps({'candidate_paper_ids': selected}), encoding='utf-8')
+    if step5 is None:
+        step5 = [{'paper_id': pid, 'access': 'fulltext'} for pid in selected]
+    (scoop / 'step5.json').write_text(
+        json.dumps({'papers': step5}), encoding='utf-8')
     return scoop
 
 
@@ -71,6 +83,7 @@ def test_completed_scoop_hits_are_loaded_provisional_are_not(tmp_path):
     assert len(hits) == 1
     assert hits[0]['title'] == 'Done paper'
     assert hits[0]['id'].startswith('SCOOP-')
+    assert hits[0].get('verified_fulltext') is True
 
     provisional = tmp_path / 'prov'
     _write_scoop(provisional, status='provisional', papers=[_paper(title='Prov paper')])
@@ -82,11 +95,38 @@ def test_campaign_scoop_hits_are_bounded(tmp_path):
     scoop = project / 'integrations' / 'runs' / 'demo' / 'scoop'
     scoop.mkdir(parents=True)
     (scoop / 'step7.json').write_text(json.dumps({'status': 'completed'}), encoding='utf-8')
-    papers = [_paper(title=f'Scoop {i}', arxiv_id=f'2402.{i:05d}') for i in range(13)]
+    papers = [_paper(title=f'Scoop {i}', arxiv_id=f'2402.{i:05d}',
+                     paper_id=f'P-bound{i:02d}') for i in range(13)]
     (scoop / 'step2.json').write_text(json.dumps({'papers': papers}), encoding='utf-8')
+    ids = [p['paper_id'] for p in papers]
+    (scoop / 'step4.json').write_text(
+        json.dumps({'candidate_paper_ids': ids}), encoding='utf-8')
+    (scoop / 'step5.json').write_text(
+        json.dumps({'papers': [{'paper_id': pid, 'access': 'fulltext'} for pid in ids]}),
+        encoding='utf-8')
     hits = load_scoop_hits(project)
     assert len(hits) == 12
     assert all(hit['id'].startswith('SCOOP-') for hit in hits)
+
+
+def test_scoop_hits_exclude_unselected_step2_papers(tmp_path):
+    study = tmp_path / 'study'
+    kept = _paper(paper_id='P-kept', title='Deep paper', arxiv_id='2403.00001')
+    other = _paper(paper_id='P-skip', title='Search only', arxiv_id='2403.00002')
+    _write_scoop(study, papers=[kept, other], selected=['P-kept'],
+                 step5=[{'paper_id': 'P-kept', 'access': 'fulltext'}])
+    hits = load_scoop_hits(study)
+    assert len(hits) == 1
+    assert hits[0]['title'] == 'Deep paper'
+    assert hits[0]['verified_fulltext'] is True
+
+
+def test_abstract_only_selected_not_citable(tmp_path):
+    study = tmp_path / 'study'
+    paper = _paper(paper_id='P-abs', title='Abstract only paper')
+    _write_scoop(study, papers=[paper], selected=['P-abs'],
+                 step5=[{'paper_id': 'P-abs', 'access': 'abstract_only'}])
+    assert load_scoop_hits(study) == []
 
 
 def test_novelty_claim_requires_citable_ids_and_rejects_empty():

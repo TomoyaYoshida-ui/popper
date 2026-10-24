@@ -29,7 +29,7 @@ Ideation 的 novelty 与 `corpus_seed` 是非科学脚手架。没有真实检�
 
 Campaign 的 scoop 步骤缺模型、非 trusted-local 或配置不足时 outcome 为 skipped，不是 success；provisional（全文不足）为 retryable，都不能当成「查新已完成」。前端阶段「查新（Scoop）」只在 history 记 success 时标完成。
 
-已落盘且 `status=completed` 的 scoop 命中可按稳定 id（`SCOOP-*`）、来源、DOI/arXiv、标题与截断摘录进入规划上下文（最多 12 条）。provisional 报告不进入可引用集合。规划动作若声称依据查新 / scoop / prior art / 无撞车，必须引用上下文里允许的 `SCOOP-*` 或 `LIT-*` id；查新为空或仅 provisional、又无文献命中时，直接拒绝，不让模型写「查新完成/无撞车」。
+已落盘且 `status=completed` 的 scoop 命中可按稳定 id（`SCOOP-*`）、来源、DOI/arXiv、标题与截断摘录进入规划上下文（最多 12 条）。**可引用集合进一步收紧为**：completed ∩ step4 选中 ∩ step5 `access=fulltext`（匹配键 `paper_id`）；未选中或仅 abstract 的检索命中不可引用。provisional 报告不进入可引用集合。规划动作若声称依据查新 / scoop / prior art / 无撞车，必须引用上下文里允许的 `SCOOP-*` 或 `LIT-*` id；查新为空或仅 provisional、又无文献命中时，直接拒绝，不让模型写「查新完成/无撞车」。
 
 这仍不是审计级 FPR 验收产品，也不接第三方技能库或通用全文阅读。
 
