@@ -34,23 +34,30 @@ def initialize_demo(target, case="ode-convergence"):
             f"popper research init {project_name} demo-run",
             "popper research run demo-run --trusted-local",
             "popper research confirm demo-run --trusted-local",
+            "popper research status demo-run --brief",
         ],
         "note": "默认产品路径：已登记研究证据闭环。判断多为 inconclusive 属正常，"
-                "不代表策略优劣；确认集只打开一次。",
+                "不代表策略优劣；确认集只打开一次。一条命令可用 popper demo smoke。",
     }
 
 
 def summarize_research_status(status: dict) -> dict:
-    """Compact human-facing readout for the default demo path."""
+    """Compact human-facing readout for controller.status() or read_research_state()."""
     study = status.get("study") or {}
     judgments = status.get("judgments") or []
     claims = status.get("claims") or []
     latest = judgments[-1] if judgments else None
     claim = claims[-1] if claims else None
+    phase = status.get("phase") or status.get("lifecycle_phase")
+    if phase is None and study.get("status") == "concluded":
+        phase = "concluded"
+    integrity = status.get("integrity")
+    if not isinstance(integrity, dict):
+        integrity = (status.get("experiment_graph") or {}).get("integrity") or {}
     return {
-        "phase": status.get("phase"),
+        "phase": phase,
         "study_status": study.get("status"),
-        "integrity_ok": bool((status.get("integrity") or {}).get("ok")),
+        "integrity_ok": bool(integrity.get("ok")),
         "observations": len(status.get("observations") or []),
         "latest_judgment": (None if latest is None else {
             "scope": latest.get("scope"),
@@ -63,7 +70,7 @@ def summarize_research_status(status: dict) -> dict:
             "演示完成：phase=concluded 且 integrity_ok。"
             "科研判断与描述性 claim 可能不一致；以 judgment 三态为准，"
             "inconclusive 不是失败。"
-            if status.get("phase") == "concluded"
+            if phase == "concluded"
             else "尚未结束：继续 research run / confirm。"
         ),
     }

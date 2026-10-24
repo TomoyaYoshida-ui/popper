@@ -46,6 +46,8 @@ def test_lifecycle_projection_is_readonly_and_matches_controller(tmp_path):
     assert projected["lifecycle_phase"] == phase == "researching"
     assert projected["confirmation_mode"] == "local"
     assert projected["confirmation_resource_consumed"] is False
+    assert projected["status_brief"]["phase"] == "researching"
+    assert "尚未结束" in projected["status_brief"]["read_as"]
     assert fingerprints(project, run_dir) == before
 
 

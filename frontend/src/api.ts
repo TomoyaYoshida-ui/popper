@@ -221,6 +221,20 @@ export type ResearchRunState = {
   lifecycle_reason?: string
   confirmation_resource_consumed?: boolean
   confirmation_mode?: 'local' | 'signed_external'
+  status_brief?: {
+    phase?: string | null
+    study_status?: string | null
+    integrity_ok: boolean
+    observations: number
+    latest_judgment: {
+      scope?: string | null
+      new_judgment?: string | null
+      reason?: string | null
+    } | null
+    claim_status?: string | null
+    budget?: { family_id: string; cap: number; reserved: number; spent: number; available: number } | null
+    read_as: string
+  }
   reason?: string
   manifest?: { study_id: string; project?: string; study_ref: EntityRef; capability_mode?: string; policy?: string;
     repeat_unit?: string; repeat_values?: number[];

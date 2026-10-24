@@ -7,7 +7,8 @@ from pathlib import Path
 
 from popper.cli import main
 from popper.core import ProtocolError
-from popper.demo import CASES, FILES, initialize_demo, run_offline_smoke
+from popper.demo import CASES, FILES, initialize_demo, run_offline_smoke, summarize_research_status
+from popper.research.readout import read_research_state
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,7 @@ class DemoTests(unittest.TestCase):
                         f"popper research init {target.name} demo-run",
                         "popper research run demo-run --trusted-local",
                         "popper research confirm demo-run --trusted-local",
+                        "popper research status demo-run --brief",
                     ],
                 )
 
@@ -63,6 +65,17 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(summary["phase"], "concluded")
             self.assertTrue(summary["integrity_ok"])
             self.assertIn("inconclusive", summary["read_as"])
+            projected = read_research_state(result["run_dir"])
+            self.assertTrue(projected["ok"])
+            brief = projected["status_brief"]
+            self.assertEqual(brief["phase"], summary["phase"])
+            self.assertEqual(brief["integrity_ok"], summary["integrity_ok"])
+            self.assertEqual(brief["read_as"], summary["read_as"])
+            self.assertEqual(
+                brief["latest_judgment"] and brief["latest_judgment"].get("new_judgment"),
+                summary["latest_judgment"] and summary["latest_judgment"].get("new_judgment"),
+            )
+            self.assertEqual(brief, summarize_research_status(projected))
 
     def test_cli_smoke_and_status_brief(self):
         with tempfile.TemporaryDirectory() as temp:

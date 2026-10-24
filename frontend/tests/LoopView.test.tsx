@@ -20,6 +20,8 @@ describe('Study summary and resource navigation', () => {
     expect(screen.getByRole('heading', { name: '尚未登记 Research Study' })).toBeTruthy()
     expect(screen.getByText(/不是 Research Study 的独立确认 Claim/)).toBeTruthy()
     expect(screen.getByText('项目实验状态：实验完成')).toBeTruthy()
+    expect(screen.getAllByText('popper demo smoke').length).toBeGreaterThan(0)
+    expect(screen.getByText(/--trusted-local/)).toBeTruthy()
     expect(api.fetchArbor).not.toHaveBeenCalled()
   })
   it('opens generated bound drafts by explicit Study identity and keeps the raw technical panels collapsed', async () => {
@@ -70,5 +72,23 @@ describe('Study summary and resource navigation', () => {
     expect(details?.open).toBe(false)
     expect(within(details!).getByText('v7')).toBeTruthy()
     expect(within(details!).getByText('12 条')).toBeTruthy()
+  })
+  it('surfaces status_brief read_as and treats inconclusive as evidence gap not failure', () => {
+    const run = {
+      ok: true, run_dir: 'C:/synthetic/study-brief', state_version: 3, events_total: 4,
+      manifest: { study_id: 'S-brief', project: 'C:/synthetic' }, lifecycle_phase: 'concluded',
+      study: { question: 'Brief summary question', status: 'concluded' },
+      claims: [], observations: [{ entity_id: 'obs_1' }], hypotheses: [], revisions: [], decisions: [], reflections: [],
+      status_brief: {
+        phase: 'concluded', study_status: 'concluded', integrity_ok: true, observations: 1,
+        latest_judgment: { scope: 'confirmation', new_judgment: 'inconclusive', reason: 'delta below threshold' },
+        claim_status: null, budget: null,
+        read_as: '演示完成：phase=concluded 且 integrity_ok。科研判断与描述性 claim 可能不一致；以 judgment 三态为准，inconclusive 不是失败。',
+      },
+    }
+    render(<LoopView {...base} research={{ runs: [run], trusted_local: true, status_labels: { study: { concluded: '已结论' } } } as unknown as ResearchState} />)
+    expect(within(screen.getByLabelText('Study 摘要')).getByText('通过')).toBeTruthy()
+    expect(within(screen.getByLabelText('Study 摘要')).getByText('证据不足（不是失败）')).toBeTruthy()
+    expect(screen.getByRole('status').textContent).toMatch(/inconclusive 不是失败/)
   })
 })

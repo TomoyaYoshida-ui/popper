@@ -13,6 +13,10 @@ const lifecycleLabels: Record<string, string> = {
   blocked_external: '等待外部条件', integrity_failed: '完整性检查失败',
   external_confirmation_pending: '等待外部签名确认', external_preparation_incomplete: '外部确认准备中断', unavailable: '阶段待核对',
 }
+const judgmentBriefLabels: Record<string, string> = {
+  supported: '获得支持', refuted: '被反驳', inconclusive: '证据不足（不是失败）',
+  not_evaluated: '尚未评估',
+}
 /** 单个研究 run 的只读投影卡（/api/research，真实 research.sqlite）。 */
 type ResearchRunCardProps = { run: ResearchRunState; labels: ResearchState['status_labels']; trustedLocal: boolean; onResearchChanged: () => void; onOpenResource?: (resource: WorkbenchResource) => void; projectName?: string; projectDescription?: string }
 function ResearchRunCard(props: ResearchRunCardProps) {
@@ -295,7 +299,15 @@ function ResearchRunBody({ run, labels, trustedLocal, onResearchChanged, onOpenR
         <div><span>剩余预算</span><strong>{budget ? budget.available.toPrecision(3) : '—'}</strong></div>
         <div><span>观察</span><strong>{observations.length}</strong></div>
         <div><span>范围限定 Claim</span><strong>{claims.length}</strong></div>
+        {run.status_brief && <div><span>完整性</span><strong>{run.status_brief.integrity_ok ? '通过' : '需核对'}</strong></div>}
+        {run.status_brief?.latest_judgment?.new_judgment && (
+          <div><span>最新判断</span><strong>{judgmentBriefLabels[run.status_brief.latest_judgment.new_judgment]
+            ?? run.status_brief.latest_judgment.new_judgment}</strong></div>
+        )}
       </div>
+      {run.status_brief?.read_as && (
+        <p className="muted study-brief-read" role="status">{run.status_brief.read_as}</p>
+      )}
       <details className="section research-records"><summary>后继研究 · 使用新的独立确认资源</summary>
         <button className="mini" type="button" disabled={!trustedLocal || followupBusy}
                 onClick={() => void openFollowup()}>创建后继 Study</button>
@@ -874,8 +886,12 @@ export function LoopView({ research, workspaceKey, selectedRunDir, onSelectRun, 
           {projectSummary?.description && <p>{projectSummary.description}</p>}
           {projectSummary?.phaseLabel && <p className="muted">项目实验状态：{projectSummary.phaseLabel}</p>}
           {projectSummary?.legacyResult && <div className="notice"><strong>已有项目实验结果</strong><p>改善量 {projectSummary.legacyResult.delta.toPrecision(4)}{projectSummary.legacyResult.threshold != null ? ` · 预注册阈值 ${projectSummary.legacyResult.threshold}` : ''}</p>{projectSummary.legacyResult.scope && <p className="muted">{projectSummary.legacyResult.scope}</p>}<p>这是项目实验的已有结果，不是 Research Study 的独立确认 Claim。两者保留独立的研究与审批记录。</p></div>}
-          <p>先校验并预注册目标项目，再登记 Study。已完成的项目实验不能被当成尚未开始的 Study；如需后续研究，请准备新的协议和独立确认资源。</p>
-          <details><summary>加载已有 Study 的命令</summary><p><span className="metric">popper serve &lt;项目&gt; --research-run &lt;研究目录&gt;</span></p></details>
+          <p>默认离线演示先跑 <span className="metric">popper demo smoke</span>，再用 serve 挂上研究目录。已完成的项目实验不能被当成尚未开始的 Study。</p>
+          <details open><summary>默认演示与加载命令</summary>
+            <p><span className="metric">popper demo smoke</span></p>
+            <p className="muted">或逐步：demo init → research init / run / confirm → research status --brief</p>
+            <p><span className="metric">popper serve &lt;项目&gt; --research-run &lt;研究目录&gt; --trusted-local</span></p>
+          </details>
           {research.trusted_local ? <button type="button" className="btn primary" onClick={() => setSection('prepare')}>准备项目与协议</button>
             : <p>当前工作台为只读模式；需要在受信任的本地项目中启动写入模式才能新建 Study。</p>}
         </div>

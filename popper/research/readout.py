@@ -262,7 +262,7 @@ def _project(conn, study_id, manifest, run_dir) -> dict:
                          for row in entities['claim']]
     claim_card = _claim_card_view(manifest, split_confirmation)
     lifecycle = _lifecycle_projection(manifest, study, entities["decision"], run_dir)
-    return {"ok": True,
+    projected = {"ok": True,
             **lifecycle,
             "manifest": {"study_id": study_id,
                          "project": manifest.get("project"),
@@ -285,6 +285,9 @@ def _project(conn, study_id, manifest, run_dir) -> dict:
             'judgments': entities['judgment'],
             "budget": budget, "events_total": events_total,
             "experiment_graph": graph, "claim_card": claim_card}
+    from ..demo import summarize_research_status
+    projected["status_brief"] = summarize_research_status(projected)
+    return projected
 
 
 def _claim_card_view(manifest, split_confirmation):
