@@ -1,7 +1,7 @@
 # Scoop 离线引文绑定核验（切片 B）
 
 日期：2026-10-25  
-状态：待审  
+状态：已实现  
 前置：切片 A（`be2210f`，可引用面 = completed ∩ selected ∩ fulltext）  
 范围：把 step5 的**字面引文绑定规则**抽成可离线复用的纯函数，并接到 A3 幻觉率子指标的 fixture 路径；**不**宣称审计级 scoop FPR
 

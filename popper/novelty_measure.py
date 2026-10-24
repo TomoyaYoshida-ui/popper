@@ -4,15 +4,17 @@
 - FPR：把"实际无覆盖/无矛盾"的样本误判为有覆盖/有矛盾的比率。
 - 反证幻觉率：反证检索声称"已有覆盖"但其证据不成立（% fake）的比率。
 - 全部用确定性 fixture（无需 LLM key），可离线复现。
-- 幻觉率依赖真实全文核验后端：无后端时如实 not_available（None），不编造数值。
+- 幻觉率依赖全文核验后端：无后端时如实 not_available（None），不编造数值。
+- 可选 quote_corpus：用与 Scoop step5 相同的字面引文绑定规则离线测幻觉率；
+  real_novelty_fpr 仍为 null（不是审计级 Scoop FPR 产品）。
 """
 from __future__ import annotations
 
-import json
 import random
 from pathlib import Path
 
-from .core import digest, write_json
+from .core import ProtocolError, digest, read_json, write_json
+from .quote_binding import passage_bound_to_fulltext
 from .review import RejectionReview
 
 
@@ -56,8 +58,50 @@ def measure_fpr(samples):
     return fp / len(negatives) if negatives else 0.0
 
 
+def make_quote_binding_verifier(corpus, claims):
+    """Build verifier(literature_id) -> bool using Scoop-identical quote binding.
+
+    ``corpus`` maps literature_id -> fulltext. ``claims`` maps literature_id ->
+    closest_passage. Missing text/passage or unbound passage => False.
+    """
+    if not isinstance(corpus, dict) or not isinstance(claims, dict):
+        raise ProtocolError("quote corpus/claims 必须是对象")
+
+    def verifier(literature_id):
+        if not isinstance(literature_id, str):
+            return False
+        content = corpus.get(literature_id)
+        passage = claims.get(literature_id)
+        if not isinstance(content, str) or not isinstance(passage, str):
+            return False
+        return passage_bound_to_fulltext(passage, content)
+
+    return verifier
+
+
+def _default_quote_claims(corpus, n_candidates):
+    """For resolvable fixture ids: alternate bound vs unbound passages."""
+    claims = {}
+    for i in range(n_candidates):
+        if i % 2 != 0:
+            continue
+        lit = "10.1101/fixed-{}".format(i)
+        text = corpus.get(lit)
+        if not isinstance(text, str):
+            continue
+        # i % 4 == 0: bind a real 40-char span; else: deliberate unbound quote.
+        if i % 4 == 0:
+            span = text.strip()
+            if len(span) < 40:
+                continue
+            claims[lit] = span[:40]
+        else:
+            claims[lit] = "Q" * 40
+    return claims
+
+
 def measure_hallucination_rate(rng, n_candidates, verifier=None):
-    """反证幻觉率：需要真实全文核验后端；无后端时如实 not_available，不编造数值。
+    """反证幻觉率：需要全文核验后端；无后端时如实 not_available，不编造数值。
 
     构造一组「已有覆盖」声明：一半绑定可解析占位文献 id（待核验），
     一半绑定不可解析 id（确定性可捕获的幻觉）。
@@ -88,15 +132,33 @@ def measure_hallucination_rate(rng, n_candidates, verifier=None):
     return base
 
 
-def run(case_dir, n_negative=40, rng=None, verifier=None):
-    """运行受控测量，输出 FPR 与幻觉率并落盘 case_dir/a3_report.json。"""
+def run(case_dir, n_negative=40, rng=None, verifier=None, quote_corpus=None,
+        quote_claims=None):
+    """运行受控测量，输出 FPR 与幻觉率并落盘 case_dir/a3_report.json。
+
+    ``quote_corpus``：可选 {literature_id: fulltext}。提供时用 Scoop 同款引文绑定
+    规则构造 verifier（复用 reverse_citation_hallucination_rate 字段）。
+    ``real_novelty_fpr`` 始终为 null。
+    """
     rng = rng or random.Random(7)
     case_dir = Path(case_dir)
     case_dir.mkdir(parents=True, exist_ok=True)
+    if quote_corpus is not None:
+        if verifier is not None:
+            raise ProtocolError("quote_corpus 与 verifier 不能同时提供")
+        if isinstance(quote_corpus, (str, Path)):
+            quote_corpus = read_json(quote_corpus)
+        claims = quote_claims if quote_claims is not None else _default_quote_claims(
+            quote_corpus, n_negative)
+        verifier = make_quote_binding_verifier(quote_corpus, claims)
     samples = _sample(n_negative, rng)
     fpr = measure_fpr(samples)
     hyp = measure_hallucination_rate(rng, n_candidates=n_negative, verifier=verifier)
     hallucination_available = hyp["hallucination_rate"] is not None
+    method = "确定性 fixture（详见代码）；未接 LLM/检索后端"
+    if quote_corpus is not None:
+        method = ("确定性 fixture + 离线引文绑定核验（与 Scoop step5 同规则）；"
+                  "real_novelty_fpr 未测，非审计级 Scoop FPR")
     report = {
         "schema": "a3-1.0",
         "controlled_corpus": {"n_negative_hard_samples": n_negative,
@@ -111,7 +173,7 @@ def run(case_dir, n_negative=40, rng=None, verifier=None):
         "pass": (fpr <= 0.1 and hyp["hallucination_rate"] <= 0.10)
                 if hallucination_available else None,
         "pass_criteria": "FPR ≤0.1 且反证幻觉率 ≤10%；幻觉率未接入核验后端时如实不可测，不判 pass",
-        "method": "确定性 fixture（详见代码）；未接 LLM/检索后端",
+        "method": method,
     }
     write_json(case_dir / "a3_report.json", report)
     return report

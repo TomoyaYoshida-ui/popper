@@ -2,8 +2,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from popper.novelty_measure import (measure_fpr, measure_hallucination_rate,
-                                    _sample, run)
+from popper.core import ProtocolError
+from popper.novelty_measure import (
+    make_quote_binding_verifier, measure_fpr, measure_hallucination_rate,
+    _sample, run,
+)
 
 
 class NoveltyMeasureTests(unittest.TestCase):
@@ -34,6 +37,7 @@ class NoveltyMeasureTests(unittest.TestCase):
         self.assertTrue((self.dir / "a3_report.json").is_file())
         # 诚实标注方法为确定性 fixture
         self.assertIn("确定性", report["method"])
+        self.assertIsNone(report["real_novelty_fpr"])
 
     def test_hallucination_placeholder_removed(self):
         # 无全文核验后端时反证幻觉率必须如实 not_available，
@@ -47,6 +51,40 @@ class NoveltyMeasureTests(unittest.TestCase):
         report = run(self.dir, n_negative=20)
         self.assertIsNone(report["reverse_citation_hallucination_rate"])
         self.assertEqual("not_available", report["hallucination_status"])
+
+    def test_quote_binding_verifier_accepts_bound_rejects_unbound(self):
+        text = "Alpha beta gamma delta epsilon zeta eta theta iota kappa."
+        corpus = {"10.1101/fixed-0": text}
+        claims = {
+            "10.1101/fixed-0": text[:40],
+            "10.1101/fixed-2": "Q" * 40,
+        }
+        verifier = make_quote_binding_verifier(corpus, claims)
+        self.assertTrue(verifier("10.1101/fixed-0"))
+        self.assertFalse(verifier("10.1101/fixed-2"))
+        self.assertFalse(verifier("missing"))
+
+    def test_run_with_quote_corpus_measures_hallucination_rate(self):
+        n = 8
+        corpus = {}
+        for i in range(0, n, 2):
+            corpus["10.1101/fixed-{}".format(i)] = (
+                "Bound methodological fixture text for quote binding "
+                "case {:02d} with enough characters.".format(i)
+            )
+        report = run(self.dir / "quoted", n_negative=n, quote_corpus=corpus)
+        self.assertEqual("measured", report["hallucination_status"])
+        self.assertIsNotNone(report["reverse_citation_hallucination_rate"])
+        self.assertIsNone(report["real_novelty_fpr"])
+        self.assertIn("引文绑定", report["method"])
+        # i=0,4 bound; i=2,6 unbound among resolvable (4 resolvable / 8 total)
+        # leaked = 2 unbound → rate = 2/8 = 0.25
+        self.assertEqual(0.25, report["reverse_citation_hallucination_rate"])
+
+    def test_quote_corpus_and_verifier_conflict(self):
+        with self.assertRaises(ProtocolError):
+            run(self.dir / "conflict", n_negative=4, verifier=lambda _: True,
+                quote_corpus={"10.1101/fixed-0": "x" * 40})
 
 
 if __name__ == "__main__":

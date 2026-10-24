@@ -236,13 +236,13 @@ def fetch_pdf_text(url, output_dir, paper_id):
 
 
 def _verify_fulltext(llm, candidate, paper, content):
+    from .quote_binding import passage_bound_to_fulltext
     payload = {"candidate": candidate, "paper": paper, "text": content}
     prompt = ("Verify the four axes from this paper text. Return JSON with paper_id, "
               "axis_matches object using exactly problem_framing, core_mechanism, key_insight, application_domain "
               "and match/partial/differ values, assumptions_scope, closest_passage. "
               "closest_passage must be an exact consecutive quotation of 20 to 300 characters from the supplied text. "
               "Do not paraphrase or join non-adjacent text from PDF columns.")
-    normalize = lambda text: " ".join(text.split())
     from contextlib import nullcontext
     from inspect import getattr_static
     scope = (llm.logical_operation(max_attempts=2)
@@ -255,8 +255,7 @@ def _verify_fulltext(llm, candidate, paper, content):
             if (verified.get("paper_id") == paper["paper_id"] and isinstance(matches, dict)
                     and set(matches) == set(AXES)
                     and all(value in {"match", "partial", "differ"} for value in matches.values())
-                    and isinstance(passage, str) and 20 <= len(passage.strip()) <= 300
-                    and normalize(passage) in normalize(content)):
+                    and passage_bound_to_fulltext(passage, content)):
                 return {"axis_matches": matches, "assumptions_scope": verified.get("assumptions_scope"),
                         "closest_passage": passage}
             if attempt == 0:

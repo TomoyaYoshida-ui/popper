@@ -31,7 +31,7 @@ Campaign 的 scoop 步骤缺模型、非 trusted-local 或配置不足时 outcom
 
 已落盘且 `status=completed` 的 scoop 命中可按稳定 id（`SCOOP-*`）、来源、DOI/arXiv、标题与截断摘录进入规划上下文（最多 12 条）。**可引用集合进一步收紧为**：completed ∩ step4 选中 ∩ step5 `access=fulltext`（匹配键 `paper_id`）；未选中或仅 abstract 的检索命中不可引用。provisional 报告不进入可引用集合。规划动作若声称依据查新 / scoop / prior art / 无撞车，必须引用上下文里允许的 `SCOOP-*` 或 `LIT-*` id；查新为空或仅 provisional、又无文献命中时，直接拒绝，不让模型写「查新完成/无撞车」。
 
-这仍不是审计级 FPR 验收产品，也不接第三方技能库或通用全文阅读。
+这仍不是审计级 FPR 验收产品，也不接第三方技能库或通用全文阅读。离线 A3 可用 `--quote-corpus` 按 Scoop step5 同款字面引文绑定规则测幻觉率子指标；`real_novelty_fpr` 仍为未测，不能当成 Scoop 管线 FPR 验收。
 
 ## 有界全文摘录（已下载公开 HTTPS 产物）
 

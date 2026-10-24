@@ -360,6 +360,9 @@ def main(argv=None):
     eval_report.add_argument("project_dir", type=Path)
     eval_a3 = evaluate_commands.add_parser("a3", help="A3 查新可靠性：受控语料 FPR + 反证幻觉率（确定性）")
     eval_a3.add_argument("case_dir", type=Path)
+    eval_a3.add_argument(
+        "--quote-corpus", type=Path, default=None,
+        help="可选 JSON：literature_id → 全文；用 Scoop 同款引文绑定规则测幻觉率（仍非审计 Scoop FPR）")
     review = research_commands.add_parser("review-risk", help="拒稿风险预检（R1-R7 + 7-mode）")
     review.add_argument("--report", type=Path, default=None,
                         help="风险输入 report JSON（各风险判定字段）")
@@ -1262,7 +1265,7 @@ def main(argv=None):
                       "scope": "顶层文件清单；不自动推断实验语义"}
         elif args.command == "experiment" and args.experiment_command == "evaluate":
             if args.evaluate_command == "a3":
-                result = run_a3(args.case_dir)
+                result = run_a3(args.case_dir, quote_corpus=args.quote_corpus)
             else:
                 evaluator = Evaluator(args.project_dir)
                 if args.evaluate_command == "replay":
