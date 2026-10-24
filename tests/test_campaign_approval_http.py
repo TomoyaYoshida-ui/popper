@@ -215,10 +215,20 @@ class CampaignApprovalHttpTests(unittest.TestCase):
     def test_approve_with_materialize_realizes_manuscript(self):
         """批准时透传 materialize → 恢复周期内真实物化稿件到 deliverables。
 
-        去掉 proposal 后 variant 如实 skipped（不计入 campaign completed）；
-        只要 materialize 真正跑完并落盘即可。
+        去掉 proposal 后 variant 如实 skipped（不计入 campaign completed）。
+        权威硬收敛后真实 dev/freeze/confirm 须 research-runtime/v1；本用例只验
+        materialize 透传，故科学步骤用桩，variant/materialize 走真实节点。
         """
-        self._start(trusted=True)  # 默认 BUILTIN_NODES，真实 dev/freeze/confirm/materialize
+        from popper.campaign_nodes import materialize_node, variant_node
+        self._start(trusted=True)
+        stubs = FakeNodes()
+        self.server._campaign_nodes = {
+            "dev": stubs.node("dev"),
+            "variant": variant_node,
+            "freeze": stubs.node("freeze"),
+            "confirm": stubs.node("confirm"),
+            "materialize": materialize_node,
+        }
         # 移除 proposal，让 variant（code-materialize）如实跳过，专注验证 materialize 透传
         shutil.rmtree(self.camp / "proposal")
         materialize = {
@@ -236,7 +246,9 @@ class CampaignApprovalHttpTests(unittest.TestCase):
         for item in st.get("history") or []:
             latest[item["step"]] = item.get("outcome")
         self.assertEqual("skipped", latest.get("variant"))
-        self.assertEqual("success", latest.get("materialize"))
+        self.assertEqual("success", latest.get("materialize"),
+                         f"history={st.get('history')} job={self.server.campaign_job}")
+        self.assertEqual(["dev", "freeze", "confirm"], stubs.calls)
         # 有步骤 skipped → campaign 保持 running（跳过≠整链完成）
         self.assertEqual("running", st["status"])
         # 稿件真正物化并登记到 workspace
