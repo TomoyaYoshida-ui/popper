@@ -4,7 +4,7 @@
 
 **产品策略（故意保留）**：入口可以有 registered / adaptive / campaign 三种，**科学权威只有一条**（Controller + `scientific_execution` / 授权闸）。不把三套实现揉成一个巨类——对用户更好用，也更不容易改崩基准。
 
-**演示冻结**：默认只演示已登记研究的证据闭环。一条命令：`popper demo smoke`（或逐步 `demo init` → `research init/run/confirm`，再用 `research status --brief` 读摘要）。审计级查新 FPR、接第三方技能库、开放写论文、物理并类——故意延后。验收见 `docs/maintenance/working-tree-verification.md`。
+**演示冻结**：默认只演示已登记研究的证据闭环。一条命令：`popper demo smoke`（或逐步 `demo init` → `research init/run/confirm`，再用 `research status --brief` 读摘要）。工作台 `/api/research` 投影含同款 `status_brief`（`read_as` / 最新判断 / 完整性）；空 Study 引导对齐 `demo smoke` → `serve --research-run`。审计级查新 FPR、接第三方技能库、开放写论文、物理并类——故意延后。验收见 `docs/maintenance/working-tree-verification.md`。
 
 ## 现在能演示的
 
