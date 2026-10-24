@@ -28,6 +28,11 @@
 | 稿件写作门禁（`test_manuscript_gate` + materialize/http/campaign materialize 相关） | **38 passed**, 1 skipped（约 15s）。有有效标记+已知 id 通过；无标记或假 id 拒绝物化。 |
 | **裸全量（不 ignore Adaptive）** `python -m pytest -q --tb=line`（2026-10-23，HEAD `5dbe734`，autopilot，Windows） | **1832 passed**, **32 skipped**, 764 subtests passed（约 15m22s）。**0 failed**。含 Adaptive；Windows 上 linux sandbox 等仍为 skip。全文投影仍仅 scoop 落盘；`fulltext_context` 去掉宿主相关 `is_absolute()`。 |
 
+### 2026-10-24 物化审批冒烟（全量 1 fail）
+
+- **根因**：`test_approve_with_materialize_realizes_manuscript` 在权威硬收敛后仍走真实 `BUILTIN_NODES` 的 `dev`，裸 Experiment 项目缺 `planning_protocol=research-runtime/v1` → `CampaignFatal`，`materialize` 从未入 history。
+- **修**：该用例对 `dev`/`freeze`/`confirm` 打桩，保留真实 `variant_node`（验证 skipped）与 `materialize_node`（验证透传落盘）。科学权威不在本用例里用假路径绕过闸——只是不把「审批透传稿件」绑成整条 Controller 确认链。
+
 ### 本轮修复后的复验（全量里那 3 fail + 1 error）
 
 | 命令 | 结果 |
