@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..core import ProtocolError, digest, read_json
+from ..scoop import _paper_id
 from .literature_context import CLAIM_FIELDS, EXCERPT_CHARS, project_paper
 
 SCOOP_LIMIT = 12
@@ -188,8 +189,12 @@ def load_scoop_hits(*roots, limit=SCOOP_LIMIT):
         for paper in papers:
             if not isinstance(paper, dict):
                 continue
+            # ScoopRun assigns paper_id in-memory for step4/5 but step2 JSON
+            # usually stores raw search hits without that field — recompute.
             paper_id = paper.get('paper_id')
-            if not isinstance(paper_id, str) or paper_id not in allowed:
+            if not isinstance(paper_id, str) or not paper_id.strip():
+                paper_id = _paper_id(paper)
+            if paper_id not in allowed:
                 continue
             hit = project_scoop_hit(paper, verified_fulltext=True)
             if hit is None or hit['id'] in seen:

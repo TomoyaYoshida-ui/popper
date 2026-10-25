@@ -40,7 +40,7 @@
   - 读 `step5.json` → `papers` 中 `access == "fulltext"` 的 `paper_id`
   - 返回二者交集；任一文件缺失/损坏 → 空集（该 run 不贡献命中）
 - `load_scoop_hits`：在 completed 前提下，只对 step2 中 **`paper_id` 落在上述集合** 的论文调用 `project_scoop_hit`
-  - 匹配键固定为管线字段 `paper_id`（见 `scoop.py` `_paper_id` / step4·5）；缺 `paper_id` 的 step2 条目跳过，不得用 title/DOI 冒充
+  - 匹配键固定为管线字段 `paper_id`（见 `scoop.py` `_paper_id` / step4·5）；step2 缺 `paper_id` 时用 `_paper_id(paper)` 重算（与 ScoopRun 一致），不得用 title/DOI 字符串冒充别的键
 - 模块 docstring 写明：citable ⊂ completed ∩ selected ∩ fulltext；not audit-grade FPR
 
 ### 文档
