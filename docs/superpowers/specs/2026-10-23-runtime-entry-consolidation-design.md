@@ -21,4 +21,10 @@
 
 ## 故意不开
 
-审计级 scoop FPR、第三方技能库、开放写论文、跨周长程记忆、三 runtime 物理并类。
+生产模型 / 开放检索上的审计级 scoop 证书、第三方技能库、开放写论文、跨周长程记忆、三 runtime 物理并类。
+
+## 查新硬化（已做，仍非审计证书）
+
+- 可引用面：completed ∩ selected ∩ fulltext（`be2210f`）
+- 离线引文绑定：与 step5 同规则（`2c68fab`）
+- 受控 fixture overlap FPR：`controlled_scoop_overlap_fpr` / adversarial 探针（`5d9e6f1`）；`real_novelty_fpr` 仍为 null

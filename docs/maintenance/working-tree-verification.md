@@ -2,14 +2,17 @@
 
 对应分支 `autopilot` 上已提交的验收，不是 `docs/maintenance/completion.md` 里的历史快照数字。
 
-**演示 + 权威收敛点**：`32622ae`（科学硬闸）→ `81037a4`（`demo smoke` / `status --brief`）→ `1cbbf5b`（工作台 `status_brief`）。工作树应干净并与 `origin/autopilot` 对齐。
+**演示 + 权威收敛点**：`32622ae`（科学硬闸）→ `81037a4`（`demo smoke`）→ `1cbbf5b`（工作台 `status_brief`）。  
+**查新硬化**：`be2210f`（可引用面）→ `2c68fab`（引文绑定）→ `5d9e6f1`（受控 Scoop overlap FPR）。工作树应干净并与 `origin/autopilot` 对齐。
 
-日期：2026-10-24（本机 Windows）。
+日期：2026-10-25（本机 Windows）。
 
 ## 命令与结果
 
 | 命令 | 结果 |
 |------|------|
+| Scoop 可引用面 + 引文绑定 + FPR（`test_scoop_context` + `test_quote_binding` + `test_novelty_measure` + `test_scoop_measure`） | **切片 C 后**：`test_scoop_measure` **4→5 passed**；oracle FPR=0，adversarial FPR=1.0；FP completed 可投影 `SCOOP-*`。 |
+| `popper experiment evaluate scoop-fpr tests/fixtures/scoop-controlled` | 写出 `scoop_fpr_report.json`；`real_novelty_fpr` 仍为 null。 |
 | **裸全量** `python -m pytest -q --tb=line`（2026-10-24，HEAD `1cbbf5b`） | **1840 passed**, **32 skipped**, 764 subtests；**1 failed**：`test_approve_with_materialize_realizes_manuscript`（权威收口后真实 `dev` 无 `research-runtime/v1` 即 fatal，materialize 未跑到）。见下「已修」。 |
 | 修后 `tests/test_campaign_approval_http.py` | **全文件通过**（物化冒烟：科学步骤用桩，真实 `variant`/`materialize`）。 |
 | `cd frontend && npm test`（vitest run，2026-10-24） | **25 files / 170 tests passed**（含 LoopView `status_brief`）。 |
