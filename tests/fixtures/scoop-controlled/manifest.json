@@ -1,0 +1,9 @@
+{
+  "schema": "scoop-controlled-1.0",
+  "cases": [
+    {"id": "neg-near-miss-a", "llm_profile": "oracle"},
+    {"id": "neg-near-miss-b", "llm_profile": "oracle"},
+    {"id": "pos-clear-overlap", "llm_profile": "oracle"},
+    {"id": "neg-near-miss-a-adv", "case_dir": "neg-near-miss-a", "llm_profile": "adversarial_partial"}
+  ]
+}

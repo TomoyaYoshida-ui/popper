@@ -1,0 +1,5 @@
+This digest pipeline paraphrases PDF columns into short blurbs for humans.
+It never requires consecutive literal quotations of twenty to three hundred
+characters from stored fulltext artifacts. Padding text ensures offline
+fixture quotation binding has a stable span to copy when the oracle profile
+emits a Verify response during controlled Scoop overlap measurement.

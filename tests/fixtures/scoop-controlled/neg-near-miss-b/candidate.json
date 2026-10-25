@@ -1,0 +1,5 @@
+{
+  "title": "Literal quotation gates for downloaded fulltext",
+  "core_mechanism": "Require consecutive 20-300 character passages from stored PDF text",
+  "falsification_prediction": "Paraphrased quotes must fail binding and keep scoop provisional"
+}

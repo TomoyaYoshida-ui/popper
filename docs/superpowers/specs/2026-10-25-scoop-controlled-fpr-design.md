@@ -1,7 +1,7 @@
 # 受控 Scoop 重叠 FPR（切片 C）
 
 日期：2026-10-25  
-状态：待审  
+状态：已实现  
 前置：切片 A（可引用面）+ 切片 B（离线引文绑定）  
 范围：在**固定 fixture + 注入 search/llm/fetch** 上跑端到端 `ScoopRun`，报告独立字段 `controlled_scoop_overlap_fpr`；**不**填 `real_novelty_fpr`，不宣称审计级查新
 

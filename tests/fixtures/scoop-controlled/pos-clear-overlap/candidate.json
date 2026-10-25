@@ -1,0 +1,5 @@
+{
+  "title": "One-shot confirmation seals for registered research",
+  "core_mechanism": "Open the confirmation set only once after development scoring",
+  "falsification_prediction": "Re-opening confirmation must be protocol-fatal"
+}

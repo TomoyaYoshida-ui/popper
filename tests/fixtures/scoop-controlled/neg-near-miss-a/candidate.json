@@ -1,0 +1,5 @@
+{
+  "title": "Bounded graph evidence loops for registered claims",
+  "core_mechanism": "Seal confirmation sets before scoring deltas on frozen evaluators",
+  "falsification_prediction": "If confirmation opens twice, oriented delta must be rejected"
+}

@@ -1,0 +1,9 @@
+[
+  {
+    "doi": "10.fixture/near-miss-b",
+    "title": "Abstractive summarization for paper digests",
+    "abstract": "Summaries may paraphrase adjacent columns from PDF layouts.",
+    "url": "https://fixture.example/near-miss-b.pdf",
+    "year": 2023
+  }
+]

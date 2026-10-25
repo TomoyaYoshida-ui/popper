@@ -1,0 +1,5 @@
+This methodological passage explains keyword triage for screening only.
+It does not seal confirmation sets, does not freeze evaluators, and never
+binds oriented deltas to a one-shot confirmation resource. Extra padding
+keeps the excerpt long enough for literal quotation binding checks during
+offline Scoop fixture runs without contacting the network.

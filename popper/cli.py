@@ -22,6 +22,7 @@ from .ideation import IdeationRun
 from .isolation import isolation_status
 from .memory import Memory
 from .novelty_measure import run as run_a3
+from .scoop_measure import run as run_scoop_fpr
 from .orchestrator import Orchestrator
 from .materialize import Materializer
 from .manuscript_flow import ManuscriptFlow
@@ -363,6 +364,13 @@ def main(argv=None):
     eval_a3.add_argument(
         "--quote-corpus", type=Path, default=None,
         help="可选 JSON：literature_id → 全文；用 Scoop 同款引文绑定规则测幻觉率（仍非审计 Scoop FPR）")
+    eval_scoop_fpr = evaluate_commands.add_parser(
+        "scoop-fpr",
+        help="受控 Scoop 重叠 FPR（离线 fixture ScoopRun；与 A3 分离，非审计级）")
+    eval_scoop_fpr.add_argument("corpus_dir", type=Path,
+                                help="含 manifest.json 的 scoop-controlled 语料目录")
+    eval_scoop_fpr.add_argument("--out-dir", type=Path, default=None,
+                                help="报告输出目录（默认写 corpus_dir/scoop_fpr_report.json）")
     review = research_commands.add_parser("review-risk", help="拒稿风险预检（R1-R7 + 7-mode）")
     review.add_argument("--report", type=Path, default=None,
                         help="风险输入 report JSON（各风险判定字段）")
@@ -1266,6 +1274,8 @@ def main(argv=None):
         elif args.command == "experiment" and args.experiment_command == "evaluate":
             if args.evaluate_command == "a3":
                 result = run_a3(args.case_dir, quote_corpus=args.quote_corpus)
+            elif args.evaluate_command == "scoop-fpr":
+                result = run_scoop_fpr(args.corpus_dir, out_dir=args.out_dir)
             else:
                 evaluator = Evaluator(args.project_dir)
                 if args.evaluate_command == "replay":

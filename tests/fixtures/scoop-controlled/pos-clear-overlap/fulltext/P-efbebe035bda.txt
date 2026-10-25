@@ -1,0 +1,5 @@
+This methodological passage explains opening a held-out confirmation set
+exactly once after development scoring in a preregistered experiment loop.
+Re-opening confirmation is treated as a protocol failure. Extra padding
+keeps the offline fixture quotation long enough for Scoop step5 binding
+while the oracle compare profile reports matching axes for sanity checks.
