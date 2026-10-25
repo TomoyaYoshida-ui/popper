@@ -518,6 +518,16 @@ def main(argv=None):
     mem_eject.add_argument("--target", type=int, default=0)
     mem_snap = memory_commands.add_parser("snapshot")
     mem_snap.add_argument("memory_dir", type=Path)
+    mem_note = memory_commands.add_parser(
+        "note", help="写入同 run_dir 有界笔记；resume_checkpoint 为单槽覆盖")
+    mem_note.add_argument("run_dir", type=Path, help="研究 run_dir（笔记落在 run_dir/memory）")
+    mem_note.add_argument("--kind", default="resume_checkpoint",
+                          choices=("resume_checkpoint", "action_note", "hypothesis_revision",
+                                   "judgment_outcome", "rejection_reason"))
+    mem_note.add_argument("--text", required=True)
+    mem_note.add_argument("--ref", action="append", default=[],
+                          help="可重复；checkpoint 仅允许 OBS-/LIT-/SCOOP-/FT-*")
+    mem_note.add_argument("--study-id", default=None)
     observe = research_commands.add_parser("observe", help="V1.5 可观测性：trace / spans / privacy")
     observe_commands = observe.add_subparsers(dest="observe_command", required=True)
     obs_trace = observe_commands.add_parser("trace")
@@ -996,25 +1006,33 @@ def main(argv=None):
                 else:
                     result = orch._load()
             elif args.research_command == "memory":
-                mem = Memory(args.memory_dir)
-                if args.memory_command == "working":
-                    if args.clear:
-                        mem.clear_working()
-                        result = {"status": "cleared"}
-                    else:
-                        mem.set_working(args.text)
-                        result = {"status": "set", "bytes": mem.working_size()}
-                elif args.memory_command == "summary":
-                    if args.json:
-                        mem.set_summary(read_json(args.json))
-                    result = {"summary": mem.summary()}
-                elif args.memory_command == "push":
-                    result = mem.externalize(args.content, args.importance)
-                elif args.memory_command == "evict":
-                    evicted = mem.evict(args.target)
-                    result = {"evicted": evicted, "count": len(evicted)}
+                if args.memory_command == "note":
+                    from .research.memory_context import record_memory_entry
+                    entry_id = record_memory_entry(
+                        args.run_dir, args.kind, args.text,
+                        refs=args.ref, study_id=args.study_id)
+                    result = {"status": "recorded", "id": entry_id, "kind": args.kind,
+                              "run_dir": str(args.run_dir)}
                 else:
-                    result = mem.snapshot()
+                    mem = Memory(args.memory_dir)
+                    if args.memory_command == "working":
+                        if args.clear:
+                            mem.clear_working()
+                            result = {"status": "cleared"}
+                        else:
+                            mem.set_working(args.text)
+                            result = {"status": "set", "bytes": mem.working_size()}
+                    elif args.memory_command == "summary":
+                        if args.json:
+                            mem.set_summary(read_json(args.json))
+                        result = {"summary": mem.summary()}
+                    elif args.memory_command == "push":
+                        result = mem.externalize(args.content, args.importance)
+                    elif args.memory_command == "evict":
+                        evicted = mem.evict(args.target)
+                        result = {"evicted": evicted, "count": len(evicted)}
+                    else:
+                        result = mem.snapshot()
             elif args.research_command == "observe":
                 tracer = Tracer(args.run_dir)
                 if args.observe_command == "trace":
@@ -1143,6 +1161,16 @@ def main(argv=None):
                 else:
                     result = research_controller.status()
                     if getattr(args, "brief", False):
+                        from .research.resume_context import project_resume_context
+                        result = {
+                            **result,
+                            "resume": project_resume_context(
+                                args.run_dir,
+                                phase=result.get("phase"),
+                                integrity_ok=bool(
+                                    (result.get("integrity") or {}).get("ok")),
+                            ),
+                        }
                         result = summarize_research_status(result)
         elif args.command == "experiment" and args.experiment_command == "reproduce":
             if args.reproduce_command == "inspect":

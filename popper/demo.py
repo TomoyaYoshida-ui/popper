@@ -54,7 +54,11 @@ def summarize_research_status(status: dict) -> dict:
     integrity = status.get("integrity")
     if not isinstance(integrity, dict):
         integrity = (status.get("experiment_graph") or {}).get("integrity") or {}
-    return {
+    resume = status.get("resume")
+    checkpoint = None
+    if isinstance(resume, dict) and isinstance(resume.get("checkpoint"), dict):
+        checkpoint = resume["checkpoint"].get("text")
+    brief = {
         "phase": phase,
         "study_status": study.get("status"),
         "integrity_ok": bool(integrity.get("ok")),
@@ -74,6 +78,13 @@ def summarize_research_status(status: dict) -> dict:
             else "尚未结束：继续 research run / confirm。"
         ),
     }
+    if isinstance(resume, dict):
+        brief["resume"] = {
+            "last_runtime_step": resume.get("last_runtime_step"),
+            "last_action_kind": resume.get("last_action_kind"),
+            "checkpoint": checkpoint,
+        }
+    return brief
 
 
 def run_offline_smoke(*, root: Path | None = None, case: str = "ode-convergence") -> dict:

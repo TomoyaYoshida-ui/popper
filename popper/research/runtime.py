@@ -30,6 +30,7 @@ from .literature_context import (CLAIM_FIELDS, LITERATURE_KINDS, LiteratureClaim
                                  claimed_literature_ids, literature_claim_from,
                                  literature_request_blocked, load_literature_hits)
 from .memory_context import project_memory_context, record_action_memory
+from .resume_context import probe_last_action, project_resume_context
 from .project_adapter import RegisteredProjectAdapter
 from .runtime_protocol import (ExecuteCandidate, ReviseHypothesis, StopPlanning,
                                decision_instructions, parse_action, parse_assessment)
@@ -150,6 +151,14 @@ class ResearchRuntime:
                             'scope': o['scope'], 'evidence_refs': [o['observation_id']],
                             'metric': o['unit'], 'value': o['value'], 'quality': 'descriptive_only'})
         roots = (self.controller.run_dir, self.controller.project)
+        remaining = max(0, self.max_experiments - len(seen))
+        # preview_context() builds a partial runtime without a session binding.
+        last_step, last_kind = (None, None)
+        if getattr(self, 'session_id', None) is not None and hasattr(self, 'max_decisions'):
+            last_step, last_kind = probe_last_action(
+                self, max_probe=self.max_decisions)
+        study = self.store.get('study', self.study_id)
+        integrity = self.store.verify() if hasattr(self.store, 'verify') else {}
         result = {'project': project, 'objective': project['objective'],
                   'primary_scope_id': project['primary_scope_id'], 'scopes': project['scopes'],
                   'candidates': candidates, 'raw_evidence': raw,
@@ -157,7 +166,14 @@ class ResearchRuntime:
                   'scoop': load_scoop_hits(*roots),
                   'fulltext': load_fulltext_excerpts(*roots),
                   'memory': project_memory_context(self.controller.run_dir),
-                  'remaining_experiments': max(0, self.max_experiments - len(seen))}
+                  'resume': project_resume_context(
+                      self.controller.run_dir,
+                      phase=study.get('status'),
+                      integrity_ok=bool(isinstance(integrity, dict) and integrity.get('ok')),
+                      last_runtime_step=last_step,
+                      last_action_kind=last_kind,
+                      remaining_experiments=remaining),
+                  'remaining_experiments': remaining}
         if self.profile == 'evidence_driven':
             result['structured_judgments'] = structured
         return result

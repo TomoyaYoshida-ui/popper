@@ -23,6 +23,7 @@ class MemoryContextTests(unittest.TestCase):
         self.assertEqual('research-memory-context/v1', ctx['schema'])
         self.assertEqual('unverified_session_notes', ctx['trust'])
         self.assertEqual([], ctx['entries'])
+        self.assertIsNone(ctx['checkpoint'])
 
     def test_record_and_project_roundtrip(self):
         eid = record_memory_entry(

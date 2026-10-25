@@ -21,6 +21,9 @@ ENTRY_KINDS = frozenset({
     'rejection_reason',
     'action_note',
 })
+CHECKPOINT_KIND = 'resume_checkpoint'
+# Checkpoint refs may only point at store/context authorities — never MEM-*.
+CHECKPOINT_REF_PREFIXES = ('OBS-', 'LIT-', 'SCOOP-', 'FT-')
 # Fields that must never ride along a memory entry (evaluation stays elsewhere).
 _FORBIDDEN_ENTRY_KEYS = frozenset({
     'score', 'metric', 'mean_effect', 'value', 'ci95', 'p_value', 'p-value',
@@ -55,10 +58,28 @@ def _refs(refs):
     return out
 
 
+def _checkpoint_refs(refs):
+    out = _refs(refs)
+    for token in out:
+        if token.startswith('MEM-') or not token.startswith(CHECKPOINT_REF_PREFIXES):
+            raise ProtocolError(
+                'resume checkpoint refs must be OBS-/LIT-/SCOOP-/FT-* ids')
+    return out
+
+
+def _load_summary(run_dir):
+    mem = study_memory(run_dir)
+    summary = mem.summary() if isinstance(mem.summary(), dict) else {}
+    if not summary:
+        summary = {'schema': 'research-memory/v1', 'entries': []}
+    return mem, summary
+
+
 def project_memory_context(run_dir):
     """Bounded projection for ``ResearchRuntime.context()``.
 
     Trust label makes clear these are unverified session notes, not measurements.
+    The optional single-slot ``checkpoint`` does not count toward the 16-entry FIFO.
     """
     mem = study_memory(run_dir)
     summary = mem.summary() or {}
@@ -72,10 +93,12 @@ def project_memory_context(run_dir):
     working = ''
     if mem.working_path.is_file():
         working = _clip(mem.working_path.read_text(encoding='utf-8'))
+    checkpoint = read_resume_checkpoint(run_dir)
     return {
         'schema': 'research-memory-context/v1',
         'trust': 'unverified_session_notes',
         'entries': entries,
+        'checkpoint': checkpoint,
         'working': working or None,
     }
 
@@ -98,8 +121,64 @@ def _project_entry(item):
     }
 
 
+def read_resume_checkpoint(run_dir):
+    """Return the single-slot checkpoint projection, or None."""
+    summary = study_memory(run_dir).summary() or {}
+    item = summary.get('checkpoint') if isinstance(summary, dict) else None
+    if not isinstance(item, dict):
+        return None
+    text = item.get('text')
+    entry_id = item.get('id')
+    if not isinstance(text, str) or not text.strip():
+        return None
+    if not isinstance(entry_id, str) or not entry_id.startswith('MEM-'):
+        return None
+    return {
+        'id': entry_id,
+        'kind': CHECKPOINT_KIND,
+        'text': _clip(text),
+        'refs': _refs(item.get('refs')),
+    }
+
+
+def record_resume_checkpoint(run_dir, text, *, refs=None, study_id=None):
+    """Overwrite the single resume checkpoint slot (does not use the FIFO)."""
+    if isinstance(text, dict):
+        bad = set(text) & _FORBIDDEN_ENTRY_KEYS
+        if bad:
+            raise ProtocolError('memory entry cannot carry evaluation fields')
+        text = text.get('summary') or text.get('text') or ''
+    clipped = _clip(text)
+    if not clipped:
+        return None
+    ref_list = _checkpoint_refs(refs)
+    entry_id = 'MEM-' + digest({
+        'study_id': study_id or '',
+        'kind': CHECKPOINT_KIND,
+        'text': clipped,
+        'refs': ref_list,
+    })[:16]
+    mem, summary = _load_summary(run_dir)
+    entries = [e for e in list(summary.get('entries') or [])
+               if not (isinstance(e, dict) and e.get('kind') == CHECKPOINT_KIND)]
+    summary = {
+        'schema': 'research-memory/v1',
+        'entries': entries[-MEMORY_ENTRY_LIMIT:],
+        'checkpoint': {
+            'id': entry_id,
+            'kind': CHECKPOINT_KIND,
+            'text': clipped,
+            'refs': ref_list,
+        },
+    }
+    mem.set_summary(summary)
+    return entry_id
+
+
 def record_memory_entry(run_dir, kind, text, *, refs=None, study_id=None):
     """Append one bounded structured note. Rejects score-like payloads."""
+    if kind == CHECKPOINT_KIND:
+        return record_resume_checkpoint(run_dir, text, refs=refs, study_id=study_id)
     if kind not in ENTRY_KINDS:
         raise ProtocolError(f'unsupported memory entry kind: {kind}')
     if isinstance(text, dict):
@@ -117,10 +196,7 @@ def record_memory_entry(run_dir, kind, text, *, refs=None, study_id=None):
         'text': clipped,
         'refs': ref_list,
     })[:16]
-    mem = study_memory(run_dir)
-    summary = mem.summary() if isinstance(mem.summary(), dict) else {}
-    if not summary:
-        summary = {'schema': 'research-memory/v1', 'entries': []}
+    mem, summary = _load_summary(run_dir)
     entries = list(summary.get('entries') or [])
     # Idempotent: identical content does not duplicate.
     if any(isinstance(e, dict) and e.get('id') == entry_id for e in entries):
@@ -134,6 +210,7 @@ def record_memory_entry(run_dir, kind, text, *, refs=None, study_id=None):
     summary = {
         'schema': 'research-memory/v1',
         'entries': entries[-MEMORY_ENTRY_LIMIT:],
+        'checkpoint': summary.get('checkpoint'),
     }
     mem.set_summary(summary)
     return entry_id

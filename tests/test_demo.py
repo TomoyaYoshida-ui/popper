@@ -97,8 +97,9 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(
                 set(brief),
                 {"phase", "study_status", "integrity_ok", "observations",
-                 "latest_judgment", "claim_status", "budget", "read_as"},
+                 "latest_judgment", "claim_status", "budget", "read_as", "resume"},
             )
+            self.assertIn("checkpoint", brief["resume"])
 
 
 if __name__ == "__main__":
