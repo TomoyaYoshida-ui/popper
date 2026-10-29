@@ -84,11 +84,40 @@ describe('Study summary and resource navigation', () => {
         latest_judgment: { scope: 'confirmation', new_judgment: 'inconclusive', reason: 'delta below threshold' },
         claim_status: null, budget: null,
         read_as: '演示完成：phase=concluded 且 integrity_ok。科研判断与描述性 claim 可能不一致；以 judgment 三态为准，inconclusive 不是失败。',
+        resume: { last_runtime_step: null, last_action_kind: null, checkpoint: null },
       },
     }
     render(<LoopView {...base} research={{ runs: [run], trusted_local: true, status_labels: { study: { concluded: '已结论' } } } as unknown as ResearchState} />)
     expect(within(screen.getByLabelText('Study 摘要')).getByText('通过')).toBeTruthy()
     expect(within(screen.getByLabelText('Study 摘要')).getByText('证据不足（不是失败）')).toBeTruthy()
     expect(screen.getByRole('status').textContent).toMatch(/inconclusive 不是失败/)
+    expect(screen.queryByRole('note')).toBeNull()
+  })
+  it('surfaces resume checkpoint as unverified note and hides empty resume', () => {
+    const withCheckpoint = {
+      ok: true, run_dir: 'C:/synthetic/study-resume', state_version: 1, events_total: 1,
+      manifest: { study_id: 'S-resume', project: 'C:/synthetic' }, lifecycle_phase: 'researching',
+      study: { question: 'Resume question', status: 'active' },
+      claims: [], observations: [], hypotheses: [], revisions: [], decisions: [], reflections: [],
+      status_brief: {
+        phase: 'researching', study_status: 'active', integrity_ok: true, observations: 0,
+        latest_judgment: null, claim_status: null, budget: null,
+        read_as: '尚未结束：继续 research run / confirm。',
+        resume: { last_runtime_step: 2, last_action_kind: 'execute_candidate', checkpoint: 'next: confirm' },
+      },
+    }
+    const { rerender } = render(<LoopView {...base} research={{ runs: [withCheckpoint], trusted_local: true, status_labels: { study: { active: '进行中' } } } as unknown as ResearchState} />)
+    expect(screen.getByRole('note').textContent).toMatch(/续作意图（未验证笔记）：next: confirm/)
+    expect(screen.getByRole('note').textContent).toMatch(/上次动作 execute_candidate/)
+    expect(screen.getByRole('note').textContent).toMatch(/步进 2/)
+    const emptyResume = {
+      ...withCheckpoint,
+      status_brief: {
+        ...withCheckpoint.status_brief,
+        resume: { last_runtime_step: null, last_action_kind: null, checkpoint: null },
+      },
+    }
+    rerender(<LoopView {...base} research={{ runs: [emptyResume], trusted_local: true, status_labels: { study: { active: '进行中' } } } as unknown as ResearchState} />)
+    expect(screen.queryByRole('note')).toBeNull()
   })
 })

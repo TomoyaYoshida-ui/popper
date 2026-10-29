@@ -234,6 +234,11 @@ export type ResearchRunState = {
     claim_status?: string | null
     budget?: { family_id: string; cap: number; reserved: number; spent: number; available: number } | null
     read_as: string
+    resume?: {
+      last_runtime_step?: number | null
+      last_action_kind?: string | null
+      checkpoint?: string | null
+    }
   }
   reason?: string
   manifest?: { study_id: string; project?: string; study_ref: EntityRef; capability_mode?: string; policy?: string;

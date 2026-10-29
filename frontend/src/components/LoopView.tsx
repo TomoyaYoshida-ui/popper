@@ -308,6 +308,20 @@ function ResearchRunBody({ run, labels, trustedLocal, onResearchChanged, onOpenR
       {run.status_brief?.read_as && (
         <p className="muted study-brief-read" role="status">{run.status_brief.read_as}</p>
       )}
+      {(() => {
+        const resume = run.status_brief?.resume
+        if (!resume) return null
+        const checkpoint = typeof resume.checkpoint === 'string' ? resume.checkpoint.trim() : ''
+        const kind = typeof resume.last_action_kind === 'string' ? resume.last_action_kind : ''
+        const step = resume.last_runtime_step
+        if (!checkpoint && !kind && step == null) return null
+        const bits = [
+          checkpoint ? `续作意图（未验证笔记）：${checkpoint}` : null,
+          kind ? `上次动作 ${kind}` : null,
+          step != null ? `步进 ${step}` : null,
+        ].filter(Boolean)
+        return <p className="muted study-brief-resume" role="note">{bits.join(' · ')}</p>
+      })()}
       <details className="section research-records"><summary>后继研究 · 使用新的独立确认资源</summary>
         <button className="mini" type="button" disabled={!trustedLocal || followupBusy}
                 onClick={() => void openFollowup()}>创建后继 Study</button>

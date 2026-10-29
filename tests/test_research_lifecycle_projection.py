@@ -5,6 +5,7 @@ import pytest
 
 from popper.core import file_hash
 from popper.research.controller import ResearchController, research_lifecycle_phase
+from popper.research.memory_context import record_resume_checkpoint
 from popper.research.readout import read_research_state
 from tests.test_study_lifecycle import make_project
 
@@ -48,6 +49,17 @@ def test_lifecycle_projection_is_readonly_and_matches_controller(tmp_path):
     assert projected["confirmation_resource_consumed"] is False
     assert projected["status_brief"]["phase"] == "researching"
     assert "尚未结束" in projected["status_brief"]["read_as"]
+    assert "resume" in projected["status_brief"]
+    assert projected["status_brief"]["resume"]["checkpoint"] is None
+    assert fingerprints(project, run_dir) == before
+
+
+def test_status_brief_surfaces_resume_checkpoint(tmp_path):
+    project, run_dir = make_project(tmp_path, "ode-convergence")
+    record_resume_checkpoint(run_dir, "next: run confirm", study_id="S-resume")
+    before = fingerprints(project, run_dir)
+    projected = read_research_state(run_dir)
+    assert projected["status_brief"]["resume"]["checkpoint"] == "next: run confirm"
     assert fingerprints(project, run_dir) == before
 
 

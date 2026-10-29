@@ -1,7 +1,7 @@
 # 工作台露出同 run_dir resume（切片 E）
 
 日期：2026-10-26  
-状态：待实现  
+状态：已实现  
 前置：切片 D（`9141e92`，单槽 `resume_checkpoint` + `project_resume_context` + CLI `--brief`）  
 范围：工作台 `/api/research` 投影与 LoopView 与 CLI brief **同源**露出续作指纹；**不**升格 MEM-* / checkpoint 为 evidence
 

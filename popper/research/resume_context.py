@@ -5,8 +5,11 @@ Does not carry metric numbers or elevate MEM-* to evidence.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from .memory_context import (
-    MEMORY_TEXT_CHARS, project_memory_context, read_resume_checkpoint,
+    MEMORY_TEXT_CHARS, memory_directory, project_memory_context,
+    read_resume_checkpoint,
 )
 
 
@@ -39,14 +42,21 @@ def probe_last_action(runtime, *, max_probe=32):
 def project_resume_context(run_dir, *, phase=None, integrity_ok=None,
                            last_runtime_step=None, last_action_kind=None,
                            remaining_experiments=None):
-    """Bounded resume projection for planning / brief status."""
-    memory = project_memory_context(run_dir)
-    checkpoint = read_resume_checkpoint(run_dir)
-    recent = [
-        {'id': item['id'], 'kind': item['kind']}
-        for item in (memory.get('entries') or [])[-3:]
-        if isinstance(item, dict)
-    ]
+    """Bounded resume projection for planning / brief status.
+
+    Does not create ``run_dir/memory`` — empty projection when the directory
+    is absent so read-only status projections stay fingerprint-stable.
+    """
+    recent = []
+    checkpoint = None
+    if Path(memory_directory(run_dir)).is_dir():
+        memory = project_memory_context(run_dir)
+        checkpoint = read_resume_checkpoint(run_dir)
+        recent = [
+            {'id': item['id'], 'kind': item['kind']}
+            for item in (memory.get('entries') or [])[-3:]
+            if isinstance(item, dict)
+        ]
     payload = {
         'schema': 'research-resume/v1',
         'trust': {

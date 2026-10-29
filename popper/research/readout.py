@@ -286,6 +286,15 @@ def _project(conn, study_id, manifest, run_dir) -> dict:
             "budget": budget, "events_total": events_total,
             "experiment_graph": graph, "claim_card": claim_card}
     from ..demo import summarize_research_status
+    from .resume_context import project_resume_context
+    integrity = (graph or {}).get("integrity") if isinstance(graph, dict) else {}
+    if not isinstance(integrity, dict):
+        integrity = {}
+    projected["resume"] = project_resume_context(
+        run_dir,
+        phase=projected.get("lifecycle_phase") or projected.get("phase"),
+        integrity_ok=bool(integrity.get("ok")),
+    )
     projected["status_brief"] = summarize_research_status(projected)
     return projected
 
