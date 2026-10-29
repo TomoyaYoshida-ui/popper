@@ -3,14 +3,20 @@
 对应分支 `autopilot` 上已提交的验收，不是 `docs/maintenance/completion.md` 里的历史快照数字。
 
 **演示 + 权威收敛点**：`32622ae`（科学硬闸）→ `81037a4`（`demo smoke`）→ `1cbbf5b`（工作台 `status_brief`）。  
-**查新硬化**：`be2210f`（可引用面）→ `2c68fab`（引文绑定）→ `5d9e6f1`（受控 Scoop overlap FPR）。工作树应干净并与 `origin/autopilot` 对齐。
+**查新硬化**：`be2210f`（可引用面）→ `2c68fab`（引文绑定）→ `5d9e6f1`（受控 Scoop overlap FPR）。  
+**同 run_dir resume（切片 D/E/F）**：`9141e92`（checkpoint + CLI brief）→ `b21cf6b`（工作台 `status_brief` 同源露出）→ `dccf29d`（工作台覆盖写入）。工作树应干净并与 `origin/autopilot` 对齐。
 
-日期：2026-10-25（本机 Windows）。
+日期：2026-10-29（本机 Windows；HEAD 约 `dccf29d`）。
 
 ## 命令与结果
 
 | 命令 | 结果 |
 |------|------|
+| 切片 D/E：`tests/test_resume_context.py` + `tests/test_research_lifecycle_projection.py`（2026-10-29，HEAD `dccf29d`） | **19 passed**（约 7s）。单槽 checkpoint 覆盖 / 拒 MEM refs；`status_brief.resume.checkpoint` 同源露出。 |
+| 切片 D 连带：`tests/test_memory_context.py` 与上两文件同跑 | **24 passed**（约 7s；含 memory FIFO 与 checkpoint 不抢槽）。 |
+| 切片 F：`python -m pytest tests/test_server_research.py -k resume -q` | **1 passed**, 18 deselected（约 4s）。`POST /api/research/resume` 覆盖写入；空/超长/非法 refs 拒绝；投影同源。 |
+| 演示 brief：`python -m pytest tests/test_demo.py -k "brief or resume or status or smoke" -q` | **2 passed**, 3 deselected（约 24s）。CLI smoke / `--brief` 含 `resume` 字段。 |
+| `cd frontend && npx vitest run tests/LoopView.test.tsx` | **1 file / 7 tests passed**（约 5s）。只读露出 + 有界写入表单；空 resume 不渲染。 |
 | Scoop 可引用面 + 引文绑定 + FPR（`test_scoop_context` + `test_quote_binding` + `test_novelty_measure` + `test_scoop_measure`） | **切片 C 后**：`test_scoop_measure` **4→5 passed**；oracle FPR=0，adversarial FPR=1.0；FP completed 可投影 `SCOOP-*`。 |
 | `popper experiment evaluate scoop-fpr tests/fixtures/scoop-controlled` | 写出 `scoop_fpr_report.json`；`real_novelty_fpr` 仍为 null。 |
 | **裸全量** `python -m pytest -q --tb=line`（2026-10-24，HEAD `1cbbf5b`） | **1840 passed**, **32 skipped**, 764 subtests；**1 failed**：`test_approve_with_materialize_realizes_manuscript`（权威收口后真实 `dev` 无 `research-runtime/v1` 即 fatal，materialize 未跑到）。见下「已修」。 |
@@ -63,6 +69,12 @@
 - `capabilities.agent` 探测含 `httpx2`；`adaptive_runtime` → `pydantic_planner` → `httpx2`。
 - 已在 `pyproject.toml` 的 `agent` 与 `adaptive` optional-dependencies 声明 `httpx2>=2.14,<3`；本机 `pip install -e ".[agent]"`（另已单独装过 httpx2）。
 - 三文件跑测见上表；linux sandbox 在 Windows 上 skip，未强改。
+
+## 切片 D/E/F 边界（同 run_dir resume）
+
+- **是**：同一次 study 的 `run_dir` 单槽 `resume_checkpoint`；规划上下文 / CLI `--brief` / 工作台 `status_brief.resume` 同源指纹；工作台可覆盖写入（`dccf29d`）。
+- **不是**：跨 study / 跨周长程科研记忆产品；checkpoint / MEM-* 不是 evidence，也不能改 judgment / 分数（`trust: unverified_session_notes`）。
+- **也不是**：审计级 Scoop / 查新 FPR 验收（受控 overlap FPR 仍只是探针；`real_novelty_fpr` 仍为 null）。本轮未重跑全量 pytest。
 
 ## 本轮契约与跳过语义（摘要）
 
