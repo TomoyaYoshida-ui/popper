@@ -910,6 +910,11 @@ class Workstation(ThreadingHTTPServer):
     def research_payload(self):
         return self._service('research').dispatch('research_payload')
 
+    def record_resume_checkpoint_from_workbench(self, text, *, study_id=None, run_dir=None, refs=None):
+        return self._service('research').dispatch(
+            'record_resume_checkpoint_from_workbench', text,
+            study_id=study_id, run_dir=run_dir, refs=refs)
+
     def _visible_research_runs(self, workspace_root=None):
         return self._service('research').dispatch('_visible_research_runs', workspace_root)
 

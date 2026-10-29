@@ -379,6 +379,38 @@ export function initializeStudy(runName: string, budgetCap: number, proposalSha2
   })
 }
 
+export type ResumeCheckpointWrite = {
+  id: string
+  text: string
+  run_dir: string
+  study_id?: string | null
+  trust: 'unverified_session_notes'
+}
+
+/** 覆盖写入同 run_dir 的 resume_checkpoint（未验证笔记；成功后应再 fetchResearch）。 */
+export async function writeResumeCheckpoint(input: {
+  text: string
+  study_id?: string
+  run_dir?: string
+  refs?: string[]
+}): Promise<ResumeCheckpointWrite> {
+  const t = await sessionToken()
+  const body: Record<string, unknown> = { text: input.text }
+  if (input.study_id) body.study_id = input.study_id
+  if (input.run_dir) body.run_dir = input.run_dir
+  if (input.refs) body.refs = input.refs
+  const res = await fetch('/api/research/resume', {
+    method: 'POST',
+    headers: { 'X-Popper-Token': t, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const payload = (await res.json().catch(() => ({}))) as {
+    data?: ResumeCheckpointWrite; error?: { message?: string }
+  }
+  if (!res.ok || !payload.data) throw new Error(payload.error?.message || `HTTP ${res.status}`)
+  return payload.data
+}
+
 export async function fetchResearch(): Promise<ResearchState> {
   const t = await sessionToken()
   const res = await fetch('/api/research', { headers: { 'X-Popper-Token': t } })

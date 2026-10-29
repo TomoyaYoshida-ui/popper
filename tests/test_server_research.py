@@ -892,6 +892,61 @@ class ResearchLoopHttpTests(unittest.TestCase):
                             for issue in broken["issues"]))
         self.assertEqual(before, self._db_fingerprint(run_dir))
 
+    def test_workbench_resume_checkpoint_write_overwrites_and_rejects(self):
+        """POST /api/research/resume 覆盖写入；空/超长/非法 refs 拒绝；投影同源。"""
+        from popper.research.memory_context import MEMORY_TEXT_CHARS, memory_directory
+
+        self._start(trusted_local=True)
+        envelope = {"schema_version": "1.0", "run_name": "resume-write", "budget_cap": 4}
+        code, preview = self._post("/api/v1/research/studies/preview", envelope)
+        self.assertEqual(200, code)
+        code, created = self._post("/api/v1/research/studies", {
+            **envelope, "proposal_sha256": preview["data"]["proposal_sha256"]})
+        self.assertEqual(201, code)
+        study_id = created["data"]["study_id"]
+        run_dir = Path(created["data"]["run_dir"])
+        mem_dir = memory_directory(run_dir)
+        self.assertFalse(mem_dir.exists())
+
+        code, denied = self._post("/api/research/resume", {
+            "study_id": study_id, "text": "next"}, token=False)
+        self.assertEqual(403, code)
+
+        code, empty = self._post("/api/research/resume", {
+            "study_id": study_id, "text": "   "})
+        self.assertEqual(400, code)
+        self.assertIn("空", empty["error"]["message"])
+        self.assertFalse(mem_dir.exists())
+
+        code, long = self._post("/api/research/resume", {
+            "study_id": study_id, "text": "x" * (MEMORY_TEXT_CHARS + 1)})
+        self.assertEqual(400, code)
+        self.assertIn("超过", long["error"]["message"])
+        self.assertFalse(mem_dir.exists())
+
+        code, bad_refs = self._post("/api/research/resume", {
+            "study_id": study_id, "text": "ok", "refs": ["MEM-1"]})
+        self.assertEqual(400, code)
+        self.assertFalse(mem_dir.exists())
+
+        code, first = self._post("/api/research/resume", {
+            "study_id": study_id, "text": "next: run confirm"})
+        self.assertEqual(200, code)
+        self.assertEqual("next: run confirm", first["data"]["text"])
+        self.assertEqual("unverified_session_notes", first["data"]["trust"])
+        self.assertTrue(mem_dir.is_dir())
+
+        code, second = self._post("/api/research/resume", {
+            "run_dir": str(run_dir), "text": "next: write claim"})
+        self.assertEqual(200, code)
+        self.assertEqual("next: write claim", second["data"]["text"])
+        self.assertNotEqual(first["data"]["id"], second["data"]["id"])
+
+        code, body = self._get("/api/research")
+        self.assertEqual(200, code)
+        brief = body["runs"][0]["status_brief"]["resume"]
+        self.assertEqual("next: write claim", brief["checkpoint"])
+
 
 if __name__ == "__main__":
     unittest.main()

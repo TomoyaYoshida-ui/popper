@@ -55,7 +55,7 @@ Campaign 的 scoop 步骤缺模型、非 trusted-local 或配置不足时 outcom
 
 记忆只是未验证的会话笔记（`trust: unverified_session_notes`）。它不能覆盖独立评估分数，也不能改写 judgment 三态；模型仍不能改分。`MEM-*` 不能当作 observation 引用。CLI `popper research memory` 仍可用，主循环不再是唯一入口。
 
-同一次 study 的 `run_dir` 可写单槽 `resume_checkpoint`（`popper research memory note`），规划上下文与 CLI / 工作台 `status_brief` 同源带只读 `resume` 指纹（停在哪一步 / 人工意图）；仍是未验证笔记，不能当 evidence。这不是跨 study、跨周长程科研记忆产品。
+同一次 study 的 `run_dir` 可写单槽 `resume_checkpoint`（`popper research memory note`，工作台亦可覆盖写入同 run_dir checkpoint），规划上下文与 CLI / 工作台 `status_brief` 同源带只读 `resume` 指纹（停在哪一步 / 人工意图）；仍是未验证笔记，不能当 evidence。这不是跨 study、跨周长程科研记忆产品。
 
 ## 执行权与默认入口
 

@@ -8,7 +8,8 @@ vi.mock('../src/api', async (original) => ({ ...await original<typeof api>(),
   fetchArbor: vi.fn(async () => ({ trees: [], runs: [], node_status_labels: {} })),
   fetchBoundDrafts: vi.fn(async () => []), fetchDesignJobs: vi.fn(async () => []),
   fetchRevisionWorktrees: vi.fn(async () => ({ worktrees: [], jobs: [], registries: [], job_registries: [] })),
-  createBoundDraft: vi.fn(), fetchResearchEvidence: vi.fn() }))
+  createBoundDraft: vi.fn(), fetchResearchEvidence: vi.fn(),
+  writeResumeCheckpoint: vi.fn() }))
 vi.mock('../src/components/StudyLifecyclePanel', () => ({ StudyLifecyclePanel: () => <div>研究下一步</div> }))
 vi.mock('../src/components/ConfirmProvider', () => ({ useConfirmation: () => vi.fn(async () => true) }))
 const base = { workspaceKey: 'project-A', selectedRunDir: null, onSelectRun: vi.fn(), onResearchChanged: vi.fn() }
@@ -119,5 +120,37 @@ describe('Study summary and resource navigation', () => {
     }
     rerender(<LoopView {...base} research={{ runs: [emptyResume], trusted_local: true, status_labels: { study: { active: '进行中' } } } as unknown as ResearchState} />)
     expect(screen.queryByRole('note')).toBeNull()
+  })
+  it('writes resume checkpoint via bounded form and surfaces save errors', async () => {
+    const onResearchChanged = vi.fn()
+    const run = {
+      ok: true, run_dir: 'C:/synthetic/study-resume-write', state_version: 1, events_total: 0,
+      manifest: { study_id: 'S-write', project: 'C:/synthetic' }, lifecycle_phase: 'researching',
+      study: { question: 'Write question', status: 'active' },
+      claims: [], observations: [], hypotheses: [], revisions: [], decisions: [], reflections: [],
+      status_brief: {
+        phase: 'researching', study_status: 'active', integrity_ok: true, observations: 0,
+        latest_judgment: null, claim_status: null, budget: null,
+        read_as: '尚未结束：继续 research run / confirm。',
+        resume: { last_runtime_step: null, last_action_kind: null, checkpoint: null },
+      },
+    }
+    vi.mocked(api.writeResumeCheckpoint).mockResolvedValueOnce({
+      id: 'MEM-abc', text: 'next: confirm', run_dir: run.run_dir, study_id: 'S-write',
+      trust: 'unverified_session_notes',
+    })
+    render(<LoopView {...base} onResearchChanged={onResearchChanged}
+      research={{ runs: [run], trusted_local: true, status_labels: { study: { active: '进行中' } } } as unknown as ResearchState} />)
+    expect(screen.getByText('未验证笔记，不能当证据')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('续作意图'), { target: { value: 'next: confirm' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存续作意图' }))
+    await waitFor(() => expect(api.writeResumeCheckpoint).toHaveBeenCalledWith({
+      study_id: 'S-write', text: 'next: confirm',
+    }))
+    await waitFor(() => expect(onResearchChanged).toHaveBeenCalled())
+    vi.mocked(api.writeResumeCheckpoint).mockRejectedValueOnce(new Error('续作意图不能为空'))
+    fireEvent.change(screen.getByLabelText('续作意图'), { target: { value: 'retry' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存续作意图' }))
+    await waitFor(() => expect(screen.getByText('续作意图不能为空')).toBeTruthy())
   })
 })

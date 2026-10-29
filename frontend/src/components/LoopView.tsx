@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { scientificClaimLabel, scientificClaimEffect, hypothesisStatusText, claimCardSummary } from '../scientificClaim'
-import { cancelDesignJob, cancelRevisionJob, createBenchmark, createBoundDraft, createFollowup, createRevisionWorktree, executeInitialRevision, executeWorktreeRevision, executeDesign, fetchArbor, fetchBenchmarkJob, fetchBenchmarkJobs, fetchBoundDrafts, fetchDesignDetail, fetchDesignJob, fetchDesignJobs, fetchFollowupPreview, fetchRevision, fetchRevisionJob, fetchRevisionWorktrees, migrateRevisionDiff, proposeWorktreeRevision, removeRevisionWorktree, retryDesignJob, submitWorktreeRevision, type ArborTree, type BenchmarkDetail, type BenchmarkJob, type BoundDraftRow, type CreatedBoundDraft, type CreatedFollowup, type DesignDetail, type DesignExecutionJob, type FollowupPreview, type ResearchRunState, type ResearchState, type RevisionDetail, type RevisionExecutionJob, type RevisionWorktree } from '../api'
+import { cancelDesignJob, cancelRevisionJob, createBenchmark, createBoundDraft, createFollowup, createRevisionWorktree, executeInitialRevision, executeWorktreeRevision, executeDesign, fetchArbor, fetchBenchmarkJob, fetchBenchmarkJobs, fetchBoundDrafts, fetchDesignDetail, fetchDesignJob, fetchDesignJobs, fetchFollowupPreview, fetchRevision, fetchRevisionJob, fetchRevisionWorktrees, migrateRevisionDiff, proposeWorktreeRevision, removeRevisionWorktree, retryDesignJob, submitWorktreeRevision, writeResumeCheckpoint, type ArborTree, type BenchmarkDetail, type BenchmarkJob, type BoundDraftRow, type CreatedBoundDraft, type CreatedFollowup, type DesignDetail, type DesignExecutionJob, type FollowupPreview, type ResearchRunState, type ResearchState, type RevisionDetail, type RevisionExecutionJob, type RevisionWorktree } from '../api'
 import { MetricBars, BudgetBar, LegendDot, type BarPoint } from './charts'
 import { StudyLifecyclePanel } from './StudyLifecyclePanel'
 import type { WorkbenchResource } from '../workbench'
@@ -52,6 +52,9 @@ function ResearchRunBody({ run, labels, trustedLocal, onResearchChanged, onOpenR
   const [draftRows, setDraftRows] = useState<BoundDraftRow[]>([])
   const [copyNotice, setCopyNotice] = useState<string | null>(null)
   const [claimCopyNotice, setClaimCopyNotice] = useState<Record<string, string>>({})
+  const [resumeNote, setResumeNote] = useState('')
+  const [resumeBusy, setResumeBusy] = useState(false)
+  const [resumeError, setResumeError] = useState<string | null>(null)
   const confirmation = useConfirmation()
   const study = run.study
   const projectLabel = projectName ?? run.manifest?.project?.split(/[\\/]/).pop() ?? '当前项目'
@@ -322,6 +325,41 @@ function ResearchRunBody({ run, labels, trustedLocal, onResearchChanged, onOpenR
         ].filter(Boolean)
         return <p className="muted study-brief-resume" role="note">{bits.join(' · ')}</p>
       })()}
+      <form className="study-resume-write" style={{ display: 'grid', gap: 6, marginTop: 8 }}
+            onSubmit={(event) => {
+              event.preventDefault()
+              void (async () => {
+                const studyId = run.manifest?.study_id
+                const text = resumeNote.trim()
+                if (!studyId || !text || resumeBusy) return
+                setResumeBusy(true); setResumeError(null)
+                try {
+                  await writeResumeCheckpoint({ study_id: studyId, text })
+                  setResumeNote('')
+                  onResearchChanged()
+                } catch (error) {
+                  setResumeError((error as Error).message || '续作意图保存失败')
+                } finally {
+                  setResumeBusy(false)
+                }
+              })()
+            }}>
+        <label className="muted" style={{ fontSize: 12 }}>记下续作意图
+          <input aria-label="续作意图" maxLength={240} value={resumeNote}
+                 disabled={!trustedLocal || resumeBusy || !run.manifest?.study_id}
+                 placeholder="下一步打算做什么（同 run_dir 覆盖）"
+                 onChange={(event) => setResumeNote(event.target.value)}
+                 style={{ display: 'block', width: '100%', marginTop: 4 }} />
+        </label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+          <button className="mini" type="submit"
+                  disabled={!trustedLocal || resumeBusy || !resumeNote.trim() || !run.manifest?.study_id}>
+            {resumeBusy ? '保存中…' : '保存续作意图'}
+          </button>
+          <span className="muted" style={{ fontSize: 11 }}>未验证笔记，不能当证据</span>
+        </div>
+        {resumeError && <div className="notice err">{resumeError}</div>}
+      </form>
       <details className="section research-records"><summary>后继研究 · 使用新的独立确认资源</summary>
         <button className="mini" type="button" disabled={!trustedLocal || followupBusy}
                 onClick={() => void openFollowup()}>创建后继 Study</button>

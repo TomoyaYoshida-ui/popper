@@ -345,6 +345,43 @@ class HttpRoutesService(HostService):
             return
         if self._handle_task_context('POST', route, tool_parts, {}):
             return
+        if route == '/api/research/resume':
+            trace_id = new_trace_id()
+            headers = [('X-Popper-API-Version', '1.0'), ('X-Trace-Id', trace_id)]
+            authorized = self.authorized()
+            if authorized and (not self.server.trusted_local):
+                self._drain_rejected_post()
+            if not authorized or not self.server.trusted_local:
+                return self.send(403, api_failure(ErrorCode.PERMISSION_DENIED, 'Trusted local session required', trace_id=trace_id), extra_headers=headers)
+            if not self.origin_ok():
+                return self.send(403, api_failure(ErrorCode.PERMISSION_DENIED, 'Cross-origin request rejected', trace_id=trace_id), extra_headers=headers)
+            try:
+                size = int(self.headers.get('Content-Length', '0'))
+                if not 0 < size <= 4096:
+                    raise ProtocolError('请求长度不合法')
+                envelope = json.loads(self.rfile.read(size))
+                if not isinstance(envelope, dict):
+                    raise ProtocolError('续作意图请求体必须是对象')
+                allowed = {'text', 'study_id', 'run_dir', 'refs'}
+                if set(envelope) - allowed:
+                    raise ProtocolError('续作意图请求字段不合法')
+                if 'text' not in envelope:
+                    raise ProtocolError('续作意图缺少 text')
+                refs = envelope.get('refs')
+                if refs is not None and not isinstance(refs, list):
+                    raise ProtocolError('refs 必须是字符串数组')
+                result = self.server.record_resume_checkpoint_from_workbench(
+                    envelope['text'],
+                    study_id=envelope.get('study_id'),
+                    run_dir=envelope.get('run_dir'),
+                    refs=refs)
+                return self.send(200, api_success(result, trace_id=trace_id), extra_headers=headers)
+            except LookupError as error:
+                return self.send(404, api_failure(ErrorCode.NOT_FOUND, str(error), trace_id=trace_id), extra_headers=headers)
+            except (ValueError, ProtocolError) as error:
+                return self.send(400, api_failure(ErrorCode.INVALID_REQUEST, str(error), trace_id=trace_id), extra_headers=headers)
+            except Exception:
+                return self.send(500, api_failure(ErrorCode.EXECUTION_FAILED, 'Unable to record resume checkpoint', trace_id=trace_id, retryable=True), extra_headers=headers)
         if route in {'/api/v1/research/projects/preview', '/api/v1/research/projects'}:
             trace_id = new_trace_id()
             authorized = self.authorized()

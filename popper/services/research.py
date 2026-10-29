@@ -72,6 +72,60 @@ class ResearchService(HostService):
         runs = [{'run_dir': str(run_dir), **read_research_state(run_dir)} for run_dir in self._visible_research_runs()]
         return {'runs': runs, 'status_labels': RESEARCH_STATUS_LABELS, 'trusted_local': self.trusted_local}
 
+    def record_resume_checkpoint_from_workbench(self, text, *, study_id=None, run_dir=None, refs=None):
+        """覆盖写入同 run_dir 的 resume_checkpoint；与 CLI memory note 同源。
+
+        空/超长在落盘前拒绝，避免无意义创建 memory 目录。不升格为 evidence。
+        """
+        from ..research.memory_context import MEMORY_TEXT_CHARS, record_resume_checkpoint
+        Path = self.dependencies.Path
+        ProtocolError = self.dependencies.ProtocolError
+        read_json = self.dependencies.read_json
+        if not self.trusted_local:
+            raise ProtocolError('续作意图写入需要可信本机模式')
+        has_study = isinstance(study_id, str) and bool(study_id.strip())
+        has_run = isinstance(run_dir, str) and bool(run_dir.strip())
+        if has_study == has_run:
+            raise ProtocolError('必须且只能提供 study_id 或 run_dir 之一')
+        if has_study:
+            resolved = self.research_run_for_study(study_id.strip())
+            visible = set(self._visible_research_runs())
+            if resolved not in visible:
+                raise LookupError(f'未登记 study: {study_id.strip()}')
+            study = study_id.strip()
+        else:
+            resolved = Path(run_dir.strip()).resolve()
+            visible = set(self._visible_research_runs())
+            if resolved not in visible:
+                raise LookupError(f'未登记 run_dir: {resolved}')
+            study = None
+            manifest_path = resolved / 'research.json'
+            if manifest_path.is_file():
+                try:
+                    manifest = read_json(manifest_path)
+                except Exception:
+                    manifest = None
+                if isinstance(manifest, dict) and isinstance(manifest.get('study_id'), str):
+                    study = manifest['study_id']
+        if not isinstance(text, str):
+            raise ProtocolError('续作意图 text 必须是字符串')
+        normalized = ' '.join(text.split())
+        if not normalized:
+            raise ProtocolError('续作意图不能为空')
+        if len(normalized) > MEMORY_TEXT_CHARS:
+            raise ProtocolError(f'续作意图不能超过 {MEMORY_TEXT_CHARS} 字')
+        entry_id = record_resume_checkpoint(
+            resolved, normalized, refs=refs, study_id=study)
+        if not entry_id:
+            raise ProtocolError('续作意图写入失败')
+        return {
+            'id': entry_id,
+            'text': normalized,
+            'run_dir': str(resolved),
+            'study_id': study,
+            'trust': 'unverified_session_notes',
+        }
+
     def _visible_research_runs(self, workspace_root=None):
         """Show only runs registered to the selected workspace, plus CLI roots on the primary."""
         Path = self.dependencies.Path
